@@ -76,17 +76,25 @@ The authors are not responsible for any financial losses incurred through the us
    ```bash
    pip install -r requirements.txt
    ```
+4. **Generate your Kalshi API Key and xAI API Key** 
 
-4. **Configure environment variables**
+   Save your Kalshi private key as "kalshi_private_key" (no file extension) in the root directory of this project
+
+5. **Configure environment variables**
+
    Create a `.env` file in the root directory:
    ```bash
    KALSHI_API_KEY=your_kalshi_api_key
    XAI_API_KEY=your_xai_api_key
    ```
 
-5. **Initialize the database**
+6. **Initialize the database**
    ```bash
    python src/utils/database.py
+   ```
+   or, if the above comman failed, try
+   ```bash
+   python -m src.utils.database # Run database.py as a module
    ```
 
 ## 🚀 Quick Start
