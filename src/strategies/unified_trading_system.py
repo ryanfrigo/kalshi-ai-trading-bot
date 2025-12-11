@@ -146,6 +146,9 @@ class UnifiedAdvancedTradingSystem:
         # self.total_capital = getattr(settings.trading, 'total_capital', 10000)
         self.last_rebalance = datetime.now()
         self.system_metrics = {}
+
+        self.market_maker = None
+        self.portfolio_optimizer = None
         
         # Capital allocation will be set by async_initialize() after getting actual balance
 
@@ -158,12 +161,12 @@ class UnifiedAdvancedTradingSystem:
             # Get total portfolio value (cash + current positions)
             balance_response = await self.kalshi_client.get_balance()
             available_cash = balance_response.get('balance', 0) / 100  # Convert cents to dollars
-            
+
             # Get current positions to calculate total portfolio value
             positions_response = await self.kalshi_client.get_positions()
             positions = positions_response.get('positions', []) if isinstance(positions_response, dict) else []
             total_position_value = 0
-            
+
             if positions:
                 for position in positions:
                     if not isinstance(position, dict):
@@ -184,30 +187,30 @@ class UnifiedAdvancedTradingSystem:
                         except:
                             # If we can't get market data, estimate at entry price
                             total_position_value += abs(quantity) * 0.50  # Conservative 50¢ estimate
-            
+
             # Total portfolio value is the basis for all allocations
             total_portfolio_value = available_cash + total_position_value
             self.total_capital = total_portfolio_value
-            
+
             self.logger.info(f"💰 PORTFOLIO VALUE: Cash=${available_cash:.2f} + Positions=${total_position_value:.2f} = Total=${self.total_capital:.2f}")
-            
+
             if self.total_capital < 10:  # Minimum $10 to trade
                 self.logger.warning(f"⚠️ Total capital too low: ${self.total_capital:.2f} - may limit trading")
-                
+
         except Exception as e:
             self.logger.error(f"Failed to get portfolio value, using default: {e}")
             self.total_capital = 100  # Conservative fallback
-        
+
         # Update capital allocation based on actual balance
         self.market_making_capital = self.total_capital * self.config.market_making_allocation
         self.directional_capital = self.total_capital * self.config.directional_trading_allocation
         self.quick_flip_capital = self.total_capital * self.config.quick_flip_allocation
         self.arbitrage_capital = self.total_capital * self.config.arbitrage_allocation
-        
+
         # Initialize strategy modules with actual capital
         self.market_maker = AdvancedMarketMaker(self.db_manager, self.kalshi_client, self.xai_client)
         self.portfolio_optimizer = AdvancedPortfolioOptimizer(self.db_manager, self.kalshi_client, self.xai_client)
-        
+
         self.logger.info(f"🎯 CAPITAL ALLOCATION: Market Making=${self.market_making_capital:.2f}, Directional=${self.directional_capital:.2f}, Quick Flip=${self.quick_flip_capital:.2f}, Arbitrage=${self.arbitrage_capital:.2f}")
 
     async def execute_unified_trading_strategy(self) -> TradingSystemResults:
@@ -769,22 +772,32 @@ class UnifiedAdvancedTradingSystem:
             self.logger.error(f"Error in risk management: {e}")
 
 
-
     def get_system_performance_summary(self) -> Dict:
         """
         Get comprehensive system performance summary.
         """
         try:
             # Get individual strategy performance
-            mm_performance = self.market_maker.get_performance_summary()
-            
+
+            # 🚨 FIX: Check if market_maker is initialized (not None)
+            if self.market_maker:
+                mm_performance = self.market_maker.get_performance_summary()
+            else:
+                # Provide a safe, empty default if not yet initialized
+                mm_performance = {'status': 'Uninitialized', 'net_profit': 0.0, 'orders_count': 0}
+
+            market_making_allocation = getattr(self.config, 'market_making_allocation', 0.0)
+            directional_trading_allocation = getattr(self.config, 'directional_trading_allocation', 0.0)
+            arbitrage_allocation = getattr(self.config, 'arbitrage_allocation', 0.0)
+
             return {
-                'system_status': 'active',
+                'system_status': 'active' if self.market_maker else 'pending_init',
                 'total_capital': self.total_capital,
                 'capital_allocation': {
-                    'market_making': self.config.market_making_allocation,
-                    'directional': self.config.directional_trading_allocation,
-                    'arbitrage': self.config.arbitrage_allocation
+                    # Use the allocation from the config, not the dynamic capital attributes
+                    'market_making': market_making_allocation,
+                    'directional': directional_trading_allocation,
+                    'arbitrage': arbitrage_allocation
                 },
                 'market_making_performance': mm_performance,
                 'last_rebalance': self.last_rebalance.isoformat(),
@@ -794,7 +807,7 @@ class UnifiedAdvancedTradingSystem:
                     'max_correlation': self.config.max_correlation_exposure
                 }
             }
-            
+
         except Exception as e:
             self.logger.error(f"Error getting performance summary: {e}")
             return {}
