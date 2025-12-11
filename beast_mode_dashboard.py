@@ -424,29 +424,31 @@ class BeastModeDashboard:
         print(f"📈 Available Markets: {available_markets}")
         print(f"🚀 System Status: {'ACTIVE' if available_markets > 0 else 'STANDBY'}")
 
-
 async def main():
     """Main entry point for the dashboard."""
     parser = argparse.ArgumentParser(description="Beast Mode Trading Dashboard")
     parser.add_argument('--summary', action='store_true', help='Show quick summary')
     parser.add_argument('--export', action='store_true', help='Export to CSV')
     parser.add_argument('--filename', type=str, help='CSV filename for export')
-    
+
     args = parser.parse_args()
-    
+
     dashboard = BeastModeDashboard()
-    
+
     try:
+        await dashboard.unified_system.async_initialize()
+
         if args.summary:
             await dashboard.show_summary()
         elif args.export:
             await dashboard.export_performance_csv(args.filename)
         else:
             await dashboard.show_live_dashboard()
-            
+
     except Exception as e:
         print(f"❌ Dashboard error: {e}")
 
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())
+
