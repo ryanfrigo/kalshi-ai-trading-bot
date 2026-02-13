@@ -299,15 +299,6 @@ details.
 
 ---
 
-## Acknowledgments
-
-- [Kalshi](https://kalshi.com) for the prediction market platform and API
-- [xAI](https://x.ai) for the Grok-4 model
-- [OpenRouter](https://openrouter.ai) for unified access to frontier LLMs
-- The open-source Python ecosystem
-
----
-
 **Disclaimer**: This software is for educational and research purposes. Trading
 involves risk, and you should only trade with capital you can afford to lose.
 The authors are not responsible for any financial losses incurred through the use
