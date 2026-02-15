@@ -127,9 +127,9 @@ def load_performance_data():
                         if market_data and 'market' in market_data:
                             market_info = market_data['market']
                             if position_count > 0:  # YES position
-                                position_dict['entry_price'] = float(market_info.get('yes_price', 50) / 100)
+                                position_dict['entry_price'] = float((market_info.get('yes_bid', 0) + market_info.get('yes_ask', 100)) / 2 / 100)
                             else:  # NO position
-                                position_dict['entry_price'] = float(market_info.get('no_price', 50) / 100)
+                                position_dict['entry_price'] = float((market_info.get('no_bid', 0) + market_info.get('no_ask', 100)) / 2 / 100)
                     except:
                         position_dict['entry_price'] = 0.50  # Keep default price as float
                     
@@ -230,9 +230,9 @@ def load_system_health():
                             # Determine if this is a YES or NO position and get current price
                             # For Kalshi, positive position = YES, negative = NO
                             if position_count > 0:  # YES position
-                                current_price = market_info.get('yes_price', 50) / 100
+                                current_price = (market_info.get('yes_bid', 0) + market_info.get('yes_ask', 100)) / 2 / 100
                             else:  # NO position  
-                                current_price = market_info.get('no_price', 50) / 100
+                                current_price = (market_info.get('no_bid', 0) + market_info.get('no_ask', 100)) / 2 / 100
                             
                             position_value = abs(position_count) * current_price
                             total_position_value += position_value

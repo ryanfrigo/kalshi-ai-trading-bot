@@ -76,10 +76,10 @@ async def sync_positions_to_database():
                         # Determine side and current price
                         if position_count > 0:  # YES position
                             side = 'YES'
-                            current_price = market_info.get('yes_price', 50) / 100
+                            current_price = (market_info.get('yes_bid', 0) + market_info.get('yes_ask', 100)) / 2 / 100
                         else:  # NO position
                             side = 'NO'
-                            current_price = market_info.get('no_price', 50) / 100
+                            current_price = (market_info.get('no_bid', 0) + market_info.get('no_ask', 100)) / 2 / 100
                         
                         # Create database position
                         position = Position(

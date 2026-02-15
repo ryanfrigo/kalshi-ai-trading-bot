@@ -509,8 +509,8 @@ Provide a brief, factual summary under {max_length//2} words. If no current info
         """
         # Extract key information
         title = market_data.get('title', 'Unknown Market')
-        yes_price = market_data.get('yes_price', 50)
-        no_price = market_data.get('no_price', 50)
+        yes_price = (market_data.get('yes_bid', 0) + market_data.get('yes_ask', 100)) / 2
+        no_price = (market_data.get('no_bid', 0) + market_data.get('no_ask', 100)) / 2
         volume = market_data.get('volume', 0)
         
         # Truncate news summary to save tokens
@@ -549,8 +549,8 @@ Required format:
         return MULTI_AGENT_PROMPT_TPL.format(
             title=market_data.get('title', 'Unknown Market'),
             rules=market_data.get('rules', 'No specific rules provided'),
-            yes_price=market_data.get('yes_price', 50),
-            no_price=market_data.get('no_price', 50),
+            yes_price=(market_data.get('yes_bid', 0) + market_data.get('yes_ask', 100)) / 2,
+            no_price=(market_data.get('no_bid', 0) + market_data.get('no_ask', 100)) / 2,
             volume=market_data.get('volume', 0),
             days_to_expiry=market_data.get('days_to_expiry', 30),
             news_summary=news_summary,

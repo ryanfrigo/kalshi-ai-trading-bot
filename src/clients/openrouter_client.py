@@ -559,8 +559,8 @@ class OpenRouterClient(TradingLoggerMixin):
     ) -> str:
         """Build a concise trading-decision prompt."""
         title = market_data.get("title", "Unknown Market")
-        yes_price = market_data.get("yes_price", 50)
-        no_price = market_data.get("no_price", 50)
+        yes_price = (market_data.get("yes_bid", 0) + market_data.get("yes_ask", 100)) / 2
+        no_price = (market_data.get("no_bid", 0) + market_data.get("no_ask", 100)) / 2
         volume = market_data.get("volume", 0)
         days_to_expiry = market_data.get("days_to_expiry", "Unknown")
         rules = market_data.get("rules", "No specific rules provided")

@@ -137,8 +137,8 @@ class OpenAIClient(TradingLoggerMixin):
         
         prompt_params = {
             "title": market_data['title'],
-            "yes_price": market_data['yes_price'],
-            "no_price": market_data['no_price'],
+            "yes_price": (market_data.get('yes_bid', 0) + market_data.get('yes_ask', 100)) / 2,
+            "no_price": (market_data.get('no_bid', 0) + market_data.get('no_ask', 100)) / 2,
             "volume": market_data['volume'],
             "days_to_expiry": days_to_expiry,
             "news_summary": news_summary,

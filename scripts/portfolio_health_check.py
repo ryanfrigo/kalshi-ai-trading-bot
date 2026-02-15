@@ -51,10 +51,10 @@ async def get_portfolio_health() -> Dict:
                         market_info = market_data['market']
                         
                         if position_count > 0:  # YES position
-                            current_price = market_info.get('yes_price', 50) / 100
+                            current_price = (market_info.get('yes_bid', 0) + market_info.get('yes_ask', 100)) / 2 / 100
                             side = 'YES'
                         else:  # NO position  
-                            current_price = market_info.get('no_price', 50) / 100
+                            current_price = (market_info.get('no_bid', 0) + market_info.get('no_ask', 100)) / 2 / 100
                             side = 'NO'
                         
                         position_value = abs(position_count) * current_price
