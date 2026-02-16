@@ -210,8 +210,38 @@ kalshi-ai-trading-bot/
 |
 |-- scripts/                   # Utility and diagnostic scripts (20 scripts)
 |-- docs/                      # Additional documentation
+|-- src/paper/                 # Paper trading signal tracker and dashboard generator
+|
 +-- tests/                     # Pytest test suite
 ```
+
+---
+
+## Paper Trading Dashboard
+
+Track what the bot *would* trade without risking real money. Every signal is
+logged to SQLite and a static HTML dashboard shows cumulative P&L, win rate, and
+per-signal details.
+
+```bash
+# Scan markets and log signals (no real orders)
+python paper_trader.py
+
+# Continuous scanning every 15 minutes
+python paper_trader.py --loop --interval 900
+
+# Check settled markets and update outcomes
+python paper_trader.py --settle
+
+# Regenerate the HTML dashboard
+python paper_trader.py --dashboard
+
+# Print stats to terminal
+python paper_trader.py --stats
+```
+
+The dashboard is written to `docs/paper_dashboard.html` — open it locally or
+serve via GitHub Pages.
 
 ---
 
