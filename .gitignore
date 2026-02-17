@@ -205,3 +205,7 @@ dashboard_*.json
 api_keys.txt
 credentials.json
 secrets.yaml 
+# Never commit SSH keys
+*.pem
+*.key
+.env*
