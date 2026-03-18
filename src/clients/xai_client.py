@@ -146,6 +146,21 @@ class XAIClient(TradingLoggerMixin):
                 requests_today=self.daily_tracker.request_count
             )
 
+    async def _persist_cost_to_db(self, cost: float) -> None:
+        """
+        Persist an xAI API cost increment to the database so that the
+        dashboard / evaluate job can read accurate spending data.
+
+        This is a fire-and-forget async helper — errors are logged but not
+        raised so they never interrupt the trading flow.
+        """
+        if not self.db_manager or cost <= 0:
+            return
+        try:
+            await self.db_manager.upsert_daily_cost(cost)
+        except Exception as e:
+            self.logger.warning(f"Failed to persist xAI cost to DB: {e}")
+
     async def _check_daily_limits(self) -> bool:
         """
         Check if we should pause due to daily limits.
@@ -311,9 +326,15 @@ class XAIClient(TradingLoggerMixin):
                     )
                     return self._get_fallback_context(query, max_length)
                 
-                # Process successful response
+                # Process successful response (also calls _update_daily_cost internally)
                 search_result = self._process_search_response(response, query, processing_time, max_length)
-                
+
+                # Persist search cost to DB (fire-and-forget)
+                sources_used_count = getattr(response.usage, 'num_sources_used', 0) if hasattr(response, 'usage') else 0
+                search_cost_for_db = sources_used_count * 0.025
+                if search_cost_for_db > 0:
+                    asyncio.create_task(self._persist_cost_to_db(search_cost_for_db))
+
                 # Cache the result
                 cache_key = f"{optimized_query[:50]}:{max_length}"
                 if len(self._search_cache) < 100:  # Limit cache size
@@ -385,10 +406,10 @@ Provide a brief, factual summary under {max_length//2} words. If no current info
         # Calculate costs and usage
         sources_used = getattr(response.usage, 'num_sources_used', 0) if hasattr(response, 'usage') else 0
         search_cost = sources_used * 0.025  # $0.025 per source
-        
-        self.total_cost += search_cost
-        self.request_count += 1
-        
+
+        # Route through daily tracker so the limit is enforced and DB gets updated
+        self._update_daily_cost(search_cost)
+
         self.logger.info(
             "xAI search completed successfully",
             query=original_query[:50],
@@ -813,8 +834,9 @@ Required format:
                 self.total_cost += cost
                 self.request_count += 1
                 
-                # Update daily cost tracking
+                # Update daily cost tracking (pickle) and persist to DB
                 self._update_daily_cost(cost)
+                asyncio.create_task(self._persist_cost_to_db(cost))
                 
                 self.logger.debug(
                     "xAI completion request successful",
@@ -913,7 +935,10 @@ Required format:
                 
                 self.total_cost += cost
                 self.request_count += 1
-                
+
+                # Persist fallback model cost to DB as well
+                asyncio.create_task(self._persist_cost_to_db(cost))
+
                 self.logger.info(
                     f"✅ Fallback model {fallback_model} succeeded",
                     response_length=len(response_content),

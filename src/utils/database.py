@@ -877,6 +877,33 @@ class DatabaseManager(TradingLoggerMixin):
             row = await cursor.fetchone()
             return row[0] if row else 0.0
 
+    async def upsert_daily_cost(self, cost: float, date: str = None) -> None:
+        """
+        Increment the daily AI cost total in the database.
+
+        Called by xAI/OpenRouter clients after every API request so that the
+        dashboard and evaluate job always reflect real spending — not just the
+        in-memory pickle tracker.
+
+        Args:
+            cost: Cost in USD to add to today's total.
+            date:  Date string (YYYY-MM-DD). Defaults to today.
+        """
+        if date is None:
+            date = datetime.now().strftime('%Y-%m-%d')
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("""
+                    INSERT INTO daily_cost_tracking (date, total_ai_cost, analysis_count, decision_count)
+                    VALUES (?, ?, 1, 0)
+                    ON CONFLICT(date) DO UPDATE SET
+                        total_ai_cost = total_ai_cost + excluded.total_ai_cost,
+                        analysis_count = analysis_count + 1
+                """, (date, cost))
+                await db.commit()
+        except Exception as e:
+            self.logger.error(f"Failed to upsert daily cost: {e}")
+
     async def get_market_analysis_count_today(self, market_id: str) -> int:
         """Get number of times market was analyzed today."""
         today = datetime.now().strftime('%Y-%m-%d')
