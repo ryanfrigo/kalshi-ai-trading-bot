@@ -236,15 +236,17 @@ class BeastModeBot:
         if not settings.trading.enable_daily_cost_limiting:
             return True
         
-        # Check daily tracker in xAI client
-        if hasattr(xai_client, 'daily_tracker') and xai_client.daily_tracker.is_exhausted:
-            self.logger.warning(
-                "🚫 Daily AI cost limit reached - trading paused",
-                daily_cost=xai_client.daily_tracker.total_cost,
-                daily_limit=xai_client.daily_tracker.daily_limit,
-                requests_today=xai_client.daily_tracker.request_count
-            )
-            return False
+        # Use the client's reset-aware check (handles new-day resets)
+        if hasattr(xai_client, '_check_daily_limits'):
+            can_proceed = await xai_client._check_daily_limits()
+            if not can_proceed:
+                self.logger.warning(
+                    "🚫 Daily AI cost limit reached - trading paused",
+                    daily_cost=xai_client.daily_tracker.total_cost,
+                    daily_limit=xai_client.daily_tracker.daily_limit,
+                    requests_today=xai_client.daily_tracker.request_count
+                )
+            return can_proceed
         
         return True
 
@@ -351,8 +353,26 @@ Beast Mode Features:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Set the logging level (default: INFO)"
     )
+    parser.add_argument(
+        "--reset-limits",
+        action="store_true",
+        help="Reset daily AI cost limits and exit (clears exhausted state)"
+    )
     
     args = parser.parse_args()
+    
+    # Handle --reset-limits
+    if args.reset_limits:
+        import glob
+        pkl_files = glob.glob("logs/daily_*usage*.pkl")
+        if pkl_files:
+            for f in pkl_files:
+                os.remove(f)
+                print(f"✅ Deleted {f}")
+            print("🔄 Daily AI limits reset. Restart the bot to continue trading.")
+        else:
+            print("ℹ️  No daily limit files found — limits are already clean.")
+        return
     
     # Setup logging
     setup_logging(log_level=args.log_level)

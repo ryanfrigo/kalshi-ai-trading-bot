@@ -95,6 +95,7 @@ class XAIClient(TradingLoggerMixin):
         """Load or create daily usage tracker."""
         today = datetime.now().strftime("%Y-%m-%d")
         usage_file = "logs/daily_ai_usage.pkl"
+        daily_limit = getattr(settings.trading, 'daily_ai_cost_limit', 50.0)
         
         # Ensure logs directory exists
         os.makedirs("logs", exist_ok=True)
@@ -108,14 +109,20 @@ class XAIClient(TradingLoggerMixin):
                 if tracker.date != today:
                     tracker = DailyUsageTracker(
                         date=today,
-                        daily_limit=tracker.daily_limit  # Keep same limit
+                        daily_limit=daily_limit
                     )
+                else:
+                    # Always sync daily_limit from settings (user may have changed it)
+                    if tracker.daily_limit != daily_limit:
+                        tracker.daily_limit = daily_limit
+                        # Un-exhaust if new limit is higher than current cost
+                        if tracker.is_exhausted and tracker.total_cost < daily_limit:
+                            tracker.is_exhausted = False
                 return tracker
         except Exception as e:
             self.logger.warning(f"Failed to load daily tracker: {e}")
         
         # Create new tracker
-        daily_limit = getattr(settings.trading, 'daily_ai_cost_limit', 50.0)
         return DailyUsageTracker(date=today, daily_limit=daily_limit)
 
     def _save_daily_tracker(self):

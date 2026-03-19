@@ -151,6 +151,7 @@ class OpenRouterClient(TradingLoggerMixin):
     def _load_daily_tracker(self) -> DailyUsageTracker:
         """Load or create a daily usage tracker from disk."""
         today = datetime.now().strftime("%Y-%m-%d")
+        daily_limit = getattr(settings.trading, "daily_ai_cost_limit", 50.0)
         os.makedirs("logs", exist_ok=True)
 
         try:
@@ -160,13 +161,19 @@ class OpenRouterClient(TradingLoggerMixin):
                 if tracker.date != today:
                     tracker = DailyUsageTracker(
                         date=today,
-                        daily_limit=tracker.daily_limit,
+                        daily_limit=daily_limit,
                     )
+                else:
+                    # Always sync daily_limit from settings (user may have changed it)
+                    if tracker.daily_limit != daily_limit:
+                        tracker.daily_limit = daily_limit
+                        # Un-exhaust if new limit is higher than current cost
+                        if tracker.is_exhausted and tracker.total_cost < daily_limit:
+                            tracker.is_exhausted = False
                 return tracker
         except Exception as exc:
             self.logger.warning(f"Failed to load daily tracker: {exc}")
 
-        daily_limit = getattr(settings.trading, "daily_ai_cost_limit", 50.0)
         return DailyUsageTracker(date=today, daily_limit=daily_limit)
 
     def _save_daily_tracker(self) -> None:
