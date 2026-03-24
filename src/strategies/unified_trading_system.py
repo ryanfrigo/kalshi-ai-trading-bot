@@ -608,7 +608,7 @@ class UnifiedAdvancedTradingSystem:
                         results['successful_executions'] += 1
                         results['positions_created'] += 1
                         results['total_capital_used'] += position_value
-                        self.logger.info(f"✅ Executed position: {market_id} {side} {quantity} at {price:.3f}")
+                        self.logger.info(f"✅ Executed position: {market_id} {intended_side} {quantity} at {price:.3f}")
                     else:
                         results['failed_executions'] += 1
                         self.logger.error(f"❌ Failed to execute position for {market_id}")
