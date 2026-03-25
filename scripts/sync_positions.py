@@ -24,6 +24,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.clients.kalshi_client import KalshiClient
 from src.utils.database import DatabaseManager, Position, TradeLog
 from src.utils.logging_setup import get_trading_logger
+from src.utils.market_prices import get_market_prices
 
 logger = get_trading_logger(__name__)
 
@@ -74,12 +75,13 @@ async def sync_positions_to_database():
                         market_info = market_data['market']
                         
                         # Determine side and current price
+                        yes_bid, yes_ask, no_bid, no_ask = get_market_prices(market_info)
                         if position_count > 0:  # YES position
                             side = 'YES'
-                            current_price = (market_info.get('yes_bid', 0) + market_info.get('yes_ask', 100)) / 2 / 100
+                            current_price = (yes_bid + yes_ask) / 2
                         else:  # NO position
                             side = 'NO'
-                            current_price = (market_info.get('no_bid', 0) + market_info.get('no_ask', 100)) / 2 / 100
+                            current_price = (no_bid + no_ask) / 2
                         
                         # Create database position
                         position = Position(

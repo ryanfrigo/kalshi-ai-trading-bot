@@ -12,6 +12,7 @@ from src.utils.database import DatabaseManager, Position
 from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
 from src.clients.kalshi_client import KalshiClient, KalshiAPIError
+from src.utils.market_prices import get_market_prices
 
 async def execute_position(
     position: Position, 
@@ -58,19 +59,22 @@ async def execute_position(
             
             # Add the appropriate price field based on side
             # For market orders, we use the ask price (what we're willing to pay)
+            # get_market_prices normalizes both API v2 (dollar floats) and legacy (cent ints)
+            # to dollar values (0.0–1.0). place_order expects cents (int), so multiply by 100.
+            _yes_bid, yes_ask_dollars, _no_bid, no_ask_dollars = get_market_prices(market)
             if side_lower == "yes":
-                yes_ask = market.get('yes_ask', 0)
-                if yes_ask > 0:
-                    order_params["yes_price"] = yes_ask
+                yes_ask_cents = int(round(yes_ask_dollars * 100))
+                if yes_ask_cents > 0:
+                    order_params["yes_price"] = yes_ask_cents
                 else:
-                    logger.error(f"No valid yes_ask price for {position.market_id}: {yes_ask}")
+                    logger.error(f"No valid yes_ask price for {position.market_id}: {yes_ask_dollars}")
                     return False
             else:  # side_lower == "no"
-                no_ask = market.get('no_ask', 0)
-                if no_ask > 0:
-                    order_params["no_price"] = no_ask
+                no_ask_cents = int(round(no_ask_dollars * 100))
+                if no_ask_cents > 0:
+                    order_params["no_price"] = no_ask_cents
                 else:
-                    logger.error(f"No valid no_ask price for {position.market_id}: {no_ask}")
+                    logger.error(f"No valid no_ask price for {position.market_id}: {no_ask_dollars}")
                     return False
             
             logger.info(f"Placing order with params: {order_params}")

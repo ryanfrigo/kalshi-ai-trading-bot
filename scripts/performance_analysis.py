@@ -6,6 +6,7 @@ sys.path.append('.')
 from src.clients.kalshi_client import KalshiClient
 from src.utils.database import DatabaseManager
 from src.clients.xai_client import XAIClient
+from src.utils.market_prices import get_market_prices
 import aiosqlite
 from datetime import datetime, timedelta
 
@@ -89,10 +90,11 @@ async def comprehensive_analysis():
                 try:
                     market_data = await kalshi_client.get_market(ticker)
                     market_info = market_data.get('market', {})
+                    yes_bid, yes_ask, no_bid, no_ask = get_market_prices(market_info)
                     if quantity > 0:  # Long position
-                        current_price = (market_info.get('yes_bid', 0) + market_info.get('yes_ask', 100)) / 2 / 100
-                    else:  # Short position  
-                        current_price = (market_info.get('no_bid', 0) + market_info.get('no_ask', 100)) / 2 / 100
+                        current_price = (yes_bid + yes_ask) / 2
+                    else:  # Short position
+                        current_price = (no_bid + no_ask) / 2
                     position_value = abs(quantity) * current_price
                     total_position_value += position_value
                 except:

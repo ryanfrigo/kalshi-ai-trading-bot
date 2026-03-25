@@ -36,6 +36,7 @@ from src.clients.kalshi_client import KalshiClient
 from src.clients.xai_client import XAIClient
 from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
+from src.utils.market_prices import get_market_prices
 
 
 @dataclass
@@ -1138,10 +1139,9 @@ async def _evaluate_immediate_trade(
             # FIXED: Extract from nested 'market' object in API response
             market_info = market_data.get('market', {})
             market_status = market_info.get('status')
-            yes_ask = market_info.get('yes_ask', 0)
-            no_ask = market_info.get('no_ask', 0)
+            _yes_bid, yes_ask, _no_bid, no_ask = get_market_prices(market_info)
             
-            logger.info(f"🔍 Market validation for {opportunity.market_id}: status={market_status}, YES={yes_ask}¢, NO={no_ask}¢")
+            logger.info(f"🔍 Market validation for {opportunity.market_id}: status={market_status}, YES={yes_ask:.4f}, NO={no_ask:.4f}")
             
             # FIXED: Kalshi uses 'active' for tradeable markets, not 'open'
             if market_status not in ['active', 'open']:
@@ -1149,7 +1149,7 @@ async def _evaluate_immediate_trade(
                 return
             
             if not (yes_ask and no_ask and yes_ask > 0 and no_ask > 0):
-                logger.warning(f"⏭️ Skipping {opportunity.market_id} - No valid prices (YES={yes_ask}¢, NO={no_ask}¢)")
+                logger.warning(f"⏭️ Skipping {opportunity.market_id} - No valid prices (YES={yes_ask:.4f}, NO={no_ask:.4f})")
                 return
                 
             logger.info(f"✅ Market validation passed for {opportunity.market_id} - Status: {market_status}, proceeding with trade!")
