@@ -997,7 +997,7 @@ Required format:
         if client is None:
             return None
         try:
-            content, cost, _, _ = await client.get_completion(
+            content = await client.get_completion(
                 prompt=prompt,
                 max_tokens=max_tokens or self.max_tokens,
                 temperature=temperature or 0.1,
@@ -1006,7 +1006,6 @@ Required format:
                 self.logger.info(
                     "OpenRouter fallback succeeded",
                     model=client.default_model,
-                    cost=cost
                 )
             return content
         except Exception as e:
