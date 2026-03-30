@@ -94,7 +94,7 @@ class TradingConfig:
     scan_interval_seconds: int = 60      # SANE: 60-second scan interval (was 30)
     
     # AI model configuration
-    primary_model: str = "grok-3"  # xAI Grok model for forecasting
+    primary_model: str = "grok-4-1-fast-reasoning"  # xAI Grok model for forecasting
     fallback_model: str = "grok-4-1-fast-non-reasoning"  # Fallback to fast non-reasoning variant
     ai_temperature: float = 0  # Lower temperature for more consistent JSON output
     ai_max_tokens: int = 8000    # Reasonable limit for reasoning models (grok-4 works better with 8000)

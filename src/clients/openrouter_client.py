@@ -27,7 +27,7 @@ from src.utils.logging_setup import TradingLoggerMixin, log_error_with_context
 # ---------------------------------------------------------------------------
 
 MODEL_PRICING: Dict[str, Dict[str, float]] = {
-    "anthropic/claude-sonnet-4.5": {
+    "anthropic/claude-sonnet-4": {
         "input_per_1k": 0.003,
         "output_per_1k": 0.015,
     },
@@ -35,26 +35,30 @@ MODEL_PRICING: Dict[str, Dict[str, float]] = {
         "input_per_1k": 0.002,
         "output_per_1k": 0.008,
     },
-    "google/gemini-3-pro-preview": {
+    "openai/gpt-4.1": {
         "input_per_1k": 0.002,
-        "output_per_1k": 0.012,
+        "output_per_1k": 0.008,
     },
-    "google/gemini-3-flash-preview": {
-        "input_per_1k": 0.0005,
-        "output_per_1k": 0.003,
+    "google/gemini-2.5-pro-preview": {
+        "input_per_1k": 0.00125,
+        "output_per_1k": 0.01,
     },
-    "deepseek/deepseek-v3.2": {
-        "input_per_1k": 0.00025,
-        "output_per_1k": 0.00038,
+    "google/gemini-2.5-flash-preview": {
+        "input_per_1k": 0.00015,
+        "output_per_1k": 0.0006,
+    },
+    "deepseek/deepseek-r1": {
+        "input_per_1k": 0.0008,
+        "output_per_1k": 0.002,
     },
 }
 
 # Ordered fallback chain -- if the requested model fails, try the next one.
 DEFAULT_FALLBACK_ORDER: List[str] = [
-    "anthropic/claude-sonnet-4.5",
-    "openai/o3",
-    "google/gemini-3-pro-preview",
-    "deepseek/deepseek-v3.2",
+    "anthropic/claude-sonnet-4",
+    "openai/gpt-4.1",
+    "google/gemini-2.5-pro-preview",
+    "deepseek/deepseek-r1",
 ]
 
 

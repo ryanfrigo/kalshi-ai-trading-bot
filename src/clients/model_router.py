@@ -27,21 +27,21 @@ from src.utils.logging_setup import TradingLoggerMixin
 # The router will try them in order until one succeeds.
 CAPABILITY_MAP: Dict[str, List[Tuple[str, str]]] = {
     "fast": [
-        ("google/gemini-3-flash-preview", "openrouter"),
+        ("google/gemini-2.5-flash-preview", "openrouter"),
         ("grok-4-1-fast-reasoning", "xai"),
     ],
     "cheap": [
-        ("deepseek/deepseek-v3.2", "openrouter"),
-        ("google/gemini-3-flash-preview", "openrouter"),
+        ("deepseek/deepseek-r1", "openrouter"),
+        ("google/gemini-2.5-flash-preview", "openrouter"),
     ],
     "reasoning": [
-        ("grok-4-1-fast-reasoning", "xai"),
         ("openai/o3", "openrouter"),
-        ("anthropic/claude-sonnet-4.5", "openrouter"),
+        ("google/gemini-2.5-pro-preview", "openrouter"),
+        ("anthropic/claude-sonnet-4", "openrouter"),
     ],
     "balanced": [
-        ("anthropic/claude-sonnet-4.5", "openrouter"),
-        ("openai/o3", "openrouter"),
+        ("anthropic/claude-sonnet-4", "openrouter"),
+        ("openai/gpt-4.1", "openrouter"),
         ("grok-4-1-fast-reasoning", "xai"),
     ],
 }
@@ -49,10 +49,10 @@ CAPABILITY_MAP: Dict[str, List[Tuple[str, str]]] = {
 # Full fleet: used when we need a fallback chain that spans all providers.
 FULL_FLEET: List[Tuple[str, str]] = [
     ("grok-4-1-fast-reasoning", "xai"),
-    ("anthropic/claude-sonnet-4.5", "openrouter"),
-    ("openai/o3", "openrouter"),
-    ("google/gemini-3-pro-preview", "openrouter"),
-    ("deepseek/deepseek-v3.2", "openrouter"),
+    ("anthropic/claude-sonnet-4", "openrouter"),
+    ("openai/gpt-4.1", "openrouter"),
+    ("google/gemini-2.5-pro-preview", "openrouter"),
+    ("deepseek/deepseek-r1", "openrouter"),
 ]
 
 
