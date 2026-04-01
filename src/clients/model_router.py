@@ -1,10 +1,9 @@
 """
 Unified model routing layer for the Kalshi AI Trading Bot.
 
-Routes requests to the appropriate AI provider (XAI / OpenRouter / direct OpenAI)
-based on explicit model selection, capability requirements, or automatic load
-balancing.  Provides aggregate cost tracking and transparent fallback across
-the full model fleet.
+Routes ALL requests through OpenRouter — single API key, full model fleet.
+Provides aggregate cost tracking, daily budget enforcement, and transparent
+fallback across the full model fleet.
 """
 
 import asyncio
@@ -13,46 +12,44 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.clients.xai_client import TradingDecision, XAIClient
+from src.clients.xai_client import TradingDecision, DailyUsageTracker
 from src.clients.openrouter_client import OpenRouterClient, MODEL_PRICING
 from src.config.settings import settings
 from src.utils.logging_setup import TradingLoggerMixin
 
 
 # ---------------------------------------------------------------------------
-# Capability-to-model mapping
+# Capability-to-model mapping — all via OpenRouter (April 2026 models)
 # ---------------------------------------------------------------------------
 
-# Each capability maps to an ordered preference list of (model, provider).
-# The router will try them in order until one succeeds.
 CAPABILITY_MAP: Dict[str, List[Tuple[str, str]]] = {
     "fast": [
-        ("google/gemini-2.5-flash-preview", "openrouter"),
-        ("grok-4-1-fast-reasoning", "xai"),
+        ("x-ai/grok-4.1-fast", "openrouter"),
+        ("google/gemini-3.1-pro", "openrouter"),
     ],
     "cheap": [
-        ("deepseek/deepseek-r1", "openrouter"),
-        ("google/gemini-2.5-flash-preview", "openrouter"),
+        ("deepseek/deepseek-v3.2", "openrouter"),
+        ("google/gemini-3.1-pro", "openrouter"),
     ],
     "reasoning": [
-        ("openai/o3", "openrouter"),
-        ("google/gemini-2.5-pro-preview", "openrouter"),
-        ("anthropic/claude-sonnet-4", "openrouter"),
+        ("anthropic/claude-sonnet-4.5", "openrouter"),
+        ("openai/gpt-5.4", "openrouter"),
+        ("google/gemini-3.1-pro", "openrouter"),
     ],
     "balanced": [
-        ("anthropic/claude-sonnet-4", "openrouter"),
-        ("openai/gpt-4.1", "openrouter"),
-        ("grok-4-1-fast-reasoning", "xai"),
+        ("anthropic/claude-sonnet-4.5", "openrouter"),
+        ("openai/gpt-5.4", "openrouter"),
+        ("x-ai/grok-4.1-fast", "openrouter"),
     ],
 }
 
-# Full fleet: used when we need a fallback chain that spans all providers.
+# Full fleet: ordered by quality/priority for fallback chains.
 FULL_FLEET: List[Tuple[str, str]] = [
-    ("grok-4-1-fast-reasoning", "xai"),
-    ("anthropic/claude-sonnet-4", "openrouter"),
-    ("openai/gpt-4.1", "openrouter"),
-    ("google/gemini-2.5-pro-preview", "openrouter"),
-    ("deepseek/deepseek-r1", "openrouter"),
+    ("anthropic/claude-sonnet-4.5", "openrouter"),
+    ("google/gemini-3.1-pro", "openrouter"),
+    ("openai/gpt-5.4", "openrouter"),
+    ("deepseek/deepseek-v3.2", "openrouter"),
+    ("x-ai/grok-4.1-fast", "openrouter"),
 ]
 
 
@@ -118,8 +115,7 @@ class ModelHealth:
 
 class ModelRouter(TradingLoggerMixin):
     """
-    Unified routing layer that dispatches AI requests to the best available
-    provider and model.
+    Unified routing layer that dispatches ALL AI requests through OpenRouter.
 
     Usage::
 
@@ -127,22 +123,26 @@ class ModelRouter(TradingLoggerMixin):
         # By capability
         text = await router.get_completion("prompt", capability="fast")
         # By explicit model
-        text = await router.get_completion("prompt", model="openai/gpt-4o")
+        text = await router.get_completion("prompt", model="openai/gpt-5.4")
         # Trading decision
         decision = await router.get_trading_decision(market, portfolio)
     """
 
     def __init__(
         self,
-        xai_client: Optional[XAIClient] = None,
         openrouter_client: Optional[OpenRouterClient] = None,
         db_manager: Any = None,
+        # xai_client param accepted for backward compat but ignored — all routing
+        # now goes through OpenRouter.
+        xai_client: Any = None,
     ):
         self.db_manager = db_manager
 
-        # Lazily initialise provider clients
-        self.xai_client: Optional[XAIClient] = xai_client
+        # Single provider: OpenRouter
         self.openrouter_client: Optional[OpenRouterClient] = openrouter_client
+
+        # Daily cost tracking (persisted via pickle, shared with OpenRouterClient)
+        self.daily_tracker: DailyUsageTracker = self._load_daily_tracker()
 
         # Build health trackers for the full fleet
         self.model_health: Dict[str, ModelHealth] = {}
@@ -151,11 +151,97 @@ class ModelRouter(TradingLoggerMixin):
             self.model_health[key] = ModelHealth(model=model_name, provider=provider)
 
         self.logger.info(
-            "ModelRouter initialized",
-            xai_available=self.xai_client is not None,
+            "ModelRouter initialized — all models via OpenRouter",
             openrouter_available=self.openrouter_client is not None,
             fleet_size=len(FULL_FLEET),
         )
+
+    # ------------------------------------------------------------------
+    # Daily cost tracking
+    # ------------------------------------------------------------------
+
+    def _load_daily_tracker(self) -> DailyUsageTracker:
+        """Load or create daily usage tracker (shared with OpenRouterClient)."""
+        import os
+        import pickle
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        usage_file = "logs/daily_ai_usage.pkl"
+        daily_limit = getattr(settings.trading, "daily_ai_cost_limit", 10.0)
+
+        os.makedirs("logs", exist_ok=True)
+
+        try:
+            if os.path.exists(usage_file):
+                with open(usage_file, "rb") as f:
+                    tracker = pickle.load(f)
+                if tracker.date != today:
+                    tracker = DailyUsageTracker(date=today, daily_limit=daily_limit)
+                else:
+                    tracker.daily_limit = daily_limit
+                    if tracker.is_exhausted and tracker.total_cost < daily_limit:
+                        tracker.is_exhausted = False
+                return tracker
+        except Exception as e:
+            self.logger.warning(f"Failed to load daily tracker: {e}")
+
+        return DailyUsageTracker(date=today, daily_limit=daily_limit)
+
+    def _save_daily_tracker(self) -> None:
+        import os
+        import pickle
+
+        try:
+            os.makedirs("logs", exist_ok=True)
+            with open("logs/daily_ai_usage.pkl", "wb") as f:
+                pickle.dump(self.daily_tracker, f)
+        except Exception as e:
+            self.logger.error(f"Failed to save daily tracker: {e}")
+
+    def _update_daily_cost(self, cost: float) -> None:
+        """Update daily cost tracking."""
+        self.daily_tracker.total_cost += cost
+        self.daily_tracker.request_count += 1
+        self._save_daily_tracker()
+
+        if self.daily_tracker.total_cost >= self.daily_tracker.daily_limit:
+            self.daily_tracker.is_exhausted = True
+            self.daily_tracker.last_exhausted_time = datetime.now()
+            self._save_daily_tracker()
+            self.logger.warning(
+                "Daily AI cost limit reached — trading paused until tomorrow.",
+                daily_cost=self.daily_tracker.total_cost,
+                daily_limit=self.daily_tracker.daily_limit,
+            )
+
+    async def check_daily_limits(self) -> bool:
+        """
+        Returns True if we can proceed with AI calls, False if daily limit reached.
+        Beast-mode-bot calls this before each trading cycle.
+        """
+        # Reload to catch changes from other processes
+        self.daily_tracker = self._load_daily_tracker()
+
+        if self.daily_tracker.is_exhausted:
+            now = datetime.now()
+            if self.daily_tracker.date != now.strftime("%Y-%m-%d"):
+                # New day — reset
+                self.daily_tracker = DailyUsageTracker(
+                    date=now.strftime("%Y-%m-%d"),
+                    daily_limit=self.daily_tracker.daily_limit,
+                )
+                self._save_daily_tracker()
+                self.logger.info("New day — daily AI limits reset")
+                return True
+
+            self.logger.info(
+                "Daily AI limit reached — request skipped",
+                daily_cost=self.daily_tracker.total_cost,
+                daily_limit=self.daily_tracker.daily_limit,
+            )
+            return False
+
+        return True
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -165,13 +251,6 @@ class ModelRouter(TradingLoggerMixin):
     def _model_key(model: str, provider: str) -> str:
         return f"{provider}::{model}"
 
-    def _ensure_xai(self) -> XAIClient:
-        """Return the XAI client, creating it on first use if needed."""
-        if self.xai_client is None:
-            self.xai_client = XAIClient(db_manager=self.db_manager)
-            self.logger.info("Lazily initialized XAIClient")
-        return self.xai_client
-
     def _ensure_openrouter(self) -> OpenRouterClient:
         """Return the OpenRouter client, creating it on first use if needed."""
         if self.openrouter_client is None:
@@ -180,14 +259,7 @@ class ModelRouter(TradingLoggerMixin):
         return self.openrouter_client
 
     def _infer_provider(self, model: str) -> str:
-        """Determine which provider owns a model string."""
-        # OpenRouter models use a slash-delimited namespace
-        if "/" in model:
-            return "openrouter"
-        # Grok models go through XAI
-        if model.startswith("grok"):
-            return "xai"
-        # Default: try openrouter (it can proxy many models)
+        """All models route through OpenRouter."""
         return "openrouter"
 
     def _resolve_targets(
@@ -212,21 +284,19 @@ class ModelRouter(TradingLoggerMixin):
             cap_targets = CAPABILITY_MAP.get(capability, [])
             targets.extend(cap_targets)
         else:
-            # No preference -- use full fleet ordered by success rate
             targets = list(FULL_FLEET)
 
-        # Append remaining fleet members that are not yet in the list
+        # Append remaining fleet members not yet in the list
         seen = set(targets)
         for entry in FULL_FLEET:
             if entry not in seen:
                 targets.append(entry)
                 seen.add(entry)
 
-        # Filter out unhealthy models (but keep at least 2 options)
+        # Filter out unhealthy models (keep at least 2)
         healthy = [t for t in targets if self._is_model_healthy(t[0], t[1])]
         if len(healthy) >= 2:
             targets = healthy
-        # else: keep the full list -- better to try an unhealthy model than nothing
 
         return targets
 
@@ -250,7 +320,7 @@ class ModelRouter(TradingLoggerMixin):
             health.record_failure()
 
     # ------------------------------------------------------------------
-    # Dispatch helpers
+    # Dispatch helpers — all through OpenRouter
     # ------------------------------------------------------------------
 
     async def _dispatch_completion(
@@ -264,32 +334,21 @@ class ModelRouter(TradingLoggerMixin):
         query_type: str = "completion",
         market_id: Optional[str] = None,
     ) -> Optional[str]:
-        """
-        Send a completion request to the specified (model, provider) pair.
-        Returns the response text or raises on failure.
-        """
-        if provider == "xai":
-            client = self._ensure_xai()
-            return await client.get_completion(
-                prompt=prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                strategy=strategy,
-                query_type=query_type,
-                market_id=market_id,
-            )
-        else:
-            # openrouter (and anything else)
-            client = self._ensure_openrouter()
-            return await client.get_completion(
-                prompt=prompt,
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                strategy=strategy,
-                query_type=query_type,
-                market_id=market_id,
-            )
+        """Send a completion request through OpenRouter."""
+        client = self._ensure_openrouter()
+        result = await client.get_completion(
+            prompt=prompt,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            strategy=strategy,
+            query_type=query_type,
+            market_id=market_id,
+        )
+        # Update router-level daily tracker from openrouter client's last cost
+        if result is not None and hasattr(client, "_last_request_cost"):
+            self._update_daily_cost(client._last_request_cost)
+        return result
 
     async def _dispatch_trading_decision(
         self,
@@ -299,24 +358,17 @@ class ModelRouter(TradingLoggerMixin):
         model: str,
         provider: str,
     ) -> Optional[TradingDecision]:
-        """
-        Request a trading decision from the specified (model, provider) pair.
-        """
-        if provider == "xai":
-            client = self._ensure_xai()
-            return await client.get_trading_decision(
-                market_data=market_data,
-                portfolio_data=portfolio_data,
-                news_summary=news_summary,
-            )
-        else:
-            client = self._ensure_openrouter()
-            return await client.get_trading_decision(
-                market_data=market_data,
-                portfolio_data=portfolio_data,
-                news_summary=news_summary,
-                model=model,
-            )
+        """Request a trading decision through OpenRouter."""
+        client = self._ensure_openrouter()
+        decision = await client.get_trading_decision(
+            market_data=market_data,
+            portfolio_data=portfolio_data,
+            news_summary=news_summary,
+            model=model,
+        )
+        if decision is not None and hasattr(client, "_last_request_cost"):
+            self._update_daily_cost(client._last_request_cost)
+        return decision
 
     # ------------------------------------------------------------------
     # Public API: get_completion
@@ -334,12 +386,12 @@ class ModelRouter(TradingLoggerMixin):
         market_id: Optional[str] = None,
     ) -> Optional[str]:
         """
-        Get a completion routed to the best available model.
+        Get a completion routed to the best available model via OpenRouter.
 
         Args:
             prompt: The user/system prompt.
-            model: Explicit model identifier (e.g. ``"openai/gpt-4o"``).
-            capability: Capability hint -- ``"fast"``, ``"reasoning"``,
+            model: Explicit model identifier (e.g. ``"anthropic/claude-sonnet-4.5"``).
+            capability: Capability hint — ``"fast"``, ``"reasoning"``,
                 ``"balanced"``, or ``"cheap"``.  Ignored if *model* is given.
             temperature: Sampling temperature override.
             max_tokens: Max output tokens override.
@@ -376,7 +428,6 @@ class ModelRouter(TradingLoggerMixin):
                     )
                     return result
 
-                # result is None -- model returned nothing (e.g. daily limit)
                 self._record_failure(target_model, provider)
                 self.logger.warning(
                     "Model returned None, trying next",
@@ -413,7 +464,7 @@ class ModelRouter(TradingLoggerMixin):
         capability: Optional[str] = None,
     ) -> Optional[TradingDecision]:
         """
-        Get a trading decision from the best available model.
+        Get a trading decision from the best available model via OpenRouter.
 
         Args:
             market_data: Market information dict.
@@ -450,7 +501,6 @@ class ModelRouter(TradingLoggerMixin):
                     )
                     return decision
 
-                # Decision was None -- parsing failed or model declined
                 self._record_failure(target_model, provider)
                 self.logger.warning(
                     "Model returned no decision, trying next",
@@ -481,8 +531,6 @@ class ModelRouter(TradingLoggerMixin):
     def get_total_cost(self) -> float:
         """Return aggregate cost across all providers."""
         total = 0.0
-        if self.xai_client:
-            total += self.xai_client.total_cost
         if self.openrouter_client:
             total += self.openrouter_client.total_cost
         return total
@@ -490,8 +538,6 @@ class ModelRouter(TradingLoggerMixin):
     def get_total_requests(self) -> int:
         """Return aggregate request count across all providers."""
         total = 0
-        if self.xai_client:
-            total += self.xai_client.request_count
         if self.openrouter_client:
             total += self.openrouter_client.request_count
         return total
@@ -499,30 +545,23 @@ class ModelRouter(TradingLoggerMixin):
     def get_cost_summary(self) -> Dict[str, Any]:
         """
         Return a comprehensive cost and health summary.
-
-        Includes per-provider cost breakdowns and per-model health stats.
         """
         summary: Dict[str, Any] = {
             "total_cost": round(self.get_total_cost(), 6),
             "total_requests": self.get_total_requests(),
             "providers": {},
             "model_health": {},
+            "daily": {
+                "cost": round(self.daily_tracker.total_cost, 6),
+                "limit": self.daily_tracker.daily_limit,
+                "requests": self.daily_tracker.request_count,
+                "is_exhausted": self.daily_tracker.is_exhausted,
+            },
         }
 
-        # XAI provider summary
-        if self.xai_client:
-            summary["providers"]["xai"] = {
-                "total_cost": round(self.xai_client.total_cost, 6),
-                "total_requests": self.xai_client.request_count,
-                "daily_cost": round(self.xai_client.daily_tracker.total_cost, 6),
-                "daily_limit": self.xai_client.daily_tracker.daily_limit,
-            }
-
-        # OpenRouter provider summary
         if self.openrouter_client:
             summary["providers"]["openrouter"] = self.openrouter_client.get_cost_summary()
 
-        # Model health
         for key, health in self.model_health.items():
             if health.total_requests > 0:
                 summary["model_health"][key] = {
@@ -544,8 +583,6 @@ class ModelRouter(TradingLoggerMixin):
     async def close(self) -> None:
         """Shut down all provider clients."""
         tasks = []
-        if self.xai_client:
-            tasks.append(self.xai_client.close())
         if self.openrouter_client:
             tasks.append(self.openrouter_client.close())
 

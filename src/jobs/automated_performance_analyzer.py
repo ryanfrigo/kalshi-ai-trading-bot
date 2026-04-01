@@ -26,7 +26,6 @@ from src.clients.xai_client import XAIClient
 from src.utils.database import DatabaseManager, Position, TradeLog
 from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
-from xai_sdk.chat import user as xai_user
 
 
 class Priority(Enum):
@@ -420,17 +419,19 @@ Be concise and actionable. Focus on the top 3 priorities.
 """
 
         try:
-            # Use raw completion to get unprocessed text
-            messages = [xai_user(analysis_prompt)]
-            response_content, cost = await self.xai_client._make_completion_request(
-                messages, 
+            # Use get_completion which delegates to OpenRouter
+            response_content = await self.xai_client.get_completion(
+                prompt=analysis_prompt,
                 max_tokens=3000,
-                temperature=0.3
+                temperature=0.3,
+                strategy="performance_analysis",
+                query_type="analysis",
             )
-            
+            cost = getattr(self.xai_client, 'total_cost', 0.0)
+
             return {
                 'analysis_text': response_content,
-                'model': 'grok-4',
+                'model': settings.trading.primary_model,
                 'timestamp': datetime.now().isoformat(),
                 'cost': cost,
                 'status': 'success'

@@ -4,13 +4,14 @@ Kalshi AI Trading Bot — Multi-Model AI Ensemble 🚀
 
 Main entry point for the Unified Advanced Trading System.
 Five frontier LLMs debate every trade — positions only open when they agree.
+All models route through OpenRouter (single API key).
 
 Ensemble roster (configured in src/config/settings.py):
-- Grok 4.1 (xAI)           — Forecaster           30%
-- Claude Sonnet 4 (OpenRouter) — Lead Analyst       20%
-- GPT-4.1 (OpenRouter)     — Bull Researcher        20%
-- Gemini 2.5 Pro (OpenRouter) — Bear Researcher     15%
-- DeepSeek R1 (OpenRouter) — Risk Manager           15%
+- Claude Sonnet 4.5 (OpenRouter) — Lead Analyst     30%
+- Gemini 3.1 Pro (OpenRouter)    — Forecaster        30%
+- GPT-5.4 (OpenRouter)           — Risk Manager      20%
+- DeepSeek V3.2 (OpenRouter)     — Bull Researcher   10%
+- Grok 4.1 Fast (OpenRouter)     — Bear Researcher   10%
 
 Usage:
     python beast_mode_bot.py              # Paper trading mode (default)
@@ -36,7 +37,6 @@ from src.jobs.evaluate import run_evaluation
 from src.utils.logging_setup import setup_logging, get_trading_logger
 from src.utils.database import DatabaseManager
 from src.clients.kalshi_client import KalshiClient
-from src.clients.xai_client import XAIClient
 from src.clients.model_router import ModelRouter
 from src.config.settings import settings
 
@@ -113,12 +113,11 @@ class BeastModeBot:
             
             # Initialize other components
             kalshi_client = KalshiClient()
-            xai_client = XAIClient(db_manager=db_manager)  # Pass db_manager for LLM logging
 
-            # Initialize multi-model router (wraps xAI + OpenRouter)
-            self.model_router = ModelRouter(xai_client=xai_client, db_manager=db_manager)
+            # Initialize multi-model router — all models via OpenRouter
+            self.model_router = ModelRouter(db_manager=db_manager)
             self.logger.info(
-                "ModelRouter initialized for multi-model ensemble",
+                "ModelRouter initialized for multi-model ensemble (all via OpenRouter)",
                 ensemble_enabled=settings.ensemble.enabled,
             )
             
@@ -140,7 +139,7 @@ class BeastModeBot:
             self.logger.info("🚀 Starting trading and monitoring tasks...")
             tasks = [
                 ingestion_task,  # Already started
-                asyncio.create_task(self._run_trading_cycles(db_manager, kalshi_client, xai_client)),
+                asyncio.create_task(self._run_trading_cycles(db_manager, kalshi_client)),
                 asyncio.create_task(self._run_position_tracking(db_manager, kalshi_client)),
                 asyncio.create_task(self._run_performance_evaluation(db_manager))
             ]
@@ -199,14 +198,14 @@ class BeastModeBot:
                 self.logger.error(f"Error in market ingestion: {e}")
                 await asyncio.sleep(60)
 
-    async def _run_trading_cycles(self, db_manager: DatabaseManager, kalshi_client: KalshiClient, xai_client: XAIClient):
+    async def _run_trading_cycles(self, db_manager: DatabaseManager, kalshi_client: KalshiClient):
         """Main Beast Mode trading cycles."""
         cycle_count = 0
         
         while not self.shutdown_event.is_set():
             try:
                 # Check daily AI cost limits before starting cycle
-                if not await self._check_daily_ai_limits(xai_client):
+                if not await self._check_daily_ai_limits():
                     # Sleep until next day if limits reached
                     await self._sleep_until_next_day()
                     continue
@@ -234,26 +233,27 @@ class BeastModeBot:
                 self.logger.error(f"Error in trading cycle #{cycle_count}: {e}")
                 await asyncio.sleep(60)
 
-    async def _check_daily_ai_limits(self, xai_client: XAIClient) -> bool:
+    async def _check_daily_ai_limits(self) -> bool:
         """
         Check if we should continue trading based on daily AI cost limits.
         Returns True if we can continue, False if we should pause.
         """
         if not settings.trading.enable_daily_cost_limiting:
             return True
-        
-        # Use the client's reset-aware check (handles new-day resets)
-        if hasattr(xai_client, '_check_daily_limits'):
-            can_proceed = await xai_client._check_daily_limits()
+
+        # Delegate to model_router which owns the daily tracker
+        if hasattr(self, "model_router") and self.model_router is not None:
+            can_proceed = await self.model_router.check_daily_limits()
             if not can_proceed:
+                tracker = self.model_router.daily_tracker
                 self.logger.warning(
                     "🚫 Daily AI cost limit reached - trading paused",
-                    daily_cost=xai_client.daily_tracker.total_cost,
-                    daily_limit=xai_client.daily_tracker.daily_limit,
-                    requests_today=xai_client.daily_tracker.request_count
+                    daily_cost=tracker.total_cost,
+                    daily_limit=tracker.daily_limit,
+                    requests_today=tracker.request_count,
                 )
             return can_proceed
-        
+
         return True
 
     async def _sleep_until_next_day(self):

@@ -18,23 +18,24 @@ class APIConfig:
     kalshi_api_key: str = field(default_factory=lambda: os.getenv("KALSHI_API_KEY", ""))
     kalshi_base_url: str = "https://api.elections.kalshi.com"  # Updated to new API endpoint
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
-    xai_api_key: str = field(default_factory=lambda: os.getenv("XAI_API_KEY", ""))
     openrouter_api_key: str = field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
     openai_base_url: str = "https://api.openai.com/v1"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+
+    # xai_api_key removed — all models now route through OpenRouter
 
 
 @dataclass
 class EnsembleConfig:
     """Multi-model ensemble configuration."""
     enabled: bool = True
-    # Model roster for ensemble decisions
+    # Model roster for ensemble decisions — all via OpenRouter (April 2026)
     models: Dict[str, Dict] = field(default_factory=lambda: {
-        "grok-4-1-fast-reasoning": {"provider": "xai", "role": "forecaster", "weight": 0.30},
-        "anthropic/claude-sonnet-4": {"provider": "openrouter", "role": "lead_analyst", "weight": 0.20},
-        "openai/gpt-4.1": {"provider": "openrouter", "role": "bull_researcher", "weight": 0.20},
-        "google/gemini-2.5-pro-preview": {"provider": "openrouter", "role": "bear_researcher", "weight": 0.15},
-        "deepseek/deepseek-r1": {"provider": "openrouter", "role": "risk_manager", "weight": 0.15},
+        "anthropic/claude-sonnet-4.5": {"provider": "openrouter", "role": "lead_analyst", "weight": 0.30},
+        "google/gemini-3.1-pro": {"provider": "openrouter", "role": "forecaster", "weight": 0.30},
+        "openai/gpt-5.4": {"provider": "openrouter", "role": "risk_manager", "weight": 0.20},
+        "deepseek/deepseek-v3.2": {"provider": "openrouter", "role": "bull_researcher", "weight": 0.10},
+        "x-ai/grok-4.1-fast": {"provider": "openrouter", "role": "bear_researcher", "weight": 0.10},
     })
     min_models_for_consensus: int = 3
     disagreement_threshold: float = 0.25  # Std dev above this = low confidence
@@ -94,8 +95,8 @@ class TradingConfig:
     scan_interval_seconds: int = 60      # SANE: 60-second scan interval (was 30)
     
     # AI model configuration
-    primary_model: str = "grok-4-1-fast-reasoning"  # xAI Grok model for forecasting
-    fallback_model: str = "grok-4-1-fast-non-reasoning"  # Fallback to fast non-reasoning variant
+    primary_model: str = "anthropic/claude-sonnet-4.5"  # Primary model via OpenRouter
+    fallback_model: str = "deepseek/deepseek-v3.2"  # Fallback model via OpenRouter
     ai_temperature: float = 0  # Lower temperature for more consistent JSON output
     ai_max_tokens: int = 8000    # Reasonable limit for reasoning models (grok-4 works better with 8000)
     
@@ -263,9 +264,6 @@ class Settings:
         """Validate configuration settings."""
         if not self.api.kalshi_api_key:
             raise ValueError("KALSHI_API_KEY environment variable is required")
-
-        if not self.api.xai_api_key:
-            raise ValueError("XAI_API_KEY environment variable is required")
 
         if self.trading.max_position_size_pct <= 0 or self.trading.max_position_size_pct > 100:
             raise ValueError("max_position_size_pct must be between 0 and 100")
