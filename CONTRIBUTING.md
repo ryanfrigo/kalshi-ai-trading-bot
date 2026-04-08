@@ -317,6 +317,15 @@ If you find a security vulnerability:
 - **Configuration docs**: Settings and configuration
 - **Tutorials**: Step-by-step guides
 
+### Project Docs
+
+Use these repo docs as the source of truth for operation, testing, and AI-assisted development:
+
+- [Runbook](docs/RUNBOOK.md) — how to start, stop, and verify the bot
+- [Testing Guide](docs/TESTING.md) — what to test and what to report in a PR
+- [AI Collaboration Guide](docs/AI_COLLABORATION.md) — branch, PR, and agent workflow
+- [AGENTS.md](AGENTS.md) — repo-wide operating rules for humans and AI agents
+
 ## 🏷️ Versioning
 
 We use [Semantic Versioning](https://semver.org/):

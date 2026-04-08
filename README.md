@@ -14,7 +14,7 @@
 
 Five frontier LLMs debate every trade. The system only enters when they agree.
 
-[Quick Start](#-quick-start) · [Features](#-features) · [How It Works](#-how-it-works) · [Configuration](#configuration-reference) · [Contributing](CONTRIBUTING.md) · [Kalshi API Docs](https://trading-api.readme.io/reference/getting-started)
+[Quick Start](#-quick-start) · [Features](#-features) · [How It Works](#-how-it-works) · [Configuration](#configuration-reference) · [Contributing](CONTRIBUTING.md) · [Runbook](docs/RUNBOOK.md) · [Testing](docs/TESTING.md) · [AI Collaboration](docs/AI_COLLABORATION.md) · [Kalshi API Docs](https://trading-api.readme.io/reference/getting-started)
 
 </div>
 
