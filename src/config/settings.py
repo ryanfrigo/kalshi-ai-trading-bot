@@ -244,7 +244,7 @@ performance_monitoring: bool = True     # Enable performance monitoring
 # === ADVANCED FEATURES ===
 # Cutting-edge features for maximum performance
 cross_market_arbitrage: bool = False    # Enable when arbitrage module ready
-multi_model_ensemble: bool = True       # Multi-model ensemble decisions (ENABLED)
+multi_model_ensemble: bool = False      # Not wired into the live trading path. The scaffolding lives in src/agents/ — fork it if you want real parallel multi-model voting.
 sentiment_analysis: bool = True         # News sentiment analysis (ENABLED)
 websocket_streaming: bool = True        # WebSocket real-time data (ENABLED)
 options_strategies: bool = False        # Complex options strategies (future)

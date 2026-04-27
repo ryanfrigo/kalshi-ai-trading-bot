@@ -1,14 +1,15 @@
 """
-xai_client.py — Legacy compatibility shim.
+xai_client.py — historical name; this is now the OpenRouter client wrapper.
 
-The direct xAI API dependency has been removed.  All LLM calls now go through
-OpenRouter (see model_router.py / openrouter_client.py).
+The direct xAI dependency was removed when the project moved to a single
+OpenRouter API key. The class kept the ``XAIClient`` name for compatibility,
+but every call routes through src/clients/openrouter_client.py.
 
-This file is kept for:
- 1. The ``TradingDecision`` and ``DailyUsageTracker`` dataclasses which are
-    imported by openrouter_client.py and other modules.
- 2. The ``XAIClient`` class, which beast_mode_bot uses as a thin daily-cost-
-    tracking wrapper.  It delegates all actual completions to OpenRouter.
+This file holds:
+ 1. The ``TradingDecision`` and ``DailyUsageTracker`` dataclasses, used
+    across the codebase.
+ 2. The ``XAIClient`` wrapper, which adds a persistent daily-cost tracker
+    on top of the OpenRouter client.
 """
 
 import asyncio
@@ -24,7 +25,7 @@ from src.utils.logging_setup import TradingLoggerMixin
 
 
 # ---------------------------------------------------------------------------
-# Shared dataclasses (imported by openrouter_client, model_router, agents …)
+# Shared dataclasses (imported by openrouter_client, agents, etc.)
 # ---------------------------------------------------------------------------
 
 @dataclass

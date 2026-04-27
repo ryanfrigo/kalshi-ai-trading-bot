@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
-Kalshi AI Trading Bot — Multi-Model AI Ensemble 🚀
+Kalshi AI Trading Bot — example LLM-driven directional strategy
 
-Main entry point for the Unified Advanced Trading System.
-Five frontier LLMs debate every trade — positions only open when they agree.
-All models route through OpenRouter (single API key).
+Main entry point for the example AI directional strategy. The actual
+LLM call goes through src/clients/xai_client.py → openrouter_client.py,
+which uses an OpenRouter fallback chain (try the configured model,
+fall back if it errors). Despite earlier README claims, this is NOT
+a parallel multi-model ensemble — only one model is called per
+decision. Configure the model and fallback order in
+src/config/settings.py.
 
-Ensemble roster (configured in src/config/settings.py):
-- Claude Sonnet 4.5 (OpenRouter) — Lead Analyst     30%
-- Gemini 3.1 Pro (OpenRouter)    — Forecaster        30%
-- GPT-5.4 (OpenRouter)           — Risk Manager      20%
-- DeepSeek V3.2 (OpenRouter)     — Bull Researcher   10%
-- Grok 4.1 Fast (OpenRouter)     — Bear Researcher   10%
+This is one example strategy. Fork it to build your own.
 
 Usage:
     python beast_mode_bot.py              # Paper trading mode (default)
@@ -19,7 +18,7 @@ Usage:
     python beast_mode_bot.py --dashboard  # Live dashboard mode
 
 Recommended: use cli.py for the unified CLI interface.
-    python cli.py run                     # AI ensemble (default)
+    python cli.py run                     # AI directional (default)
     python cli.py run --safe-compounder   # Conservative math-only mode
 """
 
@@ -37,7 +36,7 @@ from src.jobs.evaluate import run_evaluation
 from src.utils.logging_setup import setup_logging, get_trading_logger
 from src.utils.database import DatabaseManager
 from src.clients.kalshi_client import KalshiClient
-from src.clients.model_router import ModelRouter
+from src.clients.xai_client import XAIClient
 from src.config.settings import settings
 
 # Import Beast Mode components
@@ -116,13 +115,11 @@ class BeastModeBot:
             # Initialize other components
             kalshi_client = KalshiClient()
 
-            # Initialize multi-model router — all models via OpenRouter
-            self.model_router = ModelRouter(db_manager=db_manager)
-            self.logger.info(
-                "ModelRouter initialized for multi-model ensemble (all via OpenRouter)",
-                ensemble_enabled=settings.ensemble.enabled,
-            )
-            
+            # LLM client — single-model with OpenRouter fallback chain. The
+            # XAIClient name is historical; it routes through OpenRouter,
+            # not xAI directly. Cost tracking lives on this client.
+            self.xai_client = XAIClient(db_manager=db_manager)
+
             # Small delay to ensure everything is ready
             await asyncio.sleep(1)
             
@@ -181,8 +178,8 @@ class BeastModeBot:
             
             # Wait for shutdown or completion
             await asyncio.gather(*tasks, return_exceptions=True)
-            
-            await self.model_router.close()
+
+            await self.xai_client.close()
             await kalshi_client.close()
             
             self.logger.info("🏁 Beast Mode Bot shut down gracefully")
@@ -265,18 +262,19 @@ class BeastModeBot:
         if not settings.trading.enable_daily_cost_limiting:
             return True
 
-        # Delegate to model_router which owns the daily tracker
-        if hasattr(self, "model_router") and self.model_router is not None:
-            can_proceed = await self.model_router.check_daily_limits()
-            if not can_proceed:
-                tracker = self.model_router.daily_tracker
+        # The xai_client owns the persistent daily tracker.
+        if hasattr(self, "xai_client") and self.xai_client is not None:
+            tracker = getattr(self.xai_client, "daily_tracker", None)
+            if tracker is None:
+                return True
+            if tracker.total_cost >= tracker.daily_limit:
                 self.logger.warning(
                     "🚫 Daily AI cost limit reached - trading paused",
                     daily_cost=tracker.total_cost,
                     daily_limit=tracker.daily_limit,
                     requests_today=tracker.request_count,
                 )
-            return can_proceed
+                return False
 
         return True
 

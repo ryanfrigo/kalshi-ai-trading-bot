@@ -66,9 +66,11 @@ def cmd_run(args: argparse.Namespace) -> None:
             print("\nTrading bot stopped by user.")
         return
 
-    # DEFAULT: AI Ensemble mode (disciplined settings active)
-    print("🤖  AI ENSEMBLE MODE (default)")
-    print("   5-model ensemble: Grok 4.1 · Claude Sonnet 4 · GPT-4.1 · Gemini 2.5 Pro · DeepSeek R1")
+    # DEFAULT: AI directional strategy with disciplined settings active.
+    # Despite earlier README copy, this is a single-model OpenRouter call
+    # per decision (with a fallback chain), not a parallel ensemble.
+    print("🤖  AI DIRECTIONAL MODE (default)")
+    print("   Single-model OpenRouter call per decision (fallback chain on error).")
     print("   Category scoring + portfolio guardrails active.")
     print("   Use --safe-compounder for conservative math-only mode.")
     print("   Use --beast to run without guardrails (not recommended).")
@@ -644,11 +646,13 @@ def build_parser() -> argparse.ArgumentParser:
         "run",
         help="Start the trading bot (disciplined mode by default)",
         description=(
-            "Launch the trading bot. Default is AI Ensemble mode: five frontier LLMs "
-            "(Grok 4.1, Claude Sonnet 4, GPT-4.1, Gemini 2.5 Pro, DeepSeek R1) debate "
-            "every trade with category scoring and portfolio guardrails. "
-            "Use --safe-compounder for conservative math-only mode. "
-            "Use --beast for aggressive mode without guardrails (not recommended)."
+            "Launch one of the example trading strategies. Default is the AI "
+            "directional strategy: a single LLM call per market via OpenRouter "
+            "(fallback chain on error), with category scoring and portfolio "
+            "guardrails layered on top. Use --safe-compounder for the "
+            "conservative math-only NO-side strategy. Use --beast to run "
+            "without guardrails (not recommended). All three are starting "
+            "points — fork them, tune them, replace them."
         ),
     )
     live_group = p_run.add_mutually_exclusive_group()

@@ -1,6 +1,12 @@
 """
 Trading decision job - analyzes markets and generates trading decisions.
-Supports both single-model (legacy) and multi-agent ensemble decision modes.
+
+This module wires the LLM-driven directional strategy. It uses the
+single-model OpenRouter pipeline (xai_client → openrouter_client) for
+the actual decision call. A multi-agent ensemble path used to live
+here but was never wired through trade.py — it's been removed; if you
+want to bring back parallel multi-model voting, fork this module and
+build it for real (see src/agents/ for the runner skeletons).
 """
 
 import asyncio
@@ -14,7 +20,6 @@ from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
 from src.clients.xai_client import XAIClient
 from src.clients.kalshi_client import KalshiClient
-from src.clients.model_router import ModelRouter
 
 
 def _calculate_dynamic_quantity(
@@ -59,76 +64,11 @@ def _calculate_dynamic_quantity(
     return quantity
 
 
-async def _run_ensemble_decision(
-    market_data: Dict,
-    news_summary: str,
-    model_router: ModelRouter,
-) -> Optional[Dict]:
-    """
-    Run the multi-agent ensemble decision pipeline.
-    Returns a dict with action, side, confidence, limit_price, reasoning or None.
-    """
-    logger = get_trading_logger("ensemble_decision")
-    try:
-        from src.agents.debate import DebateRunner
-        from src.agents.ensemble import EnsembleRunner
-
-        runner = DebateRunner()
-
-        # Build get_completion callables for each agent role using the model router
-        async def _make_completion(model_name):
-            async def _fn(prompt):
-                return await model_router.get_completion(
-                    prompt=prompt,
-                    model=model_name,
-                    strategy="ensemble",
-                    query_type="agent_analysis",
-                    market_id=market_data.get("ticker"),
-                )
-            return _fn
-
-        # Map agent roles to their configured models
-        model_map = settings.ensemble.models
-        completions = {}
-        for model_id, cfg in model_map.items():
-            role = cfg["role"]
-            completions[role] = await _make_completion(model_id)
-        # Trader always uses Grok-4
-        if "trader" not in completions:
-            completions["trader"] = await _make_completion("grok-4")
-
-        # Inject news into market_data for agents
-        enriched_data = {**market_data, "news_summary": news_summary}
-
-        debate_result = await runner.run_debate(
-            enriched_data, completions, context={}
-        )
-
-        if debate_result.get("error"):
-            logger.warning(f"Ensemble debate had error: {debate_result['error']}")
-
-        # If debate produced a valid action, return it
-        action = debate_result.get("action", "SKIP").upper()
-        if action in ("BUY", "SELL"):
-            logger.info(
-                f"Ensemble decision: {action} {debate_result.get('side')} "
-                f"confidence={debate_result.get('confidence'):.2f}"
-            )
-            return debate_result
-
-        return None
-
-    except Exception as e:
-        logger.error(f"Ensemble decision failed: {e}", exc_info=True)
-        return None
-
-
 async def make_decision_for_market(
     market: Market,
     db_manager: DatabaseManager,
     xai_client: XAIClient,
     kalshi_client: KalshiClient,
-    model_router: Optional[ModelRouter] = None,
 ) -> Optional[Position]:
     """
     Analyzes a single market and makes a trading decision with performance optimizations.
@@ -253,15 +193,11 @@ async def make_decision_for_market(
 
         # --- Standard LLM Decision-Making ---
         # Feature flags
-        multi_model_ensemble = getattr(settings, 'multi_model_ensemble', False) or (
-            hasattr(settings, 'ensemble') and settings.ensemble.enabled
-        )
         sentiment_analysis = getattr(settings, 'sentiment_analysis', False) or (
             hasattr(settings, 'sentiment') and settings.sentiment.enabled
         )
         logger.info(
             "Proceeding with LLM decision analysis.",
-            ensemble_enabled=multi_model_ensemble,
             sentiment_enabled=sentiment_analysis,
         )
         
@@ -326,39 +262,13 @@ async def make_decision_for_market(
             )
             return None
 
-        # --- Multi-Agent Ensemble Decision (when enabled) ---
-        decision = None
-        if multi_model_ensemble and model_router:
-            logger.info(f"Running multi-agent ensemble for {market.market_id}")
-            ensemble_result = await _run_ensemble_decision(
-                market_data=market_data,
-                news_summary=news_summary,
-                model_router=model_router,
-            )
-            if ensemble_result:
-                from src.clients.xai_client import TradingDecision
-                decision = TradingDecision(
-                    action=ensemble_result.get("action", "SKIP"),
-                    side=ensemble_result.get("side", "YES"),
-                    confidence=float(ensemble_result.get("confidence", 0.0)),
-                    limit_price=int(ensemble_result.get("limit_price", 50)),
-                )
-                # Attach reasoning for rationale
-                decision.reasoning = ensemble_result.get("reasoning", "Multi-agent ensemble decision")
-                estimated_decision_cost = 0.10  # Ensemble uses multiple models
-                total_analysis_cost += estimated_decision_cost
-            else:
-                logger.info("Ensemble returned no decision, falling back to single-model")
-
-        # --- Fallback: Single-model decision ---
-        if decision is None:
-            decision = await xai_client.get_trading_decision(
-                market_data=market_data,
-                portfolio_data=portfolio_data,
-                news_summary=news_summary,
-            )
-            estimated_decision_cost = 0.015
-            total_analysis_cost += estimated_decision_cost
+        # --- LLM Decision (single-model via OpenRouter fallback chain) ---
+        decision = await xai_client.get_trading_decision(
+            market_data=market_data,
+            portfolio_data=portfolio_data,
+            news_summary=news_summary,
+        )
+        total_analysis_cost += 0.015
 
         if not decision:
             logger.warning(f"No decision was made for market {market.market_id}. Skipping.")
