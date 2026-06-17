@@ -484,6 +484,6 @@ MIT. See [LICENSE](LICENSE).
 
 <div align="center">
 
-If this is useful to you, a star helps others find it.
+**Found this useful?** ⭐ [Star the repo](https://github.com/ryanfrigo/kalshi-ai-trading-bot) so others can find it · 💬 [Ask or share in Discussions](https://github.com/ryanfrigo/kalshi-ai-trading-bot/discussions) · ❤️ [Sponsor the work](https://github.com/sponsors/ryanfrigo)
 
 </div>
