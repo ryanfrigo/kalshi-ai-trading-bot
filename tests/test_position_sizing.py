@@ -9,6 +9,7 @@ contract.
 All tests are pure math: no network, no credentials, CI-safe.
 """
 
+import numpy as np
 import pytest
 from unittest.mock import Mock
 
@@ -239,3 +240,56 @@ class TestKellyFractionsKCE:
         )
         result = opt._calculate_kelly_fractions([opp])
         assert result["TEST-MKT"] == pytest.approx(0.25)
+
+
+# ---------------------------------------------------------------------------
+# PortfolioOptimizer._calculate_portfolio_metrics  [correlation indexing]
+# ---------------------------------------------------------------------------
+
+class TestPortfolioMetricsCorrelationIndexing:
+    """The correlation matrix is built over ALL opportunities in input order.
+
+    When only a SUBSET is allocated, the portfolio metrics must pair each
+    allocated market with its OWN correlations — not the top-left n x n block
+    of the full matrix. Slicing [:n, :n] silently pairs each allocated market
+    with whichever market happened to be first in the input, corrupting
+    volatility/Sharpe/VaR whenever the allocated set isn't the leading n.
+    """
+
+    def test_uses_allocated_markets_own_correlations(self):
+        opt = make_optimizer()
+        opt.total_capital = 10_000
+
+        # Three opportunities in input order A, B, C.
+        a = make_opportunity(market_id="A", volatility=0.10)
+        b = make_opportunity(market_id="B", volatility=0.20)
+        c = make_opportunity(market_id="C", volatility=0.30)
+        opportunities = [a, b, c]
+
+        # Correlation matrix over [A, B, C]. The A-B block (top-left, what the
+        # bug uses) is HIGHLY correlated (0.9); the B-C block (correct for an
+        # allocation of B and C) is weakly correlated (0.2).
+        corr = np.array(
+            [
+                [1.0, 0.9, 0.1],
+                [0.9, 1.0, 0.2],
+                [0.1, 0.2, 1.0],
+            ]
+        )
+
+        # Allocate to B and C only — i.e. NOT the leading n markets.
+        allocation = {"B": 0.5, "C": 0.5}
+
+        metrics = opt._calculate_portfolio_metrics(allocation, opportunities, corr)
+
+        w = np.array([0.5, 0.5])
+        vols = np.array([0.20, 0.30])
+        # Correct: pair B,C with their real 0.2 cross-correlation.
+        correct_cov = np.outer(vols, vols) * corr[np.ix_([1, 2], [1, 2])]
+        expected_vol = float(np.sqrt(w @ correct_cov @ w))  # ~0.19621
+        # Buggy: top-left A-B block (0.9 correlation).
+        buggy_cov = np.outer(vols, vols) * corr[:2, :2]
+        buggy_vol = float(np.sqrt(w @ buggy_cov @ w))  # ~0.24393
+
+        assert metrics["portfolio_volatility"] == pytest.approx(expected_vol, rel=1e-9)
+        assert metrics["portfolio_volatility"] != pytest.approx(buggy_vol, rel=1e-6)

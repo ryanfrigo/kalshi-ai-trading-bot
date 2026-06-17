@@ -638,7 +638,20 @@ class AdvancedPortfolioOptimizer:
             # Portfolio volatility
             n = len(allocated_opps)
             if n > 1:
-                allocated_corr_matrix = correlation_matrix[:n, :n]
+                # `correlation_matrix` was built over ALL `opportunities` in
+                # their original order, so row/col i belongs to opportunities[i].
+                # Index by each allocated market's actual position — slicing
+                # [:n, :n] would pair allocated markets with whichever markets
+                # happened to be first in the input, corrupting the covariance
+                # (and therefore volatility/Sharpe/VaR) whenever the allocated
+                # set isn't the leading n.
+                index_by_id = {opp.market_id: i for i, opp in enumerate(opportunities)}
+                allocated_indices = [index_by_id[opp.market_id] for opp in allocated_opps]
+                if max(allocated_indices) < correlation_matrix.shape[0]:
+                    allocated_corr_matrix = correlation_matrix[np.ix_(allocated_indices, allocated_indices)]
+                else:
+                    # Defensive: matrix smaller than expected — drop cross-terms.
+                    allocated_corr_matrix = np.eye(n)
                 covariance_matrix = np.outer(volatilities, volatilities) * allocated_corr_matrix
                 portfolio_vol = np.sqrt(np.dot(weights, np.dot(covariance_matrix, weights)))
             else:
