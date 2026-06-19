@@ -19,9 +19,13 @@ memory — read it if you lack context.
 1. **ASSESS** — `cli.py brief`. Read `governor` (halted? day P&L? drawdown?),
    equity, cash, positions, resting orders. **If `governor.halted` is true: place
    NO new buys** (you may still close/exit). Note anything that settled since last tick.
-2. **SURFACE EDGE** — `cli.py daily` (dry-run, no `--live`) prints a scored
-   "Top Opportunities" list of near-certain NO candidates: ticker, NO ask, edge,
-   YES price, days-to-expiry, volume. This is raw material, not a buy list.
+2. **SURFACE EDGE** — `cli.py daily` (dry-run, no `--live`) prints the mechanical
+   "near-certain NO, YES≤0.20, model-edge≥3¢" slice. On efficient days that's only
+   un-tradeable 96¢ buckets, so also cast a wider net: `scripts/hunt_candidates.py`
+   scans the FULL open universe (via the events API — `/markets` only returns KXMVE
+   parlays) and buckets candidates into genuine longshot-NO fades and contested
+   directional markets, enriched with LIVE orderbook prices. Both are raw material,
+   not a buy list.
 3. **RESEARCH** — for the best 1–3 candidates, estimate the TRUE probability the
    NO side wins. Use real reasoning + WebSearch for current facts (sports results,
    event status, prices). **This step is the whole point** — it's where you beat
@@ -76,11 +80,35 @@ memory — read it if you lack context.
 `cli.py settle` each tick and let the realized per-category P&L keep tightening
 this list. If a category's realized edge is negative, stop trading it.
 
+## Liquid markets are already sharp — large "edge" is a red flag (measured 2026-06-19)
+A 12-agent research sweep (de-vigged sportsbook odds vs live Kalshi books on 11 markets)
+found **10/11 efficient**; the one "+21¢ survivor" was a MIRAGE — a live tennis match where
+Kalshi's 0.85 was the correct in-play price and the research had anchored on stale
+PRE-MATCH odds. Burn these in:
+- A **deep, tight, liquid Kalshi book IS a sharp price.** Your research edge over the crowd
+  there is ~0. If your "edge" comes from a third-party number that disagrees with a liquid
+  market by >10pts, the **liquid market is almost always right** — defer to it.
+- **Big edge on a liquid market = RED FLAG, not a gift** (stale line, live-vs-pre-match,
+  wrong-side mapping). Investigate before trusting; never size up into it.
+- **Sports:** pre-match odds go stale the instant play starts. Before trusting any sports
+  edge, confirm the event hasn't started — *market still active + price drifting + deep
+  tight book ⇒ in-progress* — then defer to Kalshi's live price. Don't compute edge from
+  pre-match odds against a live market.
+- **Price off the LIVE book, never the snapshot.** The events-API `*_dollars` fields are
+  stale (seen: snapshot 0.68 vs live 0.85). Live book = `orderbook_fp.{yes_dollars,
+  no_dollars}` ($); best `yes_ask = 1 − best_no_bid`, best `no_ask = 1 − best_yes_bid`.
+  `scripts/hunt_candidates.py` does this for the shortlist.
+- **Where real edge actually lives:** (a) genuine <5% **structural longshots** (the proven
+  winner — extreme/binary YES), or (b) genuinely **thin/obscure mispriced** markets where
+  the crowd is dumb AND you have superior research AND there's liquidity to fill+exit.
+  Not liquid sports / efficient markets — wrong pond.
+
 ## Profitability discipline
-The base edge (favorite-longshot bias) is thin and fees eat most of it, and the
-real data shows undisciplined NO trading LOST money. Reliable profit requires:
-(a) genuine <5% longshots only, (b) the category exclusions above, (c) low-fee
-maker orders, (d) a real researched reason the YES is overpriced. Treat
-`cli.py settle` realized P&L as the source of truth. Honesty over optimism: the
-measured edge is currently negative — tighten the filter until it isn't, and
-when in doubt, don't trade.
+The legacy −$588 track record was **substantially mechanical-bot bugs, not a verdict on the
+edge** — build your OWN measured track record from here and act on real, verified edge. Keep
+the hard risk rules; discipline ≠ timidity (hunt actively, but never trade a mirage).
+Reliable profit requires: (a) genuine <5% longshots OR thin researched mispricings, (b) the
+category exclusions above, (c) low-fee maker orders, (d) a real researched reason the price
+is wrong, (e) pricing off the LIVE book. Treat `cli.py settle` realized P&L on YOUR trades as
+the source of truth, and let it keep tightening the filter. Honesty over optimism: an honest
+no-trade after a rigorous hunt is a win, not a failure.
