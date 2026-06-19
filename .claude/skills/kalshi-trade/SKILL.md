@@ -53,10 +53,34 @@ memory — read it if you lack context.
 - Prefer near-certain NO (`no_ask ≥ 0.85`) on longshot markets. Never buy YES longshots — you become the bag-holder.
 - When uncertain, **don't trade**. A no-trade tick is a valid, safe, often-correct outcome.
 
+## What the REAL settlement data says (measured 2026-06-19, 122 settled bets)
+
+`cli.py settle` revealed the actual track record — read it before trading:
+- **YES longshots: −$528 over 46 bets.** Buying a longshot YES is the bag-holder
+  trade. **NEVER buy YES longshots.** (Holding/closing existing YES is fine.)
+- **NO side: 79% win rate but −$59 net** over 76 bets — wins were small (+$81),
+  the 16 losses were large (−$141). Picking up pennies, then run over.
+- **The losses concentrated in FAKE longshots**, not genuine ones:
+  - **Economic-data buckets** (`KXCPI`, inflation, GDP-point, Fed-rate): the
+    outcome has a real distribution — a "narrow bucket" can carry 10–20%, not 3–5%.
+    **AVOID NO bets on numeric/economic-data buckets.**
+  - **Multi-outcome sports brackets/totals** (`KXMARMAD`, `KXNCAAMBTOTAL`):
+    several outcomes stay live; the NO is not near-certain. **Avoid / size tiny.**
+- **The winners were GENUINE longshots** (`KXGDP` overshoot, `KXGUINEAWORM`,
+  `KXBTCMAX150` extreme price, `KXGOVTSHUTLENGTH`, alien-confirmation-type):
+  true YES < 5%, NO won ~97%, real edge (~+11¢/contract on winners).
+
+**Refined edge (the only version the data supports):** NO-only, on **genuine
+<5% longshots** — extreme/binary events where YES is a real long shot — and
+**avoid economic-data buckets and multi-outcome sports brackets**. Run
+`cli.py settle` each tick and let the realized per-category P&L keep tightening
+this list. If a category's realized edge is negative, stop trading it.
+
 ## Profitability discipline
-The base edge (favorite-longshot bias) is thin and fees eat most of it. Reliable
-profit requires: (a) a real *researched* edge ≥5¢, (b) low-fee maker orders, and
-(c) ruthless category selection driven by REAL settled outcomes, not theory.
-Treat the journal's realized per-category edge as the source of truth and
-reallocate toward what actually pays. Honesty over optimism: if the data says
-break-even, say so and tighten the filter.
+The base edge (favorite-longshot bias) is thin and fees eat most of it, and the
+real data shows undisciplined NO trading LOST money. Reliable profit requires:
+(a) genuine <5% longshots only, (b) the category exclusions above, (c) low-fee
+maker orders, (d) a real researched reason the YES is overpriced. Treat
+`cli.py settle` realized P&L as the source of truth. Honesty over optimism: the
+measured edge is currently negative — tighten the filter until it isn't, and
+when in doubt, don't trade.
