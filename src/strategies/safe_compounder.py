@@ -225,6 +225,15 @@ def market_confidence_score(ticker: str, orderbook: dict, market: dict) -> Tuple
 # SafeCompounder class
 # -----------------------------------------------------------------------
 
+def _to_int_count(v) -> int:
+    """Coerce a Kalshi count field to int. The v2 API returns these as strings
+    ('0.00', '16.00'); comparing a str to an int raises TypeError."""
+    try:
+        return int(float(v or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 class SafeCompounder:
     """
     Edge-based NO-side strategy integrated with repo's KalshiClient.
@@ -685,8 +694,8 @@ class SafeCompounder:
                     no_price=price_cents,
                 )
                 order = r.get("order", {})
-                status = order.get("status", "?")
-                filled = order.get("fill_count", 0)
+                status = order.get("status", "resting")
+                filled = _to_int_count(order.get("fill_count", 0))
 
                 if filled > 0:
                     stats["filled"] += filled
