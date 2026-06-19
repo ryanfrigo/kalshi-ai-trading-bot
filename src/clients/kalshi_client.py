@@ -28,6 +28,65 @@ class KalshiAPIError(Exception):
     pass
 
 
+def build_order_v2_payload(
+    ticker: str,
+    client_order_id: str,
+    side: str,
+    action: str,
+    count: int,
+    type_: str = "market",
+    yes_price: Optional[int] = None,
+    no_price: Optional[int] = None,
+    expiration_ts: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Translate the legacy order spec into Kalshi's current events/orders payload.
+
+    Kalshi deprecated POST /portfolio/orders (side=yes/no, action=buy/sell, prices
+    in cents) with HTTP 410. The live endpoint quotes the unified order book from
+    the YES leg:
+
+        buy YES  -> bid        sell YES -> ask
+        buy NO   -> ask        sell NO  -> bid     (a NO position is the YES short)
+
+    ``price`` is always the YES-leg price in dollars; a NO price of ``p`` cents is
+    a YES price of ``100 - p`` cents. ``count`` is a string with two decimals.
+    """
+    side_l = side.lower()
+    action_l = action.lower()
+
+    if side_l == "yes":
+        yes_leg_cents = yes_price
+    elif side_l == "no":
+        if no_price is None:
+            raise ValueError("no_price required for NO orders")
+        yes_leg_cents = 100 - no_price
+    else:
+        raise ValueError(f"side must be 'yes' or 'no', got {side!r}")
+
+    if yes_leg_cents is None:
+        raise ValueError("a price (yes_price/no_price) is required")
+
+    # buy YES or sell NO => bid (buy the YES leg); sell YES or buy NO => ask.
+    is_bid = (action_l == "buy" and side_l == "yes") or (action_l == "sell" and side_l == "no")
+    new_side = "bid" if is_bid else "ask"
+
+    tif = "immediate_or_cancel" if type_ == "market" else "good_till_canceled"
+
+    payload: Dict[str, Any] = {
+        "ticker": ticker,
+        "side": new_side,
+        "count": f"{float(count):.2f}",
+        "price": f"{yes_leg_cents / 100:.4f}",
+        "time_in_force": tif,
+        "self_trade_prevention_type": "taker_at_cross",
+    }
+    if client_order_id:
+        payload["client_order_id"] = client_order_id
+    if expiration_ts and tif == "good_till_canceled":
+        payload["expiration_time"] = int(expiration_ts)
+    return payload
+
+
 class KalshiClient(TradingLoggerMixin):
     """
     Kalshi API client for automated trading.
@@ -364,25 +423,18 @@ class KalshiClient(TradingLoggerMixin):
         Returns:
             Order response
         """
-        order_data = {
-            "ticker": ticker,
-            "client_order_id": client_order_id,
-            "side": side,
-            "action": action,
-            "count": count,
-            "type": type_
-        }
-        
-        if yes_price is not None:
-            order_data["yes_price"] = yes_price
-        if no_price is not None:
-            order_data["no_price"] = no_price
-        if expiration_ts:
-            order_data["expiration_ts"] = expiration_ts
-        
-        return await self._make_authenticated_request(
-            "POST", "/trade-api/v2/portfolio/orders", json_data=order_data
+        payload = build_order_v2_payload(
+            ticker, client_order_id, side, action, count, type_,
+            yes_price, no_price, expiration_ts,
         )
+        resp = await self._make_authenticated_request(
+            "POST", "/trade-api/v2/portfolio/events/orders", json_data=payload
+        )
+        # Backward-compat: legacy callers read resp["order"]["order_id"]. The v2
+        # response is flat ({order_id, fill_count, ...}), so expose it both ways.
+        if isinstance(resp, dict) and "order" not in resp:
+            return {"order": resp, **resp}
+        return resp
     
     async def cancel_order(self, order_id: str) -> Dict[str, Any]:
         """Cancel an order."""
