@@ -603,7 +603,8 @@ class SafeCompounder:
             positions_resp = await self.client.get_positions()
             positions = positions_resp.get("market_positions", [])
             pos_tickers = {
-                p["ticker"] for p in positions if abs(p.get("position", 0)) > 0
+                p["ticker"] for p in positions
+                if abs(float(p.get("position_fp", 0) or 0)) > 0  # Kalshi uses position_fp, not position
             }
         except Exception:
             pos_tickers = set()
@@ -680,6 +681,7 @@ class SafeCompounder:
                     side="no",
                     action="buy",
                     count=contracts,
+                    type_="limit",  # resting maker order at ask-1c (was defaulting to market/IOC -> never filled)
                     no_price=price_cents,
                 )
                 order = r.get("order", {})
