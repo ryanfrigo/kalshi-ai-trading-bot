@@ -288,6 +288,33 @@ def cmd_close(args: argparse.Namespace) -> None:
     asyncio.run(_c())
 
 
+def cmd_settle(args: argparse.Namespace) -> None:
+    """Record settled outcomes and report realized edge (win-rate, P&L)."""
+    import json
+    from src.utils.logging_setup import setup_logging
+
+    setup_logging(log_level="WARNING")
+
+    async def _s() -> None:
+        from src.clients.kalshi_client import KalshiClient
+        from src.agent.settle import (
+            fetch_settlements, settlement_pnl, record_settlements,
+            summarize_settlements, load_settlements,
+        )
+
+        client = KalshiClient()
+        try:
+            raw = await fetch_settlements(client, limit=300)
+            mine = [s for s in (settlement_pnl(r) for r in raw) if s]
+            new = record_settlements(mine)
+            summary = summarize_settlements(load_settlements())
+            print(json.dumps({"new_this_run": len(new), "new": new, "realized_edge": summary}, indent=2))
+        finally:
+            await client.close()
+
+    asyncio.run(_s())
+
+
 def cmd_dashboard(args: argparse.Namespace) -> None:
     """Launch the Streamlit monitoring dashboard."""
     import subprocess
@@ -920,6 +947,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_close.add_argument("--live", action="store_true",
                          help="Actually place the sell (default: dry-run preview)")
     p_close.set_defaults(func=cmd_close)
+
+    # --- settle (record realized outcomes, measure edge) ---
+    p_settle = subparsers.add_parser(
+        "settle",
+        help="Record settled outcomes and report realized edge (win-rate, P&L)",
+        description=(
+            "Pull Kalshi's authoritative settlement records for positions held, "
+            "append new ones to the local settlements log, and summarize realized "
+            "win-rate and P&L by side. This is the learning-loop measurement."
+        ),
+    )
+    p_settle.set_defaults(func=cmd_settle)
 
     # --- scores ---
     p_scores = subparsers.add_parser(
