@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.kalshi-daily</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__REPO__/scripts/run_daily.sh</string>
+  </array>
+
+  <!-- Flip to "live" only after a successful live run you have reviewed. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>KALSHI_DAILY_MODE</key>
+    <string>dry</string>
+  </dict>
+
+  <!-- Runs once per day at 10:00 local time. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>10</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+  <key>StandardOutPath</key>
+  <string>__REPO__/logs/daily_runs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/logs/daily_runs/launchd.err.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

@@ -147,6 +147,77 @@ def _run_safe_compounder(
         print("\nSafe Compounder stopped by user.")
 
 
+def cmd_daily(args: argparse.Namespace) -> None:
+    """Bounded once-through daily run: kill switch -> governed trade -> snapshot.
+
+    Unlike ``run`` (an infinite loop), ``daily`` executes a single cycle and
+    exits — the right shape for a cron/launchd schedule. The risk governor runs
+    FIRST: if the account is down past the daily-loss or drawdown limit (or a
+    manual halt file exists), new buys are skipped (exits still allowed).
+    """
+    from src.utils.logging_setup import setup_logging
+
+    setup_logging(log_level=getattr(args, "log_level", "INFO"))
+    live = getattr(args, "live", False)
+
+    async def _daily() -> None:
+        from src.clients.kalshi_client import KalshiClient
+        from src.strategies.safe_compounder import SafeCompounder
+        from src.risk.risk_governor import RiskGovernor
+        from src.data.collector import snapshot_account
+
+        client = KalshiClient()
+        try:
+            gov = RiskGovernor(kalshi_client=client)
+            decision = await gov.check()
+
+            print("=" * 60)
+            print(f"  DAILY RUN — {'LIVE' if live else 'DRY-RUN'} — {datetime.now():%Y-%m-%d %H:%M}")
+            print("=" * 60)
+            print(
+                f"  Governor: {'🛑 HALTED' if decision.halted else '✅ OK'} | "
+                f"equity ${decision.current_equity_cents/100:.2f} | "
+                f"day P&L ${decision.daily_pnl_cents/100:+.2f} | "
+                f"dd {decision.drawdown_pct:.1f}%"
+            )
+            for r in decision.reasons:
+                print(f"   ! {r}")
+
+            await snapshot_account(
+                client, tag="daily_open",
+                meta={"governor": decision.to_dict(), "live": live},
+            )
+
+            trade_live = live and not decision.halted
+            if decision.halted and live:
+                print("  Governor HALTED — skipping new buys (exits still allowed).")
+
+            compounder = SafeCompounder(client=client, dry_run=not trade_live)
+            results = await compounder.run()
+
+            snap = await snapshot_account(
+                client, tag="daily_close",
+                meta={"results": results, "live": live, "halted": decision.halted},
+            )
+
+            print("=" * 60)
+            print(
+                f"  RESULT: orders={results.get('placed', 0)} "
+                f"filled={results.get('filled', 0)} "
+                f"deployed=${results.get('total_deployed', 0)/100:.2f} "
+                f"errors={results.get('errors', 0)} | "
+                f"equity ${snap['equity_cents']/100:.2f}"
+            )
+            print("=" * 60)
+        finally:
+            await client.close()
+
+    try:
+        asyncio.run(_daily())
+    except KeyboardInterrupt:
+        print("\nDaily run interrupted by user.")
+
+
 def cmd_dashboard(args: argparse.Namespace) -> None:
     """Launch the Streamlit monitoring dashboard."""
     import subprocess
@@ -703,6 +774,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Set logging verbosity (default: INFO)",
     )
     p_run.set_defaults(func=cmd_run)
+
+    # --- daily ---
+    p_daily = subparsers.add_parser(
+        "daily",
+        help="Bounded once-through daily run (governor + governed trade + snapshot)",
+        description=(
+            "Run a single governed trading cycle and exit — the right shape for a "
+            "cron/launchd schedule. The risk governor (daily-loss + drawdown kill "
+            "switch) runs first; new buys are skipped if halted. Defaults to dry-run; "
+            "pass --live to place real orders."
+        ),
+    )
+    dgrp = p_daily.add_mutually_exclusive_group()
+    dgrp.add_argument("--live", action="store_true",
+                      help="Place real orders (default: dry-run)")
+    dgrp.add_argument("--paper", action="store_true",
+                      help="Dry-run (no real orders)")
+    p_daily.add_argument("--log-level", type=str, default="INFO",
+                         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+                         help="Logging verbosity (default: INFO)")
+    p_daily.set_defaults(func=cmd_daily)
 
     # --- scores ---
     p_scores = subparsers.add_parser(

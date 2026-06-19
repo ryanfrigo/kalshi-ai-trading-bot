@@ -204,6 +204,11 @@ dashboard_*.json
 # Graphify knowledge-graph build artifacts (regenerate with `graphify update .`)
 graphify-out/
 
+# Runtime state + local trading/backtest data — NEVER commit (mission constraint)
+data/runtime/
+data/backtest/
+*.jsonl
+
 # API keys and credentials
 api_keys.txt
 credentials.json
