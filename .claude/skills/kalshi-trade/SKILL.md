@@ -102,6 +102,14 @@ PRE-MATCH odds. Burn these in:
   winner — extreme/binary YES), or (b) genuinely **thin/obscure mispriced** markets where
   the crowd is dumb AND you have superior research AND there's liquidity to fill+exit.
   Not liquid sports / efficient markets — wrong pond.
+- **Named-event longshots usually have a REAL catalyst — confirm there is NONE before fading.**
+  On Kalshi, non-sports longshots priced 7–13¢ are mostly NOT naive lottery overpricings: the
+  crowd has often correctly priced a live catalyst (active legislation, an M&A bid, genuine
+  contention). Measured 2026-06-19: of 6 researched, 5 were efficient-given-catalyst ($250
+  Trump bill — Treasury printing it; GameStop→eBay — live bid; Mamdani corp tax — passed both
+  NY houses; Trump-visits-Iran — war→deal; Nobel/Pope Leo — real ~7% contender). The ONE clean
+  fade was the absurd-with-no-catalyst one: KXALIENS (true <1%, NO 0.90, +9¢). Always research
+  the catalyst first; the favorite-longshot edge is much weaker here than theory claims.
 
 ## Profitability discipline
 The legacy −$588 track record was **substantially mechanical-bot bugs, not a verdict on the
