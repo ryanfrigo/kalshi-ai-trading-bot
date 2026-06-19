@@ -218,6 +218,52 @@ def cmd_daily(args: argparse.Namespace) -> None:
         print("\nDaily run interrupted by user.")
 
 
+def cmd_brief(args: argparse.Namespace) -> None:
+    """Print a structured situational-awareness snapshot for the agent (JSON)."""
+    import json
+    from src.utils.logging_setup import setup_logging
+
+    setup_logging(log_level="WARNING")
+
+    async def _b() -> None:
+        from src.clients.kalshi_client import KalshiClient
+        from src.agent.toolbelt import account_brief
+
+        client = KalshiClient()
+        try:
+            print(json.dumps(await account_brief(client), indent=2))
+        finally:
+            await client.close()
+
+    asyncio.run(_b())
+
+
+def cmd_trade(args: argparse.Namespace) -> None:
+    """Place ONE guarded, journaled order — the agent's hands. Dry by default."""
+    import json
+    from src.utils.logging_setup import setup_logging
+
+    setup_logging(log_level="WARNING")
+
+    async def _t() -> None:
+        from src.clients.kalshi_client import KalshiClient
+        from src.agent.toolbelt import place_guarded_order
+
+        client = KalshiClient()
+        try:
+            res = await place_guarded_order(
+                client, ticker=args.ticker, side=args.side, count=args.count,
+                price=args.price, type_=args.type, rationale=args.rationale or "",
+                est_prob=args.est_prob, category=args.category or "",
+                max_position_pct=args.max_pct, dry=not args.live,
+            )
+            print(json.dumps(res, indent=2))
+        finally:
+            await client.close()
+
+    asyncio.run(_t())
+
+
 def cmd_dashboard(args: argparse.Namespace) -> None:
     """Launch the Streamlit monitoring dashboard."""
     import subprocess
@@ -795,6 +841,41 @@ def build_parser() -> argparse.ArgumentParser:
                          choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                          help="Logging verbosity (default: INFO)")
     p_daily.set_defaults(func=cmd_daily)
+
+    # --- brief (agent situational awareness) ---
+    p_brief = subparsers.add_parser(
+        "brief",
+        help="Structured situational awareness: governor, equity, positions, resting orders (JSON)",
+        description="One-shot agent snapshot for /loop ticks. Read-only.",
+    )
+    p_brief.set_defaults(func=cmd_brief)
+
+    # --- trade (agent's guarded order tool) ---
+    p_trade = subparsers.add_parser(
+        "trade",
+        help="Place ONE guarded, journaled order (the agent's hands). Dry by default.",
+        description=(
+            "Place a single order through the full guard stack (risk governor, "
+            "price sanity, position+cash caps) and journal the prediction "
+            "(est-prob, edge, rationale) for calibration. Defaults to a dry-run "
+            "preview; pass --live to actually place."
+        ),
+    )
+    p_trade.add_argument("--ticker", required=True, help="Market ticker")
+    p_trade.add_argument("--side", required=True, choices=["yes", "no"])
+    p_trade.add_argument("--count", type=int, required=True, help="Intended contracts (auto-capped)")
+    p_trade.add_argument("--price", type=float, default=None,
+                         help="Limit price in dollars for the chosen side; default = current ask")
+    p_trade.add_argument("--type", dest="type", default="limit", choices=["limit", "market"])
+    p_trade.add_argument("--est-prob", dest="est_prob", type=float, default=None,
+                         help="Your estimated probability the bought side wins (drives edge + calibration)")
+    p_trade.add_argument("--rationale", default="", help="Why you're making this trade (journaled)")
+    p_trade.add_argument("--category", default="", help="Market category (journaled)")
+    p_trade.add_argument("--max-pct", dest="max_pct", type=float, default=0.10,
+                         help="Max fraction of equity per position (default 0.10)")
+    p_trade.add_argument("--live", action="store_true",
+                         help="Actually place the order (default: dry-run preview)")
+    p_trade.set_defaults(func=cmd_trade)
 
     # --- scores ---
     p_scores = subparsers.add_parser(
