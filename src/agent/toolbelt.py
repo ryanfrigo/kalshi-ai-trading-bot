@@ -171,11 +171,84 @@ async def place_guarded_order(
             "order_id": order.get("order_id"), "fill_count": order.get("fill_count"),
         }
 
-    rec = make_decision_record(
-        ticker=ticker, side=side, count=n, price=price_cents / 100.0,
-        est_prob=est_prob, edge=edge, rationale=rationale, category=category,
-        strategy="claude", order_id=result.get("order_id"),
-    )
-    append_decision(rec, journal_path or DEFAULT_JOURNAL_PATH)
-    result["journaled"] = True
+    if not dry:
+        append_decision(make_decision_record(
+            ticker=ticker, side=side, count=n, price=price_cents / 100.0,
+            est_prob=est_prob, edge=edge, rationale=rationale, category=category,
+            strategy="claude", order_id=result.get("order_id"),
+        ), journal_path or DEFAULT_JOURNAL_PATH)
+    result["journaled"] = not dry
+    return result
+
+
+def resolve_sell(position_fp, requested_count: Optional[int] = None):
+    """Resolve a close request to (side, count). Sells the side actually held
+    (YES if position_fp>0 else NO) and never more than is held. Returns
+    (None, 0) for a flat position."""
+    fp = float(position_fp)
+    if abs(fp) < 0.5:
+        return None, 0
+    side = "yes" if fp > 0 else "no"
+    held = int(round(abs(fp)))
+    count = held if requested_count is None else min(int(requested_count), held)
+    return side, max(0, count)
+
+
+async def close_position(
+    kalshi_client,
+    ticker: str,
+    count: Optional[int] = None,
+    price: Optional[float] = None,
+    rationale: str = "close position",
+    dry: bool = False,
+    journal_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Sell (close) an existing position with a marketable limit at the bid.
+
+    Reads the live holding, sells the side held (capped to held count), at the
+    current bid for that side (or `price` if given). Journals the close. Selling
+    reduces risk, so it is allowed even when the governor is halted.
+    """
+    from src.utils.market_prices import get_market_prices
+    from src.agent.journal import make_decision_record, append_decision, DEFAULT_JOURNAL_PATH
+
+    pos = await kalshi_client.get_positions(ticker=ticker)
+    mine = [p for p in pos.get("market_positions", []) if p.get("ticker") == ticker]
+    fp = float(mine[0].get("position_fp", "0")) if mine else 0.0
+    side, n = resolve_sell(fp, count)
+    if not side or n < 1:
+        return {"ok": False, "reason": "no position to close", "ticker": ticker}
+
+    m = (await kalshi_client.get_market(ticker)).get("market", {})
+    yb, ya, nb, na = get_market_prices(m)
+    bid = yb if side == "yes" else nb
+    sell_price = price if price is not None else bid
+    price_cents = int(round(sell_price * 100))
+    if price_cents < 1:
+        return {"ok": False, "reason": f"no bid to sell into ({side} bid {bid:.2f})",
+                "ticker": ticker, "side": side, "count": n}
+    price_cents = min(99, price_cents)
+
+    coid = str(uuid.uuid4())
+    if dry:
+        result: Dict[str, Any] = {"ok": True, "dry": True, "ticker": ticker,
+                                  "side": side, "action": "sell", "count": n,
+                                  "price_cents": price_cents, "order_id": None}
+    else:
+        kwargs = {"ticker": ticker, "client_order_id": coid, "side": side,
+                  "action": "sell", "count": n, "type_": "limit"}
+        kwargs["yes_price" if side == "yes" else "no_price"] = price_cents
+        resp = await kalshi_client.place_order(**kwargs)
+        order = resp.get("order", resp) if isinstance(resp, dict) else {}
+        result = {"ok": True, "dry": False, "ticker": ticker, "side": side,
+                  "action": "sell", "count": n, "price_cents": price_cents,
+                  "order_id": order.get("order_id"), "fill_count": order.get("fill_count")}
+
+    if not dry:
+        append_decision(make_decision_record(
+            ticker=ticker, side=side, count=n, price=price_cents / 100.0,
+            rationale=rationale, strategy="claude", order_id=result.get("order_id"),
+            action="sell",
+        ), journal_path or DEFAULT_JOURNAL_PATH)
+    result["journaled"] = not dry
     return result

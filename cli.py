@@ -264,6 +264,30 @@ def cmd_trade(args: argparse.Namespace) -> None:
     asyncio.run(_t())
 
 
+def cmd_close(args: argparse.Namespace) -> None:
+    """Close (sell) a single position with a marketable limit. Dry by default."""
+    import json
+    from src.utils.logging_setup import setup_logging
+
+    setup_logging(log_level="WARNING")
+
+    async def _c() -> None:
+        from src.clients.kalshi_client import KalshiClient
+        from src.agent.toolbelt import close_position
+
+        client = KalshiClient()
+        try:
+            res = await close_position(
+                client, ticker=args.ticker, count=args.count, price=args.price,
+                rationale=args.rationale or "close position", dry=not args.live,
+            )
+            print(json.dumps(res, indent=2))
+        finally:
+            await client.close()
+
+    asyncio.run(_c())
+
+
 def cmd_dashboard(args: argparse.Namespace) -> None:
     """Launch the Streamlit monitoring dashboard."""
     import subprocess
@@ -876,6 +900,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_trade.add_argument("--live", action="store_true",
                          help="Actually place the order (default: dry-run preview)")
     p_trade.set_defaults(func=cmd_trade)
+
+    # --- close (agent's guarded sell/exit tool) ---
+    p_close = subparsers.add_parser(
+        "close",
+        help="Close (sell) ONE position with a marketable limit. Dry by default.",
+        description=(
+            "Sell the side actually held for a ticker (capped to held count) at "
+            "the current bid, and journal it. Allowed even when the governor is "
+            "halted (selling reduces risk). Defaults to dry-run; pass --live."
+        ),
+    )
+    p_close.add_argument("--ticker", required=True, help="Market ticker to close")
+    p_close.add_argument("--count", type=int, default=None,
+                         help="Contracts to sell (default: all held)")
+    p_close.add_argument("--price", type=float, default=None,
+                         help="Limit sell price in dollars (default: current bid)")
+    p_close.add_argument("--rationale", default="", help="Why you're closing (journaled)")
+    p_close.add_argument("--live", action="store_true",
+                         help="Actually place the sell (default: dry-run preview)")
+    p_close.set_defaults(func=cmd_close)
 
     # --- scores ---
     p_scores = subparsers.add_parser(

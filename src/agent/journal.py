@@ -29,6 +29,7 @@ def make_decision_record(
     strategy: str = "claude",
     order_id: Optional[str] = None,
     ts: Optional[str] = None,
+    action: str = "buy",
 ) -> Dict[str, Any]:
     """Build one journal record. ``outcome`` is None until the market settles."""
     return {
@@ -36,6 +37,7 @@ def make_decision_record(
         "strategy": strategy,
         "ticker": ticker,
         "side": side,
+        "action": action,
         "count": int(count),
         "price": float(price),
         "est_prob": est_prob,
