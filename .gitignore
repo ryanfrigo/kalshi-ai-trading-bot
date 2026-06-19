@@ -201,10 +201,13 @@ dashboard_*.json
 *.temp
 *~
 
+# Graphify knowledge-graph build artifacts (regenerate with `graphify update .`)
+graphify-out/
+
 # API keys and credentials
 api_keys.txt
 credentials.json
-secrets.yaml 
+secrets.yaml
 # Never commit SSH keys
 *.pem
 *.key
