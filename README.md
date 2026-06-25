@@ -9,17 +9,42 @@
 [![GitHub Forks](https://img.shields.io/github/forks/ryanfrigo/kalshi-ai-trading-bot?style=flat&color=blue)](https://github.com/ryanfrigo/kalshi-ai-trading-bot/network)
 [![GitHub Issues](https://img.shields.io/github/issues/ryanfrigo/kalshi-ai-trading-bot)](https://github.com/ryanfrigo/kalshi-ai-trading-bot/issues)
 
-**A toolkit for building automated trading strategies on [Kalshi](https://kalshi.com) prediction markets.**
+**The honest edge layer for prediction-market trading.**
 
-Signed Kalshi API client, market-data ingestion, position tracking, SQLite telemetry, a Streamlit dashboard, and a pluggable LLM client (any model on OpenRouter). Three example strategies ship with the repo as starting points — fork them, replace them, or write your own from scratch.
+An agent-native toolkit for [Kalshi](https://kalshi.com) whose flagship isn't "an LLM that picks trades" — it's a rigorous, settlement-grounded way to **measure whether you actually have edge against the sharp Kalshi book.** Most repos in this niche claim profitability and prove nothing. This one does the opposite: it ships the tooling to test your own track record honestly, and it refuses to assert edge on thin or leaky data.
 
-[Quick Start](#quick-start) · [What's Included](#whats-included) · [Example Strategies](#example-strategies) · [Configuration](#configuration) · [Contributing](CONTRIBUTING.md) · [Kalshi API Docs](https://trading-api.readme.io/reference/getting-started)
+Under the hood: a signed Kalshi API client, market-data ingestion, position tracking, SQLite telemetry, a Streamlit dashboard, a pluggable LLM client (any model on OpenRouter), atomic agent CLI tools, a Claude skill, and a first-mover MCP server. Example strategies ship as starting points — fork them, replace them, or write your own.
+
+[Quick Start](#quick-start) · [Prove Your Edge](#prove-your-edge-the-headline) · [Agent-Native Surface](#agent-native-surface) · [What's Included](#whats-included) · [Example Strategies](#example-strategies) · [Configuration](#configuration) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
 ---
 
-> **Read this before running with real money.** No strategy in this repo is guaranteed to make money. The examples lose money on certain markets. Trading prediction markets is hard, the edges are small, and what worked last quarter may not work this quarter. This is a toolkit, not a turnkey bot. Read the code, understand what it does, and tune it for the markets you care about. The authors are not responsible for losses you incur using this software.
+> **Read this before running with real money.** Nothing here is guaranteed to make money, and this README makes no such promise. The whole point of the toolkit is to let you *measure* whether you have edge — not to hand you one. The liquid Kalshi book is usually the sharp price; real edge is rare and must be proven on settled reality, out-of-sample. The example strategies lose money on certain markets. This is a toolkit you fork, not a turnkey bot. Read the code, understand it, tune it for the markets you care about. The authors are not responsible for losses you incur using this software.
+
+---
+
+## Prove Your Edge (the headline)
+
+The thing this repo does that the rest of the niche doesn't: it lets you **prove — or disprove — that you beat the price the sharp book charged you.**
+
+```bash
+python cli.py edge          # the honest verdict
+```
+
+`cli edge` pulls Kalshi's authoritative settlements, reconciles them against your decision journal *in memory* (it writes nothing), and scores your settled trades:
+
+| Metric | What it answers |
+|---|---|
+| **Brier score** | When you say 70%, are you calibrated? (proper scoring rule; lower = better) |
+| **Log-loss** | Same, but punishes confident wrongness harder |
+| **Edge vs. book** | The price you paid for your side *is* the book's implied probability for it. `edge_vs_book` = realized win-rate − mean implied price. Positive = you beat the book; ~0 = the book was right |
+| **Forward-only guard** | Out-of-sample honesty: counts only trades where the event resolved strictly *after* you traded. Leakage and thin samples are quarantined, never silently counted |
+
+The verdict is **gated**: with fewer than 10 forward-settled trades, or on non-forward data, it **refuses to claim edge** — the niche's central failure is asserting skill from a handful of lucky settlements, and this harness will not do that. The measurement code (`src/agent/edge.py`) is pure and deterministic; all IO lives in the CLI.
+
+The honest answer is often "no edge yet, keep a track record." That is the feature, not a bug.
 
 ---
 
@@ -55,23 +80,49 @@ python cli.py dashboard
 
 ---
 
+## Agent-Native Surface
+
+The toolkit is built to be driven by an agent (Claude, or anything else) through small, composable tools — each does one thing and reports honestly. You can call them yourself, wire them into a loop, or hand the keys to an MCP client.
+
+**Atomic CLI tools** (`cli.py`):
+
+| Tool | Kind | What it does |
+|---|---|---|
+| `brief` | read-only | One-shot situational awareness: governor verdict, equity, positions, resting orders (JSON) |
+| `trade` | mutating | Place ONE guarded, journaled order through the full risk stack. Dry-run unless `--live` |
+| `close` | mutating | Sell ONE held position at the current bid (allowed even when halted — selling cuts risk). Dry-run unless `--live` |
+| `settle` | read-only* | Pull Kalshi's authoritative settlements; report realized win-rate / P&L (*writes the local settlements log) |
+| `learnings` | writes | Reconcile outcomes → calibration + per-category/side edge → append genuinely new candidate learnings. `--dry` for read-only |
+| `edge` | read-only | **The headline** — Brier / log-loss / edge-vs-book + the gated, forward-only verdict |
+| `scores` · `history` · `status` | read-only | Category scores, closed-trade history, live balance/positions |
+
+Plus `run` / `daily` (strategy loops) and `health` (connectivity check). `trade` and `close` both default to a dry-run preview and route through the risk governor + per-position cap — the same guard stack everything else uses.
+
+**The `kalshi-trade` skill** (`.claude/skills/kalshi-trade/SKILL.md`) encodes the disciplined process for managing the live account on each loop tick: assess state, surface edge, research true probabilities, decide under strict risk rules, execute guarded orders, journal the prediction, and measure realized edge.
+
+**MCP server** (`src/mcp_server.py`) — a first-mover [Model Context Protocol](https://modelcontextprotocol.io) server. No official Kalshi MCP exists; this thin wrapper exposes the same governor-gated tools (`brief`, `settle`, `learnings`, `edge`, `scores`, `history`, `hunt`, `status`, plus the mutating `trade`/`close`) so you can **drive the toolkit from Claude Desktop or Claude Code — running on your own keys, your key never leaving your machine.** Read-only by default; the two mutating tools require an explicit `confirm=true`. See **[docs/MCP.md](docs/MCP.md)**.
+
+> `hunt` (a broad live-book scan for edge candidates, backed by `scripts/hunt_candidates.py`) is surfaced through the MCP server today. Its output is research material to investigate — not a buy list.
+
+---
+
 ## What's Included
 
 This repo gives you the building blocks. The example strategies use them — your own strategies can too.
 
 | Component | What it does | Where it lives |
 |---|---|---|
+| **Edge harness** | Brier / log-loss / edge-vs-book + forward-only honesty verdict (pure, deterministic) | `src/agent/edge.py` |
+| **Learnings system** | Joins settlements back into the decision journal; calibration table + realized edge → evolving learnings | `src/agent/learnings.py` |
+| **Risk governor** | Daily-loss + drawdown kill switch + manual halt, authoritative for every live order | `src/risk/risk_governor.py` |
 | **Kalshi client** | Authenticated REST + WebSocket client (RSA signing, retries, rate-limit handling) | `src/clients/kalshi_client.py` |
 | **Market ingestion** | Pulls the full tradeable universe via the Events API, persists to SQLite | `src/jobs/ingest.py` |
 | **Position tracking** | Stop-loss, take-profit, time-based, and resolution-based exits with real Kalshi sell orders | `src/jobs/track.py` |
-| **LLM client** | Single OpenRouter API key, swap models with one config line, fallback chain on errors, persistent daily-cost tracker | `src/clients/openrouter_client.py`, `src/clients/xai_client.py` |
+| **LLM client** | Single OpenRouter API key, swap models with one config line, fallback chain on errors, daily-cost tracker | `src/clients/openrouter_client.py` |
 | **SQLite telemetry** | Every trade, AI decision, and cost metric logged locally | `src/utils/database.py` |
+| **MCP server** | First-mover MCP layer over the governor-gated tools | `src/mcp_server.py` |
 | **Streamlit dashboard** | Real-time portfolio, positions, P&L, decision logs | `beast_mode_dashboard.py` |
-| **Paper trading** | Log signals against settled markets without sending orders | `paper_trader.py` |
-| **CLI** | `run`, `dashboard`, `status`, `health`, `scores`, `history`, `close-all` | `cli.py` |
-| **Risk helpers** | Kelly sizing, stop-loss math, drawdown circuit breaker | `src/utils/`, `src/strategies/` |
-
-The repo also ships scaffolding for things that aren't fully wired — multi-agent debate runners in `src/agents/`, sentiment analyzer in `src/data/`, etc. Treat them as starting points if you want to extend them.
+| **Risk helpers** | Quarter-Kelly sizing, stop-loss math, drawdown circuit breaker, sector caps | `src/risk/`, `src/strategies/` |
 
 ---
 
@@ -83,7 +134,7 @@ Three strategies ship with the repo. **None of them is "the right answer."** The
 
 The default. For each candidate market, it calls a single LLM via OpenRouter (with a fallback chain on errors) to score directional confidence, then sizes positions with fractional Kelly and applies category/sector guardrails.
 
-> **It is not a "5-model ensemble"** despite earlier README claims. One model is called per decision. The fallback chain only triggers on errors. The agents/ directory contains scaffolding for real parallel multi-model voting, but it's not wired into the live trading path. If you want a real ensemble, fork `src/jobs/decide.py` and build it.
+> **It is not a "5-model ensemble"** despite earlier README claims. One model is called per decision. The fallback chain only triggers on errors. The `experimental/agents/` quarantine contains scaffolding for real parallel multi-model voting, but it's not wired into the live trading path. If you want a real ensemble, fork `src/jobs/decide.py` and build it.
 
 ```bash
 python cli.py run --paper          # paper trading
@@ -221,26 +272,33 @@ daily_ai_cost_limit    = 10.0    # Max daily LLM spend in USD
 
 ## Project Structure
 
+The repo is split into a **clean core** (the supported toolkit) and an **`experimental/` quarantine** (unwired scaffolding kept for reference, not part of the supported surface).
+
 ```
 kalshi-ai-trading-bot/
+├── cli.py                     # Unified CLI: brief/trade/close/settle/learnings/edge + run/daily/status/...
 ├── beast_mode_bot.py          # Example AI directional bot — main loop orchestration
-├── cli.py                     # Unified CLI: run, dashboard, status, health, close-all, scores, history
-├── paper_trader.py            # Paper-trading signal logger + static dashboard
-├── setup_env.py               # Bootstrap script (interactive env setup — not a setuptools file)
+├── setup_env.py               # Bootstrap script (interactive env setup)
 ├── env.template               # Environment variable template
 │
-├── src/
-│   ├── agents/                # UNWIRED scaffolding for multi-agent debate (fork to use)
+├── src/                       # ── clean core ──
+│   ├── agent/                 # Agent brain: edge.py (harness), learnings.py, journal, settle, toolbelt
+│   ├── mcp_server.py          # First-mover MCP server over the governor-gated tools
+│   ├── risk/                  # risk_governor.py — daily-loss + drawdown kill switch
 │   ├── clients/               # Kalshi, OpenRouter, WebSocket clients
 │   ├── config/                # Settings and trading parameters
-│   ├── data/                  # News + sentiment helpers (optional)
-│   ├── events/                # Async event bus
+│   ├── strategies/            # Safe compounder, category scorer, portfolio enforcer, market making
 │   ├── jobs/                  # ingest, decide, execute, track, evaluate
-│   ├── strategies/            # Safe compounder, category scorer, portfolio enforcer
-│   └── utils/                 # Database, logging, prompts, risk helpers
+│   └── utils/                 # Database, logging, prompts
 │
-├── scripts/                   # Diagnostic and utility scripts
-├── docs/                      # Additional docs + paper-trading dashboard HTML
+├── experimental/              # ── quarantine: UNWIRED scaffolding, not supported ──
+│   ├── agents/                # Multi-agent debate runners (may become adversarial-verify roles)
+│   ├── clients/               # Dead/experimental clients
+│   └── strategies/            # Experimental strategies
+│
+├── .claude/skills/            # kalshi-trade — the disciplined live-trading process
+├── scripts/                   # Diagnostic + utility scripts (incl. hunt_candidates.py)
+├── docs/                      # MCP.md and additional docs
 └── tests/                     # Pytest suite
 ```
 
