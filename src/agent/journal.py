@@ -30,9 +30,16 @@ def make_decision_record(
     order_id: Optional[str] = None,
     ts: Optional[str] = None,
     action: str = "buy",
+    method: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build one journal record. ``outcome`` is None until the market settles."""
-    return {
+    """Build one journal record. ``outcome`` is None until the market settles.
+
+    ``method`` (e.g. ``"manual"`` | ``"workflow"``) is an OPTIONAL tag for which
+    research approach produced the trade, so the learnings system can later learn
+    which one actually pays. It is backward-compatible: when omitted the key is
+    simply absent, so existing records and callers are unaffected.
+    """
+    record = {
         "ts": ts or datetime.now(timezone.utc).isoformat(),
         "strategy": strategy,
         "ticker": ticker,
@@ -47,6 +54,9 @@ def make_decision_record(
         "order_id": order_id,
         "outcome": None,
     }
+    if method is not None:
+        record["method"] = method
+    return record
 
 
 def append_decision(record: Dict[str, Any], path: str = DEFAULT_JOURNAL_PATH) -> None:
@@ -54,6 +64,22 @@ def append_decision(record: Dict[str, Any], path: str = DEFAULT_JOURNAL_PATH) ->
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a") as f:
         f.write(json.dumps(record) + "\n")
+
+
+def write_journal(records: List[Dict[str, Any]], path: str = DEFAULT_JOURNAL_PATH) -> None:
+    """Rewrite the whole journal file from ``records`` (one JSON object per line).
+
+    Used by the learnings reconciliation step to persist filled ``outcome``
+    fields back onto existing entries. Writes atomically via a temp file + rename
+    so a crash mid-write can't truncate the journal.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    with tmp.open("w") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+    tmp.replace(p)
 
 
 def load_journal(path: str = DEFAULT_JOURNAL_PATH) -> List[Dict[str, Any]]:

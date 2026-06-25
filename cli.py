@@ -315,6 +315,118 @@ def cmd_settle(args: argparse.Namespace) -> None:
     asyncio.run(_s())
 
 
+def cmd_learnings(args: argparse.Namespace) -> None:
+    """Reconcile settled outcomes into the journal, then surface candidate learnings.
+
+    The integrated LEARN step: pull live settlements, join them back into
+    decision_journal.jsonl (filling each trade's outcome), print the calibration
+    and per-category/side edge tables, run the deterministic flag-rules over those
+    tables, and append any genuinely NEW candidate learnings to learnings.jsonl.
+
+    Defaults to writing back reconciled outcomes + new learnings. Pass --dry for a
+    read-only preview (no journal or learnings writes). Pass --json for machine
+    output instead of the human tables.
+    """
+    import json
+    from datetime import date as _date
+    from src.utils.logging_setup import setup_logging
+
+    setup_logging(log_level="WARNING")
+
+    dry = getattr(args, "dry", False)
+    as_json = getattr(args, "json", False)
+    today = _date.today().isoformat()
+
+    async def _l() -> None:
+        from src.clients.kalshi_client import KalshiClient
+        from src.agent.settle import fetch_settlements, settlement_pnl
+        from src.agent.journal import load_journal, write_journal, DEFAULT_JOURNAL_PATH
+        from src.agent.learnings import (
+            reconcile_outcomes, calibration_table, edge_breakdown,
+            flag_rules, append_learnings, load_learnings, DEFAULT_LEARNINGS_PATH,
+        )
+
+        client = KalshiClient()
+        try:
+            raw = await fetch_settlements(client, limit=300)
+        finally:
+            await client.close()
+
+        settlements = [s for s in (settlement_pnl(r) for r in raw) if s]
+        journal = load_journal()
+        reconciled, newly = reconcile_outcomes(journal, settlements)
+        if not dry and newly:
+            write_journal(reconciled, DEFAULT_JOURNAL_PATH)
+
+        calibration = calibration_table(reconciled)
+        edges = edge_breakdown(reconciled)
+        candidates = flag_rules(calibration, edges, today)
+        if dry:
+            existing = {(c.get("kind"), c.get("claim")) for c in load_learnings(DEFAULT_LEARNINGS_PATH)}
+            new_learnings = [c for c in candidates if (c.get("kind"), c.get("claim")) not in existing]
+        else:
+            new_learnings = append_learnings(candidates, DEFAULT_LEARNINGS_PATH)
+
+        if as_json:
+            print(json.dumps({
+                "date": today,
+                "dry": dry,
+                "reconciled": newly,
+                "settled_total": sum(1 for r in reconciled if r.get("outcome")),
+                "calibration": calibration,
+                "edges": edges,
+                "candidates": candidates,
+                "new_learnings": new_learnings,
+            }, indent=2))
+            return
+
+        print("=" * 64)
+        print(f"  LEARNINGS — {today}{'  (DRY: no writes)' if dry else ''}")
+        print("=" * 64)
+        print(f"  Reconciled this run: {newly} new outcome(s)")
+        settled_n = sum(1 for r in reconciled if r.get("outcome"))
+        print(f"  Settled journal trades: {settled_n} / {len(reconciled)}")
+        print()
+
+        print("  CALIBRATION (predicted vs. actual win-rate)")
+        if calibration:
+            print(f"  {'bucket':<14} {'n':>4} {'pred':>7} {'actual':>7}")
+            print(f"  {'-'*14} {'-'*4} {'-'*7} {'-'*7}")
+            for b in calibration:
+                print(f"  {b['bucket']:<14} {b['n']:>4} {b['predicted']:>6.0%} {b['actual']:>6.0%}")
+        else:
+            print("  (no settled trades with est_prob yet)")
+        print()
+
+        print("  EDGE BREAKDOWN")
+        for dim in ("by_category", "by_side", "by_method"):
+            table = edges.get(dim, {})
+            if not table:
+                continue
+            print(f"  {dim.replace('by_', 'by ')}:")
+            print(f"    {'group':<18} {'n':>4} {'WR':>6} {'P&L':>9} {'entryEdge':>9} {'realEdge':>9}")
+            for label, s in sorted(table.items()):
+                wr = f"{s['win_rate']:.0%}" if s['win_rate'] is not None else "n/a"
+                ee = f"{s['avg_entry_edge']:+.3f}" if s['avg_entry_edge'] is not None else "n/a"
+                re_ = f"{s['realized_edge']:+.3f}" if s['realized_edge'] is not None else "n/a"
+                print(f"    {label[:18]:<18} {s['n']:>4} {wr:>6} ${s['pnl']:>7.2f} {ee:>9} {re_:>9}")
+        print()
+
+        print("  CANDIDATE LEARNINGS")
+        if not candidates:
+            print("  (none flagged — no n>=5 group is losing and no band is overconfident)")
+        for c in candidates:
+            is_new = c in new_learnings
+            tag = "NEW" if is_new else "seen"
+            print(f"  [{tag}] ({c['confidence']}/{c['kind']}) {c['claim']}")
+        if not dry:
+            print()
+            print(f"  Appended {len(new_learnings)} new learning(s) to learnings.jsonl")
+        print("=" * 64)
+
+    asyncio.run(_l())
+
+
 def cmd_dashboard(args: argparse.Namespace) -> None:
     """Launch the Streamlit monitoring dashboard."""
     import subprocess
@@ -959,6 +1071,26 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_settle.set_defaults(func=cmd_settle)
+
+    # --- learnings (reconcile outcomes -> calibration/edge -> candidate learnings) ---
+    p_learn = subparsers.add_parser(
+        "learnings",
+        help="Reconcile settled outcomes into the journal and surface candidate learnings",
+        description=(
+            "The integrated LEARN step. Pull live settlements, join them back into "
+            "the decision journal (filling each trade's outcome), print the "
+            "calibration table and per-category/side realized edge, run the "
+            "deterministic flag-rules over those tables, and append any genuinely "
+            "new candidate learnings to learnings.jsonl. Defaults to writing back "
+            "reconciled outcomes + new learnings; pass --dry for a read-only "
+            "preview. Pass --json for machine output."
+        ),
+    )
+    p_learn.add_argument("--dry", action="store_true",
+                         help="Read-only: do not write reconciled outcomes or new learnings")
+    p_learn.add_argument("--json", action="store_true",
+                         help="Emit machine-readable JSON instead of the human tables")
+    p_learn.set_defaults(func=cmd_learnings)
 
     # --- scores ---
     p_scores = subparsers.add_parser(

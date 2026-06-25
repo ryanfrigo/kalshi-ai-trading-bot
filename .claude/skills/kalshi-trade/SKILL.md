@@ -43,9 +43,14 @@ memory — read it if you lack context.
    caps size (≤10% equity, ≤cash), places a resting maker limit by default (low fees),
    and journals your prediction. Omit `--live` first to preview.
 6. **JOURNAL** — automatic on every `trade`. Records est_prob, edge, rationale.
-7. **LEARN** — review settled results via `cli.py history` and the decision journal
-   (`data/runtime/decision_journal.jsonl`). Concentrate future trading on categories
-   where your REALIZED edge is positive; stop trading categories that lose.
+7. **LEARN** — run `cli.py learnings` (the integrated learn step). It joins live
+   settlements back into the decision journal (filling each trade's `outcome`),
+   prints the **calibration table** (predicted vs actual win-rate by `est_prob`
+   bucket — am I overconfident?) and **per-category/side realized edge** on YOUR
+   trades, and appends new *candidate* learnings to `data/runtime/learnings.jsonl`.
+   Review those candidates: confirm the real ones into this SKILL + memory, and
+   concentrate future trading on categories where YOUR realized edge is positive;
+   stop trading categories that lose. (`cli.py settle`/`history` remain for raw P&L.)
 8. **REPORT** — summarize trades, reasoning, and the equity delta. Then continue the loop.
 
 ## Hard rules (never break)
