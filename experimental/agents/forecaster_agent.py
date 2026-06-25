@@ -7,7 +7,7 @@ Uses Grok-4 (via xAI) by default.  Focuses on:
 - Probability estimation with calibration
 """
 
-from src.agents.base_agent import BaseAgent
+from experimental.agents.base_agent import BaseAgent
 
 
 class ForecasterAgent(BaseAgent):

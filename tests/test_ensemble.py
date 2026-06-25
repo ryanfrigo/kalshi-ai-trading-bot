@@ -4,8 +4,8 @@ import asyncio
 import pytest
 from unittest.mock import MagicMock
 
-from src.agents.ensemble import EnsembleRunner
-from src.agents.debate import DebateRunner
+from experimental.agents.ensemble import EnsembleRunner
+from experimental.agents.debate import DebateRunner
 
 
 # --- Helper: mock completion factories ---

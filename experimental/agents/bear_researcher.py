@@ -7,7 +7,7 @@ Uses Gemini (via OpenRouter) by default.  Focuses on:
 - Probability ceiling estimate (upper bound for YES probability)
 """
 
-from src.agents.base_agent import BaseAgent
+from experimental.agents.base_agent import BaseAgent
 
 
 class BearResearcher(BaseAgent):

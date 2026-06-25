@@ -5,7 +5,7 @@ Uses Grok-4 (via xAI) by default.  Takes all other agents' outputs and
 makes the final BUY/SKIP decision, producing a TradingDecision-compatible dict.
 """
 
-from src.agents.base_agent import BaseAgent
+from experimental.agents.base_agent import BaseAgent
 
 
 class TraderAgent(BaseAgent):

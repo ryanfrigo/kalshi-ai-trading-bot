@@ -15,13 +15,13 @@ import asyncio
 import time
 from typing import Callable, Dict, Optional
 
-from src.agents.base_agent import BaseAgent
-from src.agents.bull_researcher import BullResearcher
-from src.agents.bear_researcher import BearResearcher
-from src.agents.risk_manager_agent import RiskManagerAgent
-from src.agents.trader_agent import TraderAgent
-from src.agents.forecaster_agent import ForecasterAgent
-from src.agents.news_analyst_agent import NewsAnalystAgent
+from experimental.agents.base_agent import BaseAgent
+from experimental.agents.bull_researcher import BullResearcher
+from experimental.agents.bear_researcher import BearResearcher
+from experimental.agents.risk_manager_agent import RiskManagerAgent
+from experimental.agents.trader_agent import TraderAgent
+from experimental.agents.forecaster_agent import ForecasterAgent
+from experimental.agents.news_analyst_agent import NewsAnalystAgent
 from src.utils.logging_setup import get_trading_logger
 
 logger = get_trading_logger("debate")

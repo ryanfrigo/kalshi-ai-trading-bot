@@ -22,7 +22,7 @@ from src.clients.kalshi_client import KalshiClient
 from src.clients.xai_client import XAIClient
 from src.utils.database import DatabaseManager
 from src.utils.logging_setup import setup_logging
-from src.strategies.quick_flip_scalping import (
+from experimental.strategies.quick_flip_scalping import (
     run_quick_flip_strategy, 
     QuickFlipConfig,
     QuickFlipScalpingStrategy

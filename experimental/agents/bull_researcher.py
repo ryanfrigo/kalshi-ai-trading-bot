@@ -7,7 +7,7 @@ Uses GPT-4o (via OpenRouter) by default.  Focuses on:
 - Probability floor estimate (lower bound for YES probability)
 """
 
-from src.agents.base_agent import BaseAgent
+from experimental.agents.base_agent import BaseAgent
 
 
 class BullResearcher(BaseAgent):

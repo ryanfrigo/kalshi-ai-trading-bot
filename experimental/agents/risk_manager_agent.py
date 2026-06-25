@@ -7,7 +7,7 @@ Uses DeepSeek R1 (via OpenRouter) by default.  Focuses on:
 - Risk assessment (1-10 scale)
 """
 
-from src.agents.base_agent import BaseAgent
+from experimental.agents.base_agent import BaseAgent
 
 
 class RiskManagerAgent(BaseAgent):

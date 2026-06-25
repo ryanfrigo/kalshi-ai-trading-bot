@@ -7,7 +7,7 @@ Uses Claude Sonnet 4 (via OpenRouter) by default.  Focuses on:
 - Relevance to specific market
 """
 
-from src.agents.base_agent import BaseAgent
+from experimental.agents.base_agent import BaseAgent
 
 
 class NewsAnalystAgent(BaseAgent):
