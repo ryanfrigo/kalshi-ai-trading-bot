@@ -427,6 +427,119 @@ def cmd_learnings(args: argparse.Namespace) -> None:
     asyncio.run(_l())
 
 
+def cmd_edge(args: argparse.Namespace) -> None:
+    """Prove (or disprove) edge against the sharp Kalshi book — the headline metric.
+
+    The edge-measurement harness. Pull live settlements, reconcile them into the
+    decision journal (in memory — this command writes nothing), then score my
+    settled trades: Brier / log-loss calibration, realized edge-vs-book
+    attribution (did my fills beat the price the book charged?), the calibration
+    curve, and an out-of-sample (forward-only) honesty split. Prints an honest,
+    gated verdict that refuses to claim edge on thin (n<10) or non-forward data.
+
+    Read-only: it MEASURES, it never trades or writes. Pass --json for machine
+    output instead of the human table.
+    """
+    import json
+    from datetime import date as _date
+    from src.utils.logging_setup import setup_logging
+
+    setup_logging(log_level="WARNING")
+
+    as_json = getattr(args, "json", False)
+    today = _date.today().isoformat()
+
+    async def _e() -> None:
+        from src.clients.kalshi_client import KalshiClient
+        from src.agent.settle import fetch_settlements, settlement_pnl
+        from src.agent.journal import load_journal
+        from src.agent.learnings import reconcile_outcomes
+        from src.agent.edge import edge_report
+
+        client = KalshiClient()
+        try:
+            raw = await fetch_settlements(client, limit=300)
+        finally:
+            await client.close()
+
+        settlements = [s for s in (settlement_pnl(r) for r in raw) if s]
+        journal = load_journal()
+        # Read-only: reconcile in memory only; we never persist here.
+        reconciled, _ = reconcile_outcomes(journal, settlements)
+        report = edge_report(reconciled, today)
+        _print_edge_report(report, as_json)
+
+    asyncio.run(_e())
+
+
+def _print_edge_report(report: dict, as_json: bool) -> None:
+    """Render an ``edge_report`` dict as JSON or a human table. Pure presentation."""
+    import json
+
+    if as_json:
+        print(json.dumps(report, indent=2))
+        return
+
+    def _fmt_metric(m):
+        return f"{m['value']:.4f} (n={m['n']})" if m else "n/a (no scorable trades)"
+
+    print("=" * 70)
+    print(f"  EDGE vs. THE BOOK — {report['date']}")
+    print("=" * 70)
+    print(
+        f"  Settled: {report['n_settled']}  |  "
+        f"forward: {report['n_forward']}  |  "
+        f"suspect: {report['n_suspect']}  |  "
+        f"unknown: {report['n_unknown']}"
+    )
+    print("  (only FORWARD-settled trades — market resolved AFTER I traded —")
+    print("   count toward edge; suspect/unknown are excluded as un-confirmable.)")
+    print()
+    print(f"  Brier score:  {_fmt_metric(report['brier'])}   (lower better; 0.25 = coin flip)")
+    print(f"  Log loss:     {_fmt_metric(report['log_loss'])}   (lower better)")
+    print()
+
+    ev = report["edge_vs_book"]
+    overall = ev.get("overall")
+    print("  EDGE vs. BOOK (realized win-rate − price the book charged)")
+    if overall:
+        print(
+            f"    overall: n={overall['n']}  won={overall['realized_winrate']:.0%}  "
+            f"implied={overall['mean_implied']:.0%}  "
+            f"edge={overall['edge_vs_book']:+.4f}  "
+            f"pnl/contract=${overall['pnl_per_contract']:+.3f}"
+        )
+    else:
+        print("    (no forward-settled trades with a fill price yet)")
+
+    for dim_key, dim_label in (("by_category", "by category"), ("by_side", "by side")):
+        table = ev.get(dim_key, {})
+        if not table:
+            continue
+        print(f"    {dim_label}:")
+        print(f"      {'group':<18} {'n':>4} {'won':>6} {'implied':>8} {'edge':>9} {'pnl/ct':>9}")
+        for label, s in sorted(table.items()):
+            print(
+                f"      {label[:18]:<18} {s['n']:>4} {s['realized_winrate']:>5.0%} "
+                f"{s['mean_implied']:>7.0%} {s['edge_vs_book']:>+9.4f} "
+                f"${s['pnl_per_contract']:>+7.3f}"
+            )
+    print()
+
+    cal = report["calibration_table"]
+    print("  CALIBRATION (predicted vs. actual win-rate, forward trades)")
+    if cal:
+        print(f"    {'bucket':<14} {'n':>4} {'pred':>7} {'actual':>7}")
+        for b in cal:
+            print(f"    {b['bucket']:<14} {b['n']:>4} {b['predicted']:>6.0%} {b['actual']:>6.0%}")
+    else:
+        print("    (no forward-settled trades with est_prob yet)")
+    print()
+
+    print(f"  VERDICT: {report['verdict']}")
+    print("=" * 70)
+
+
 def cmd_dashboard(args: argparse.Namespace) -> None:
     """Launch the Streamlit monitoring dashboard."""
     import subprocess
@@ -1091,6 +1204,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_learn.add_argument("--json", action="store_true",
                          help="Emit machine-readable JSON instead of the human tables")
     p_learn.set_defaults(func=cmd_learnings)
+
+    # --- edge (prove edge vs. the sharp book — the headline metric) ---
+    p_edge = subparsers.add_parser(
+        "edge",
+        help="Prove (or disprove) edge against the sharp Kalshi book (Brier/log-loss, edge-vs-book, forward-only)",
+        description=(
+            "The edge-measurement harness — the repo's headline feature. Pull "
+            "live settlements, reconcile them into the decision journal IN "
+            "MEMORY (this command writes nothing), then score the settled "
+            "trades: Brier and log-loss calibration, realized edge-vs-book "
+            "attribution (did my fills beat the price the book charged?), the "
+            "calibration curve, and an out-of-sample (forward-only) honesty "
+            "split. Prints an honest, gated verdict that refuses to claim edge "
+            "on thin (n<10) or non-forward data. Read-only. Pass --json for "
+            "machine output."
+        ),
+    )
+    p_edge.add_argument("--json", action="store_true",
+                        help="Emit machine-readable JSON instead of the human table")
+    p_edge.set_defaults(func=cmd_edge)
 
     # --- scores ---
     p_scores = subparsers.add_parser(
