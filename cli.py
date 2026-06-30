@@ -540,6 +540,121 @@ def _print_edge_report(report: dict, as_json: bool) -> None:
     print("=" * 70)
 
 
+def cmd_verify(args: argparse.Namespace) -> None:
+    """Adversarial-verify a single ticker: research -> skeptic -> deterministic verdict.
+
+    Reads the LIVE orderbook to get the executable NO ask we'd fade, fetches the
+    market title for context, then runs the research/skeptic/calibrator pipeline
+    (``src.agent.verify.run_verify``) with the OpenRouter client injected as the
+    LLM. The verdict gate is deterministic — it recomputes the edge in points and
+    only says BUY_NO when the fade survives the skeptic AND clears every discipline
+    rule. READ-ONLY: never places an order, never writes the journal. Pass --json
+    for machine output.
+    """
+    import json
+    import re
+    from src.utils.logging_setup import setup_logging
+
+    setup_logging(log_level="WARNING")
+
+    as_json = getattr(args, "json", False)
+    ticker = args.ticker
+
+    async def _run() -> dict:
+        from src.clients.kalshi_client import KalshiClient
+        from src.clients.openrouter_client import OpenRouterClient
+        from src.agent.verify import run_verify
+        from json_repair import repair_json
+
+        client = KalshiClient()
+        or_client = OpenRouterClient()
+        try:
+            # 1. Live executable NO ask off the orderbook (best no_ask = 1 - best yes bid).
+            ob = await client.get_orderbook(ticker, depth=10)
+            o = ob.get("orderbook_fp", {}) or {}
+            yes = [(float(p), float(s)) for p, s in (o.get("yes_dollars") or [])]
+            yb = max((p for p, _s in yes), default=None)  # best yes bid
+            no_ask = round(1 - yb, 2) if yb is not None else None
+            if no_ask is None:
+                raise RuntimeError(
+                    f"no executable NO ask for {ticker} (empty/one-sided book) — nothing to fade"
+                )
+
+            # 2. Human question/title — best-effort, never crash on a missing field.
+            question = ticker
+            try:
+                m = (await client.get_market(ticker)).get("market", {}) or {}
+                etitle = m.get("title") or m.get("event_title") or ""
+                sub = m.get("yes_sub_title") or m.get("subtitle") or m.get("no_sub_title") or ""
+                combined = (etitle + (" :: " + sub if sub else "")).strip(" :")
+                if combined:
+                    question = combined
+            except Exception:  # noqa: BLE001
+                pass
+
+            candidate = {"ticker": ticker, "question": question, "no_ask": no_ask}
+
+            # 3. The injected LLM adapter — the ONLY place OpenRouter is touched.
+            async def llm_call(prompt: str, schema: dict) -> dict:
+                schema_keys = ", ".join(schema.get("required", []))
+                full = (
+                    prompt
+                    + f"\n\nReturn ONLY a JSON object with these keys: {schema_keys}. "
+                    "No markdown, no prose."
+                )
+                raw = await or_client.get_completion(
+                    full, temperature=0.1, max_tokens=2000,
+                    strategy="verify", query_type="verify",
+                )
+                if raw is None:
+                    raise RuntimeError("LLM unavailable (daily limit hit or all models failed)")
+                # Robust JSON parse: ```json fence, then bare {...}, then repair.
+                fence = re.search(r"```(?:json)?\s*(.*?)\s*```", raw, re.DOTALL)
+                if fence:
+                    json_str = fence.group(1)
+                else:
+                    bare = re.search(r"\{.*\}", raw, re.DOTALL)
+                    if not bare:
+                        raise RuntimeError(f"no JSON object in LLM response: {raw[:200]!r}")
+                    json_str = bare.group(0)
+                try:
+                    return json.loads(json_str)
+                except json.JSONDecodeError:
+                    repaired = repair_json(json_str)
+                    if not repaired:
+                        raise RuntimeError(f"could not parse/repair LLM JSON: {json_str[:200]!r}")
+                    return json.loads(repaired)
+
+            # 4. Run the pure pipeline with the injected IO.
+            verdict = await run_verify(candidate, llm_call)
+            return {"candidate": candidate, "verdict": verdict}
+        finally:
+            await client.close()
+
+    out = asyncio.run(_run())
+    candidate = out["candidate"]
+    verdict = out["verdict"]
+
+    if as_json:
+        print(json.dumps(verdict, indent=2))
+        return
+
+    no_ask = float(candidate["no_ask"])
+    implied_yes = round((1.0 - no_ask) * 100.0)
+    print("=" * 70)
+    print(f"  ADVERSARIAL VERIFY — {verdict['ticker']}")
+    print("=" * 70)
+    print(f"  {candidate['question']}")
+    print(f"  NO ask: {no_ask:.2f}  (implied YES {implied_yes}%)")
+    print("-" * 70)
+    print(f"  recommend:  {verdict['recommend']}   (size: {verdict['size_hint']})")
+    print(f"  edge:       {verdict['edge_pts']:+d} pts   survives skeptic: {verdict['survives']}")
+    print(f"  true-YES:   {verdict['true_yes']:.0f}%   direction: {verdict['direction']}")
+    print()
+    print(f"  {verdict['note']}")
+    print("=" * 70)
+
+
 def cmd_dashboard(args: argparse.Namespace) -> None:
     """Launch the Streamlit monitoring dashboard."""
     import subprocess
@@ -1224,6 +1339,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_edge.add_argument("--json", action="store_true",
                         help="Emit machine-readable JSON instead of the human table")
     p_edge.set_defaults(func=cmd_edge)
+
+    # --- verify ---
+    p_verify = subparsers.add_parser(
+        "verify",
+        help="Adversarial-verify a single ticker (research -> skeptic -> verdict). Read-only.",
+        description=(
+            "Run the research/adversarial-verify pipeline on one market: read the "
+            "LIVE orderbook for the executable NO ask we'd fade, research the "
+            "catalyst and true-YES, then a SKEPTIC tries to REFUTE the fade, and "
+            "a deterministic gate recomputes the edge and rules BUY_NO / PASS "
+            "(BUY_NO only when the fade survives AND clears every discipline rule). "
+            "Read-only: never places an order or writes the journal. Pass --json "
+            "for machine output."
+        ),
+    )
+    p_verify.add_argument("--ticker", required=True, help="Kalshi market ticker to verify")
+    p_verify.add_argument("--json", action="store_true", help="Emit the verdict as JSON")
+    p_verify.set_defaults(func=cmd_verify)
 
     # --- scores ---
     p_scores = subparsers.add_parser(
