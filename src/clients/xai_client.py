@@ -25,28 +25,12 @@ from src.utils.logging_setup import TradingLoggerMixin
 
 
 # ---------------------------------------------------------------------------
-# Shared dataclasses (imported by openrouter_client, agents, etc.)
+# Shared dataclasses — canonical home is src.clients.llm_types; re-exported here
+# for backward compatibility with the legacy callers that still import them from
+# xai_client (the live gateway openrouter_client now imports llm_types directly).
 # ---------------------------------------------------------------------------
 
-@dataclass
-class TradingDecision:
-    """Represents an AI trading decision."""
-    action: str           # "buy", "sell", "hold"
-    side: str             # "yes", "no"
-    confidence: float     # 0.0 to 1.0
-    limit_price: Optional[int] = None   # limit price in cents
-    reasoning: Optional[str] = None
-
-
-@dataclass
-class DailyUsageTracker:
-    """Track daily AI usage and costs."""
-    date: str
-    total_cost: float = 0.0
-    request_count: int = 0
-    daily_limit: float = 10.0  # Default $10/day (override via DAILY_AI_COST_LIMIT env var)
-    is_exhausted: bool = False
-    last_exhausted_time: Optional[datetime] = None
+from src.clients.llm_types import TradingDecision, DailyUsageTracker  # noqa: E402,F401
 
 
 # ---------------------------------------------------------------------------

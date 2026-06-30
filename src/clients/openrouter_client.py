@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from json_repair import repair_json
 from openai import AsyncOpenAI
 
-from src.clients.xai_client import TradingDecision, DailyUsageTracker
+from src.clients.llm_types import TradingDecision, DailyUsageTracker
 from src.config.settings import settings
 from src.utils.logging_setup import TradingLoggerMixin, log_error_with_context
 
@@ -105,7 +105,7 @@ class OpenRouterClient(TradingLoggerMixin):
         * Per-model cost tracking with model-specific pricing
         * Automatic fallback across models on failure
         * Exponential-backoff retry logic with rate-limit awareness
-        * Daily cost tracking (mirrors DailyUsageTracker from xai_client)
+        * Daily cost tracking (via DailyUsageTracker from llm_types)
     """
 
     # Maximum number of retries for a single model before moving to fallback
