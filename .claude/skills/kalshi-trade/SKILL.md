@@ -38,6 +38,13 @@ memory — read it if you lack context.
      `edge = true_no_prob − no_ask ≥ 0.05` (covers ~1¢ fee + safety). Use YOUR number, not the market's.
    - Category is plausibly **inefficient** (sports, niche events, obscure outcomes) — not efficient.
    - It clears the governor and the position cap.
+   - **It passes the adversarial-verify gate.** Before any live buy, run
+     `cli.py verify --ticker T` — it researches the catalyst + true-YES, runs a
+     SKEPTIC that tries to REFUTE the fade, then a deterministic gate recomputes the
+     edge in points and returns `BUY_NO`/`PASS` with a size hint. **Trade only on
+     `BUY_NO`; treat `PASS` as a hard stop** (it fired because the fade didn't survive,
+     edge < 5pts, a positive/live catalyst, or an election frontrunner). Use its
+     `size_hint` (full only for genuine sub-5% longshots) to size down.
 5. **EXECUTE** — `cli.py trade --live --ticker T --side no --count N --price 0.NN
    --est-prob P --rationale "why" --category C`. The tool re-checks the governor,
    caps size (≤10% equity, ≤cash), places a resting maker limit by default (low fees),
