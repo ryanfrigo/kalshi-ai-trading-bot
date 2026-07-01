@@ -39,3 +39,36 @@ def test_no_position_skipped():
            "no_count_fp": "0.00", "yes_count_fp": "0.00",
            "revenue": 0, "fee_cost": "0.0"}
     assert settlement_pnl(rec) is None
+
+
+# ---------------------------------------------------------------------------
+# settlement -> journal-shaped record (feeds the Edge Policy from real outcomes)
+# ---------------------------------------------------------------------------
+from src.agent.settle import series_category, settlement_to_record
+
+
+def test_series_category_is_the_kalshi_series_prefix():
+    assert series_category("KXCPI-26JUN-3.2") == "KXCPI"
+    assert series_category("KXNBA-26-SAS") == "KXNBA"
+    assert series_category("KXMAKEMARMAD-26-DUKE") == "KXMAKEMARMAD"
+    assert series_category("") == ""
+    assert series_category(None) == ""
+
+
+def test_settlement_to_record_carries_side_category_and_outcome():
+    s = {"ticker": "KXCPI-26JUN-3.2", "held_side": "yes", "count": 10,
+         "won": False, "result": "no", "cost": 3.0, "revenue": 0.0,
+         "fee": 0.0, "pnl": -3.0, "settled_time": "2026-06-20T00:00:00Z"}
+    rec = settlement_to_record(s)
+    assert rec["side"] == "yes"
+    assert rec["category"] == "KXCPI"
+    assert rec["outcome"] == {"won": False, "pnl": -3.0}
+    assert rec["est_prob"] is None            # settlements carry no prediction
+    assert rec["source"] == "settlement"      # provenance, NOT a blockable method
+    assert "method" not in rec                # must not masquerade as a research method
+    assert abs(rec["price"] - 0.30) < 1e-9     # cost/count = avg entry price
+
+
+def test_settlement_to_record_skips_rows_without_a_held_side():
+    assert settlement_to_record({"ticker": "X", "held_side": None,
+                                 "result": "no", "won": False, "pnl": 0.0}) is None

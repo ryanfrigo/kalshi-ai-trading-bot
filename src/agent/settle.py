@@ -49,6 +49,61 @@ def settlement_pnl(rec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     }
 
 
+def series_category(ticker: Optional[str]) -> str:
+    """The Kalshi *series* code — the natural category for a market.
+
+    Kalshi tickers are ``SERIES-<event>-<market>`` (e.g. ``KXCPI-26JUN-3.2``,
+    ``KXNBA-26-SAS``). The series prefix (``KXCPI``, ``KXNBA``) is exactly the
+    granularity real edge lessons live at — economic-data buckets, sports
+    brackets — so we use it verbatim as the category. Deterministic, no
+    hand-maintained taxonomy. Empty string when the ticker is missing.
+    """
+    if not ticker:
+        return ""
+    return str(ticker).split("-", 1)[0]
+
+
+def settlement_to_record(settlement: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Turn one *normalized* settlement (``settlement_pnl`` shape) into a
+    journal-shaped SETTLED record so the learnings/policy pipeline can learn from
+    authoritative outcomes, not just my own journaled trades.
+
+    ``side`` = the held side; ``category`` = the Kalshi series; ``outcome`` =
+    ``{won, pnl}`` from the settlement. ``est_prob`` is None — a settlement
+    carries no *prediction*, so these records inform blocks/side-warnings (from
+    realized pnl) but never calibration/haircuts (which need a real est_prob).
+    Provenance is tagged ``source="settlement"`` — deliberately NOT ``method``,
+    which means *research method* ("manual"/"workflow") and is a blockable
+    dimension; a data source must not masquerade as a losing strategy. ``price``
+    is the average entry price (cost/count). Returns None when no side was held.
+    PURE.
+    """
+    side = settlement.get("held_side")
+    result = settlement.get("result")
+    if not side or result is None:
+        return None
+    count = int(settlement.get("count") or 0)
+    cost = float(settlement.get("cost") or 0.0)
+    price = round(cost / count, 6) if count else 0.0
+    return {
+        "ticker": settlement.get("ticker"),
+        "side": side,
+        "action": "buy",
+        "count": count,
+        "price": price,
+        "est_prob": None,
+        "edge": None,
+        "rationale": "",
+        "category": series_category(settlement.get("ticker")),
+        "order_id": None,
+        "source": "settlement",
+        "outcome": {
+            "won": bool(settlement.get("won")),
+            "pnl": round(float(settlement.get("pnl") or 0.0), 4),
+        },
+    }
+
+
 async def fetch_settlements(kalshi_client, limit: int = 200) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     cursor = None
