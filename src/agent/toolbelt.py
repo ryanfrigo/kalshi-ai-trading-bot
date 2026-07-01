@@ -115,22 +115,53 @@ async def place_guarded_order(
     max_position_pct: float = 0.10,
     dry: bool = False,
     journal_path: Optional[str] = None,
+    policy_path: Optional[str] = None,
+    override_policy: bool = False,
 ) -> Dict[str, Any]:
     """Place ONE order through the full guard stack, journaling the prediction.
 
-    Guards (abort on first failure): governor not halted -> market active &
-    tradeable -> price in 1..99c -> size capped to position+cash limits >= 1.
-    On success (live or dry) appends a decision-journal record.
+    Guards (abort on first failure): governor not halted -> Edge Policy gate
+    (block a category/method your settled record proves loses; haircut an
+    overconfident est_prob) -> market active & tradeable -> price in 1..99c ->
+    size capped to position+cash limits >= 1. On success (live or dry) appends a
+    decision-journal record.
+
+    The Edge Policy gate closes the self-improvement loop: it consults the active
+    policy (``data/runtime/edge_policy.json``, kept fresh by ``cli improve``).
+    No policy file -> no opinion -> proceeds (backward-compatible). A BLOCK is a
+    hard refusal unless ``override_policy=True`` (the agent retains full authority,
+    but the override is recorded). A HAIRCUT shrinks the *journaled* est_prob to
+    the policy's calibrated value so future calibration reflects the correction.
     """
     from src.risk.risk_governor import RiskGovernor
     from src.utils.market_prices import get_market_prices, is_tradeable_market
     from src.agent.journal import make_decision_record, append_decision, DEFAULT_JOURNAL_PATH
+    from src.agent.policy import load_policy, apply_policy, DEFAULT_POLICY_PATH
+    from src.agent.settle import series_category
 
     side = side.lower()
     gov = governor or RiskGovernor(kalshi_client=kalshi_client)
     decision = await gov.check()
     if decision.halted:
         return {"ok": False, "reason": "governor_halted", "governor": decision.to_dict()}
+
+    # Edge Policy gate — the settled record constrains the next decision.
+    policy_note: Optional[Dict[str, Any]] = None
+    policy = load_policy(policy_path or DEFAULT_POLICY_PATH)
+    if policy:
+        verdict = apply_policy(policy, {
+            "ticker": ticker, "side": side,
+            "category": category or series_category(ticker), "est_prob": est_prob,
+        })
+        if verdict["verdict"] == "BLOCK":
+            if not override_policy:
+                return {"ok": False, "reason": "blocked_by_policy",
+                        "policy_verdict": verdict}
+            policy_note = {"overridden_block": verdict["reasons"]}
+        elif verdict["verdict"] == "HAIRCUT":
+            est_prob = verdict.get("adjusted_est_prob", est_prob)
+            policy_note = {"haircut": verdict["reasons"],
+                           "est_prob_shrunk_to": est_prob}
 
     md = await kalshi_client.get_market(ticker)
     m = md.get("market", {})
@@ -177,6 +208,8 @@ async def place_guarded_order(
             est_prob=est_prob, edge=edge, rationale=rationale, category=category,
             strategy="claude", order_id=result.get("order_id"),
         ), journal_path or DEFAULT_JOURNAL_PATH)
+    if policy_note:
+        result["policy_note"] = policy_note
     result["journaled"] = not dry
     return result
 

@@ -256,6 +256,7 @@ def cmd_trade(args: argparse.Namespace) -> None:
                 price=args.price, type_=args.type, rationale=args.rationale or "",
                 est_prob=args.est_prob, category=args.category or "",
                 max_position_pct=args.max_pct, dry=not args.live,
+                override_policy=getattr(args, "override_policy", False),
             )
             print(json.dumps(res, indent=2))
         finally:
@@ -1457,6 +1458,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_trade.add_argument("--category", default="", help="Market category (journaled)")
     p_trade.add_argument("--max-pct", dest="max_pct", type=float, default=0.10,
                          help="Max fraction of equity per position (default 0.10)")
+    p_trade.add_argument("--override-policy", dest="override_policy", action="store_true",
+                         help="Override an Edge Policy BLOCK (recorded on the order). The gate "
+                              "reflects your settled record — override only with a stronger reason.")
     p_trade.add_argument("--live", action="store_true",
                          help="Actually place the order (default: dry-run preview)")
     p_trade.set_defaults(func=cmd_trade)
