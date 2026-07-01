@@ -25,7 +25,14 @@ IO (load/save ``data/runtime/edge_policy.json``) lives in the CLI layer.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from src.agent.learnings import reconcile_outcomes
+from src.agent.settle import settlement_to_record
+
+DEFAULT_POLICY_PATH = "data/runtime/edge_policy.json"
 
 POLICY_VERSION = 1
 
@@ -228,3 +235,55 @@ def diff_policy(old: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
         "removed_blocks": removed_blocks,
         "changed_haircuts": changed_haircuts,
     }
+
+
+# ---------------------------------------------------------------------------
+# 4. build_settled_records — compose the settled corpus the policy learns from
+# ---------------------------------------------------------------------------
+
+def build_settled_records(
+    journal_records: List[Dict[str, Any]],
+    settlements: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Union the two ground-truth sources into one settled-records list.
+
+    The reconciled journal is authoritative for tickers I actually journaled (it
+    carries my ``est_prob`` and my ``category``, so it feeds both blocks and
+    calibration/haircuts). Authoritative settlements fill in every *other* market
+    I held — real outcomes with a derived series category, feeding blocks and
+    side-warnings. A ticker present in the journal is NOT re-added from
+    settlements, so nothing is double-counted. Delegates to already-tested pure
+    functions; ``settlements`` must be in ``settlement_pnl`` (normalized) shape.
+    """
+    reconciled, _ = reconcile_outcomes(journal_records, settlements)
+    journaled = {r.get("ticker") for r in reconciled}
+    extra: List[Dict[str, Any]] = []
+    for s in settlements:
+        rec = settlement_to_record(s)
+        if rec and rec.get("ticker") not in journaled:
+            extra.append(rec)
+    return reconciled + extra
+
+
+# ---------------------------------------------------------------------------
+# 5. Policy store — IO layer (the ONLY non-pure functions here)
+# ---------------------------------------------------------------------------
+
+def load_policy(path: str = DEFAULT_POLICY_PATH) -> Optional[Dict[str, Any]]:
+    """Load the active gate policy, or None if none has been saved yet."""
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text())
+    except (ValueError, OSError):
+        return None
+
+
+def save_policy(policy: Dict[str, Any], path: str = DEFAULT_POLICY_PATH) -> None:
+    """Persist the policy atomically (temp file + rename) as the active gate."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(policy, indent=2))
+    tmp.replace(p)

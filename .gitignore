@@ -208,6 +208,8 @@ graphify-out/
 data/runtime/
 data/backtest/
 *.jsonl
+# ...but the shipped demo fixtures MUST travel with the repo (cli policy --demo).
+!tests/fixtures/demo_*.jsonl
 
 # API keys and credentials
 api_keys.txt

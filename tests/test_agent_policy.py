@@ -13,7 +13,9 @@ They cover:
 The inputs mirror the real shapes emitted by ``learnings.edge_breakdown`` and
 ``learnings.calibration_table`` so the policy stays a thin, honest consumer.
 """
-from src.agent.policy import derive_policy, apply_policy, diff_policy
+from src.agent.policy import (
+    derive_policy, apply_policy, diff_policy, build_settled_records,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -213,3 +215,56 @@ def test_diff_of_identical_policies_is_empty():
     assert d["added_blocks"] == []
     assert d["removed_blocks"] == []
     assert d["changed_haircuts"] == []
+
+
+# ---------------------------------------------------------------------------
+# build_settled_records — union of reconciled journal + settlement records
+# ---------------------------------------------------------------------------
+
+def _norm_settlement(ticker, held_side, result, pnl):
+    return {"ticker": ticker, "event": ticker, "held_side": held_side,
+            "count": 10, "won": held_side == result, "result": result,
+            "cost": 3.0, "revenue": 0.0, "fee": 0.0, "pnl": pnl,
+            "settled_time": "2026-06-20T00:00:00Z"}
+
+
+def test_build_settled_records_unions_journal_and_settlements():
+    # One journaled ticker (also settled) + one settlement-only ticker.
+    journal = [{"ts": "t", "strategy": "claude", "ticker": "KXALIENS-27",
+                "side": "no", "action": "buy", "count": 10, "price": 0.9,
+                "est_prob": 0.99, "edge": 0.09, "rationale": "", "category": "aliens",
+                "order_id": "o", "outcome": None}]
+    settlements = [_norm_settlement("KXALIENS-27", "no", "no", 0.8),
+                   _norm_settlement("KXCPI-26JUN", "yes", "no", -3.0)]
+    recs = build_settled_records(journal, settlements)
+    by_ticker = {r["ticker"]: r for r in recs}
+    # Journaled ticker keeps MY category (not the derived series) and gets an outcome.
+    assert by_ticker["KXALIENS-27"]["category"] == "aliens"
+    assert by_ticker["KXALIENS-27"]["outcome"]["won"] is True
+    # Settlement-only ticker is added with a derived series category.
+    assert by_ticker["KXCPI-26JUN"]["category"] == "KXCPI"
+    # No double-counting: the journaled ticker appears exactly once.
+    assert sum(1 for r in recs if r["ticker"] == "KXALIENS-27") == 1
+
+
+# ---------------------------------------------------------------------------
+# Shipped demo fixture — guards `cli policy --demo` from rotting. The fixture
+# MUST always demonstrate all three mechanisms (block, side-warning, haircut).
+# ---------------------------------------------------------------------------
+
+def test_demo_fixture_shows_all_three_mechanisms():
+    from src.agent.settle import load_settlements
+    from src.agent.journal import load_journal
+    from src.agent.learnings import edge_breakdown, calibration_table
+
+    settlements = load_settlements("tests/fixtures/demo_settlements.jsonl")
+    journal = load_journal("tests/fixtures/demo_journal.jsonl")
+    records = build_settled_records(journal, settlements)
+    policy = derive_policy(edge_breakdown(records), calibration_table(records),
+                           date="2026-06-30")
+
+    blocked = {b["label"] for b in policy["blocks"]}
+    assert "KXCPI" in blocked and "KXMARCHMAD" in blocked   # losing categories
+    assert "KXALIENS" not in blocked                        # winner stays allowed
+    assert any(w["label"] == "yes" for w in policy["warnings"])  # side warning
+    assert policy["haircuts"], "demo must show an overconfident band"

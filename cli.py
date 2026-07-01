@@ -427,6 +427,199 @@ def cmd_learnings(args: argparse.Namespace) -> None:
     asyncio.run(_l())
 
 
+def _render_policy(policy: dict) -> None:
+    """Human-readable view of an Edge Policy. Shared by `policy` and `improve`."""
+    meta = policy.get("meta", {})
+    print("=" * 64)
+    print(f"  EDGE POLICY — {meta.get('generated_date', '?')}"
+          f"   (derived from {meta.get('settled_n', 0)} settled trades)")
+    print("=" * 64)
+    print("  The pre-trade gate your OWN settled record earns.")
+    print("  Honest gating: a group with n<5 settled trades gets no opinion.")
+    print()
+
+    print("  BLOCKS — category/method your record proves lose money (hard stop)")
+    blocks = sorted(policy.get("blocks", []), key=lambda b: b.get("pnl", 0))
+    if blocks:
+        for b in blocks:
+            print(f"    {b['dimension']}={b['label'][:22]:<22} "
+                  f"n={b['n']:>3}   pnl=${b['pnl']:>9.2f}")
+    else:
+        print("    (none — no n>=5 category/method is net-negative)")
+    print()
+
+    print("  SIDE WARNINGS — advisory only, never disables a side wholesale")
+    warnings = sorted(policy.get("warnings", []), key=lambda w: w.get("pnl", 0))
+    if warnings:
+        for w in warnings:
+            print(f"    side={w['label'][:6]:<6} n={w['n']:>3}   "
+                  f"pnl=${w['pnl']:>9.2f}")
+    else:
+        print("    (none)")
+    print()
+
+    print("  HAIRCUTS — est_prob bands you're overconfident in (shrink estimate)")
+    haircuts = policy.get("haircuts", [])
+    if haircuts:
+        for h in haircuts:
+            print(f"    {h['band']:<14} n={h['n']:>3}   "
+                  f"overconfident by {h['gap']:.0%} → shrink est_prob to {h['shrink_to']:.2f}")
+    else:
+        print("    (none — every n>=5 band is well-calibrated)")
+    print("=" * 64)
+
+
+def cmd_policy(args: argparse.Namespace) -> None:
+    """Show the data-driven Edge Policy your settled record earns. Read-only.
+
+    Derives the policy LIVE from your local settled data (the authoritative
+    settlements log + your decision journal) and prints it: which category/method
+    groups to BLOCK, which sides to warn on, which est_prob bands to haircut. This
+    is the honest gate — it never asserts a rule a thin (n<5) sample can't support.
+
+    Needs no network and no keys — it reads local files. Pass --demo to run
+    against the shipped fixture (great on a fresh clone), --json for machine
+    output. `cli improve` is what pulls fresh settlements and persists the policy
+    as the active pre-trade gate.
+    """
+    import json
+    from datetime import date as _date
+    from src.agent.journal import load_journal, DEFAULT_JOURNAL_PATH
+    from src.agent.settle import load_settlements, DEFAULT_SETTLEMENTS_PATH
+    from src.agent.learnings import edge_breakdown, calibration_table
+    from src.agent.policy import build_settled_records, derive_policy, load_policy
+
+    today = _date.today().isoformat()
+    if getattr(args, "demo", False):
+        settlements = load_settlements("tests/fixtures/demo_settlements.jsonl")
+        journal = load_journal("tests/fixtures/demo_journal.jsonl")
+    else:
+        settlements = load_settlements(DEFAULT_SETTLEMENTS_PATH)
+        journal = load_journal(DEFAULT_JOURNAL_PATH)
+
+    records = build_settled_records(journal, settlements)
+    policy = derive_policy(edge_breakdown(records), calibration_table(records), date=today)
+
+    if getattr(args, "json", False):
+        print(json.dumps(policy, indent=2))
+        return
+
+    _render_policy(policy)
+    active = load_policy()
+    if active is None:
+        print("  No active gate saved yet. Run `cli improve` to persist this as")
+        print("  the pre-trade gate (data/runtime/edge_policy.json).")
+    elif active != policy:
+        print("  NOTE: the saved active gate differs from this fresh derivation.")
+        print("  Run `cli improve` to update it.")
+
+
+def cmd_improve(args: argparse.Namespace) -> None:
+    """Run the self-improvement loop: settle → reconcile → re-derive → persist.
+
+    The visible heartbeat of the learning system. It pulls Kalshi's authoritative
+    settlements, reconciles them into the decision journal (filling outcomes),
+    re-derives the Edge Policy from the whole settled record, diffs it against the
+    currently-saved gate to show WHAT the newest settlements changed and why, then
+    saves the new policy as the active pre-trade gate.
+
+    Default writes (records settlements, reconciles the journal, saves the policy).
+    Pass --dry for a full read-only preview (no writes anywhere). --json for
+    machine output. Falls back to the local settlements log if the live pull fails
+    (e.g. no keys), so the loop still runs offline.
+    """
+    import json
+    from datetime import date as _date
+    from src.utils.logging_setup import setup_logging
+
+    setup_logging(log_level="WARNING")
+    dry = getattr(args, "dry", False)
+    as_json = getattr(args, "json", False)
+    today = _date.today().isoformat()
+
+    async def _i() -> None:
+        from src.agent.settle import (
+            fetch_settlements, settlement_pnl, record_settlements,
+            load_settlements, DEFAULT_SETTLEMENTS_PATH,
+        )
+        from src.agent.journal import load_journal, write_journal, DEFAULT_JOURNAL_PATH
+        from src.agent.learnings import reconcile_outcomes, edge_breakdown, calibration_table
+        from src.agent.policy import (
+            build_settled_records, derive_policy, diff_policy,
+            load_policy, save_policy, DEFAULT_POLICY_PATH,
+        )
+
+        # 1. SETTLE — pull authoritative outcomes (fall back to local on failure).
+        pulled = 0
+        try:
+            from src.clients.kalshi_client import KalshiClient
+            client = KalshiClient()
+            try:
+                raw = await fetch_settlements(client, limit=300)
+            finally:
+                await client.close()
+            mine = [s for s in (settlement_pnl(r) for r in raw) if s]
+            pulled = len(mine)
+            if not dry and mine:
+                record_settlements(mine, DEFAULT_SETTLEMENTS_PATH)
+        except Exception as exc:  # offline / no keys — use what we already have
+            print(f"  (live settlement pull unavailable: {exc}; using local log)")
+
+        settlements = load_settlements(DEFAULT_SETTLEMENTS_PATH)
+
+        # 2. RECONCILE — join settlements back into the journal.
+        journal = load_journal(DEFAULT_JOURNAL_PATH)
+        reconciled, newly = reconcile_outcomes(journal, settlements)
+        if not dry and newly:
+            write_journal(reconciled, DEFAULT_JOURNAL_PATH)
+
+        # 3. DERIVE — re-derive the policy from the whole settled record.
+        records = build_settled_records(journal, settlements)
+        new_policy = derive_policy(
+            edge_breakdown(records), calibration_table(records), date=today)
+
+        # 4. DIFF — what did the newest settlements change?
+        old_policy = load_policy(DEFAULT_POLICY_PATH) or {
+            "meta": {}, "blocks": [], "warnings": [], "haircuts": []}
+        delta = diff_policy(old_policy, new_policy)
+
+        # 5. PERSIST — save as the active gate (unless dry).
+        if not dry:
+            save_policy(new_policy, DEFAULT_POLICY_PATH)
+
+        if as_json:
+            print(json.dumps({
+                "date": today, "dry": dry, "settlements_pulled": pulled,
+                "reconciled": newly, "diff": delta, "policy": new_policy,
+            }, indent=2))
+            return
+
+        _render_policy(new_policy)
+        print(f"  LOOP: pulled {pulled} settlement(s), reconciled {newly} new outcome(s)")
+        print()
+        print("  CHANGES since the last saved gate:")
+        changed = False
+        for b in delta["added_blocks"]:
+            changed = True
+            print(f"    + BLOCK {b['dimension']}={b['label']} (n={b['n']}, ${b['pnl']:.2f})")
+        for b in delta["removed_blocks"]:
+            changed = True
+            print(f"    - unblock {b['dimension']}={b['label']}")
+        for h in delta["changed_haircuts"]:
+            changed = True
+            print(f"    ~ haircut {h['band']}: shrink {h['was']} → {h['now']}")
+        if not changed:
+            print("    (no change — the newest settlements didn't move the gate)")
+        print()
+        if dry:
+            print("  DRY: nothing written (no settlements recorded, journal + gate untouched).")
+        else:
+            print(f"  Saved active gate → {DEFAULT_POLICY_PATH}")
+        print("=" * 64)
+
+    asyncio.run(_i())
+
+
 def cmd_edge(args: argparse.Namespace) -> None:
     """Prove (or disprove) edge against the sharp Kalshi book — the headline metric.
 
@@ -1339,6 +1532,46 @@ def build_parser() -> argparse.ArgumentParser:
     p_edge.add_argument("--json", action="store_true",
                         help="Emit machine-readable JSON instead of the human table")
     p_edge.set_defaults(func=cmd_edge)
+
+    # --- policy ---
+    p_policy = subparsers.add_parser(
+        "policy",
+        help="Show the data-driven Edge Policy your settled record earns (blocks/warnings/haircuts). Read-only.",
+        description=(
+            "Derive and display the Edge Policy your OWN settled record earns: "
+            "which category/method groups to BLOCK (they lose money over n>=5 "
+            "settled trades), which sides to warn on, and which est_prob bands to "
+            "haircut (you're overconfident there). This is the pre-trade gate that "
+            "closes the self-improvement loop — it never asserts a rule a thin "
+            "(n<5) sample can't support. Reads local files; needs no keys. Pass "
+            "--demo to run against the shipped fixture, --json for machine output."
+        ),
+    )
+    p_policy.add_argument("--demo", action="store_true",
+                          help="Run against the shipped demo fixture (works on a fresh clone)")
+    p_policy.add_argument("--json", action="store_true",
+                          help="Emit machine-readable JSON instead of the human view")
+    p_policy.set_defaults(func=cmd_policy)
+
+    # --- improve ---
+    p_improve = subparsers.add_parser(
+        "improve",
+        help="Run the self-improvement loop: settle → reconcile → re-derive the Edge Policy → persist the gate",
+        description=(
+            "The visible heartbeat of the learning system. Pull Kalshi's "
+            "authoritative settlements, reconcile them into the decision journal, "
+            "re-derive the Edge Policy from the whole settled record, diff it "
+            "against the saved gate to show WHAT the newest settlements changed, "
+            "then save the new policy as the active pre-trade gate. Default writes; "
+            "pass --dry for a full read-only preview. Falls back to the local "
+            "settlements log when the live pull is unavailable (no keys/offline)."
+        ),
+    )
+    p_improve.add_argument("--dry", action="store_true",
+                           help="Read-only preview — record nothing, write no journal or gate")
+    p_improve.add_argument("--json", action="store_true",
+                           help="Emit machine-readable JSON instead of the human view")
+    p_improve.set_defaults(func=cmd_improve)
 
     # --- verify ---
     p_verify = subparsers.add_parser(
