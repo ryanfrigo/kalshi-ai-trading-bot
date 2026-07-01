@@ -1194,20 +1194,25 @@ def cmd_close_all(args: argparse.Namespace) -> None:
 
 
 def cmd_backtest(args: argparse.Namespace) -> None:
-    """Run backtests (placeholder)."""
-    print("=" * 56)
-    print("  BACKTESTING")
-    print("=" * 56)
+    """Honest status of backtesting — and what to use instead today."""
+    print("=" * 64)
+    print("  BACKTESTING — not shipped yet, and here's the honest why")
+    print("=" * 64)
     print()
-    print("  Backtesting engine coming soon.")
+    print("  A real strategy backtest needs a market-price + settled-outcome")
+    print("  corpus captured over time. This repo does not ship one (the local")
+    print("  market catalog has no price history and no settled outcomes), so a")
+    print("  backtest engine would have nothing real to score. Building that")
+    print("  capture corpus is the next slice; a backtest follows it.")
     print()
-    print("  Planned features:")
-    print("    - Historical market replay")
-    print("    - Strategy parameter optimization")
-    print("    - Walk-forward analysis")
-    print("    - Monte Carlo simulation")
+    print("  What works TODAY — the feedback loop that needs no corpus:")
+    print("    python cli.py edge       prove/disprove edge on your settled trades")
+    print("    python cli.py policy     the gate your settled record earns")
+    print("    python cli.py improve    settle -> learn -> re-derive the gate")
     print()
-    print("=" * 56)
+    print("  Your own settled outcomes constrain your next trade. That is the")
+    print("  self-improvement loop — and it's real, not a placeholder.")
+    print("=" * 64)
 
 
 def cmd_health(args: argparse.Namespace) -> None:

@@ -48,6 +48,31 @@ The honest answer is often "no edge yet, keep a track record." That is the featu
 
 ---
 
+## The Self-Improvement Loop
+
+Measuring edge is half the story. The other half is **letting what you measured constrain what you trade next** — automatically. Most bots decide and measure in separate silos; here the two are wired together.
+
+```bash
+python cli.py policy      # the gate your OWN settled record earns
+python cli.py improve     # settle → learn → re-derive the gate → persist
+```
+
+`cli improve` pulls Kalshi's authoritative settlements, reconciles them into your decision journal, and re-derives a machine-readable **Edge Policy** from your whole settled record:
+
+| Rule | Derived from | Effect on the next trade |
+|---|---|---|
+| **Block** | a category/method with ≥5 settled trades and negative realized P&L | `cli trade` **refuses** it (override with `--override-policy`, and the override is recorded) |
+| **Side warning** | a net-negative *side* | advisory only — a losing side never disables your whole strategy, because losses usually concentrate in a few categories, not a side |
+| **Haircut** | an `est_prob` band where you're ≥10pp overconfident | shrinks the *journaled* estimate to your calibrated win-rate, so future calibration self-corrects |
+
+The same honesty rule as `edge` applies everywhere: **a group with fewer than 5 settled trades earns no opinion** — the policy never invents a constraint the data can't support. It only ever *tightens* from evidence; re-enabling a group stays your call.
+
+This is the loop, closed: **decide → trade → settle → measure → re-derive the policy → the policy gates the next decision.** Your outcomes feed forward. Run it against a shipped example with `cli policy --demo` (no keys needed), then point it at your own record.
+
+> Not a backtest. A backtest needs a captured price/outcome corpus this repo doesn't ship yet (`cli backtest` explains why). The self-improvement loop needs no corpus — it learns from the settlements you already have.
+
+---
+
 ## Quick Start
 
 ```bash
@@ -94,13 +119,15 @@ The toolkit is built to be driven by an agent (Claude, or anything else) through
 | `settle` | read-only* | Pull Kalshi's authoritative settlements; report realized win-rate / P&L (*writes the local settlements log) |
 | `learnings` | writes | Reconcile outcomes → calibration + per-category/side edge → append genuinely new candidate learnings. `--dry` for read-only |
 | `edge` | read-only | **The headline** — Brier / log-loss / edge-vs-book + the gated, forward-only verdict |
+| `policy` | read-only | The data-driven **Edge Policy** your settled record earns: block losing categories, warn on losing sides, haircut overconfident bands. `--demo` runs on a shipped fixture |
+| `improve` | writes | **The self-improvement loop** — settle → reconcile → re-derive the policy → diff what changed → persist the gate. `--dry` for read-only |
 | `scores` · `history` · `status` | read-only | Category scores, closed-trade history, live balance/positions |
 
 Plus `run` / `daily` (strategy loops) and `health` (connectivity check). `trade` and `close` both default to a dry-run preview and route through the risk governor + per-position cap — the same guard stack everything else uses.
 
 **The `kalshi-trade` skill** (`.claude/skills/kalshi-trade/SKILL.md`) encodes the disciplined process for managing the live account on each loop tick: assess state, surface edge, research true probabilities, decide under strict risk rules, execute guarded orders, journal the prediction, and measure realized edge.
 
-**MCP server** (`src/mcp_server.py`) — a first-mover [Model Context Protocol](https://modelcontextprotocol.io) server. No official Kalshi MCP exists; this thin wrapper exposes the same governor-gated tools (`brief`, `settle`, `learnings`, `edge`, `scores`, `history`, `hunt`, `status`, plus the mutating `trade`/`close`) so you can **drive the toolkit from Claude Desktop or Claude Code — running on your own keys, your key never leaving your machine.** Read-only by default; the two mutating tools require an explicit `confirm=true`. See **[docs/MCP.md](docs/MCP.md)**.
+**MCP server** (`src/mcp_server.py`) — a first-mover [Model Context Protocol](https://modelcontextprotocol.io) server. No official Kalshi MCP exists; this thin wrapper exposes the same governor-gated tools (`brief`, `settle`, `learnings`, `edge`, `policy`, `scores`, `history`, `hunt`, `status`, plus the mutating `trade`/`close`) so you can **drive the toolkit from Claude Desktop or Claude Code — running on your own keys, your key never leaving your machine.** Read-only by default; the two mutating tools require an explicit `confirm=true`. See **[docs/MCP.md](docs/MCP.md)**.
 
 > `hunt` (a broad live-book scan for edge candidates, backed by `scripts/hunt_candidates.py`) is surfaced through the MCP server today. Its output is research material to investigate — not a buy list.
 
@@ -113,6 +140,7 @@ This repo gives you the building blocks. The example strategies use them — you
 | Component | What it does | Where it lives |
 |---|---|---|
 | **Edge harness** | Brier / log-loss / edge-vs-book + forward-only honesty verdict (pure, deterministic) | `src/agent/edge.py` |
+| **Edge Policy** | Turns the settled record into a pre-trade gate (block losing categories, warn on losing sides, haircut overconfident bands); closes the self-improvement loop | `src/agent/policy.py` |
 | **Learnings system** | Joins settlements back into the decision journal; calibration table + realized edge → evolving learnings | `src/agent/learnings.py` |
 | **Risk governor** | Daily-loss + drawdown kill switch + manual halt, authoritative for every live order | `src/risk/risk_governor.py` |
 | **Kalshi client** | Authenticated REST + WebSocket client (RSA signing, retries, rate-limit handling) | `src/clients/kalshi_client.py` |

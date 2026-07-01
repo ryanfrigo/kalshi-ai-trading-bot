@@ -38,6 +38,13 @@ memory — read it if you lack context.
      `edge = true_no_prob − no_ask ≥ 0.05` (covers ~1¢ fee + safety). Use YOUR number, not the market's.
    - Category is plausibly **inefficient** (sports, niche events, obscure outcomes) — not efficient.
    - It clears the governor and the position cap.
+   - **It clears the Edge Policy gate.** Run `cli.py policy` — the data-driven gate
+     your OWN settled record earns. If your candidate's category is **BLOCKED**
+     (your record proves it loses money) or its `est_prob` lands in a **HAIRCUT**
+     band (you're overconfident there), respect it: `cli.py trade` will refuse a
+     blocked category. Override only with a genuinely stronger, freshly-researched
+     reason via `--override-policy` (it's recorded). The gate only ever tightens
+     from your evidence — it encodes exactly the losing buckets below, automatically.
    - **It passes the adversarial-verify gate.** Before any live buy, run
      `cli.py verify --ticker T` — it researches the catalyst + true-YES, runs a
      SKEPTIC that tries to REFUTE the fade, then a deterministic gate recomputes the
@@ -58,7 +65,13 @@ memory — read it if you lack context.
    Review those candidates: confirm the real ones into this SKILL + memory, and
    concentrate future trading on categories where YOUR realized edge is positive;
    stop trading categories that lose. (`cli.py settle`/`history` remain for raw P&L.)
-8. **REPORT** — summarize trades, reasoning, and the equity delta. Then continue the loop.
+8. **IMPROVE** — run `cli.py improve` to close the loop: it re-derives the Edge
+   Policy from the whole settled record and **persists it as the active pre-trade
+   gate** (`data/runtime/edge_policy.json`), printing the diff of what the newest
+   settlements changed. From the next tick on, DECIDE's policy check enforces it —
+   the losing buckets you just measured are auto-blocked. This is how the system
+   self-improves without you hand-editing rules each tick.
+9. **REPORT** — summarize trades, reasoning, and the equity delta. Then continue the loop.
 
 ## Hard rules (never break)
 - Respect the governor. Halted ⇒ no new buys. The manual kill switch is

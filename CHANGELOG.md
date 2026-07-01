@@ -5,6 +5,37 @@ All notable changes to the Kalshi AI Trading Bot project will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **The self-improvement loop is closed.** A new data-driven **Edge Policy**
+  (`src/agent/policy.py`) turns your settled track record into a pre-trade gate:
+  it **blocks** category/method groups your record proves lose money (≥5 settled
+  trades, negative realized P&L), **warns** on a net-negative side (advisory — a
+  losing side never disables the whole strategy), and **haircuts** `est_prob`
+  bands where you're ≥10pp overconfident. Honest gating throughout: a group with
+  fewer than 5 settled trades earns no rule.
+- **`cli policy`** — read-only view of the gate your settled record earns
+  (`--demo` runs on a shipped fixture, no keys needed; `--json` for machines).
+- **`cli improve`** — the loop end to end: settle → reconcile → re-derive the
+  policy → diff what the newest settlements changed → persist the active gate.
+  `--dry` previews; falls back to the local settlements log when offline.
+- **Edge Policy gate in `place_guarded_order`.** A blocked category/method is a
+  hard refusal (`blocked_by_policy`); the agent keeps full authority via
+  `cli trade --override-policy` (the override is recorded). Backward-compatible:
+  no policy file means no opinion, so nothing changes until you run `improve`.
+- **MCP `policy` tool** — the gate is now drivable from Claude Desktop/Code
+  (read-only, derives fresh in memory).
+- `settle.settlement_to_record` / `series_category` — adapt Kalshi's
+  authoritative settlements into journal-shaped records so the policy learns
+  from real outcomes, with the Kalshi series prefix as the category.
+
+### Changed
+- `cli backtest` no longer claims a fake "coming soon" engine. It honestly
+  explains that a strategy backtest needs a captured price/outcome corpus this
+  repo doesn't ship yet, and points to the feedback loop (`edge`/`policy`/
+  `improve`) that works today without one.
+
 ## [2.0.1] - 2026-06-12
 
 ### Fixed

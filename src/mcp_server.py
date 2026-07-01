@@ -154,6 +154,30 @@ async def edge() -> Dict[str, Any]:
 
 
 @mcp.tool(annotations=_READ_ONLY)
+async def policy() -> Dict[str, Any]:
+    """The data-driven Edge Policy your settled record earns — the pre-trade gate
+    that closes the self-improvement loop. Returns category/method BLOCKS (groups
+    with >=5 settled trades and negative realized P&L), side WARNINGS (advisory —
+    a losing side never disables the strategy), and est_prob HAIRCUTS
+    (overconfident bands). Honest gating: a group with n<5 earns no rule.
+    Read-only — derives fresh in memory and writes nothing (persisting the active
+    gate is ``cli improve``). Mirrors ``cli.py policy --json``."""
+    from datetime import date as _date
+
+    from src.agent.settle import fetch_settlements, settlement_pnl
+    from src.agent.journal import load_journal
+    from src.agent.learnings import edge_breakdown, calibration_table
+    from src.agent.policy import build_settled_records, derive_policy
+
+    today = _date.today().isoformat()
+    raw = await _with_client(lambda c: fetch_settlements(c, limit=300))
+    settlements = [s for s in (settlement_pnl(r) for r in raw) if s]
+    journal = load_journal()
+    records = build_settled_records(journal, settlements)
+    return derive_policy(edge_breakdown(records), calibration_table(records), date=today)
+
+
+@mcp.tool(annotations=_READ_ONLY)
 async def status() -> Dict[str, Any]:
     """Portfolio balance, position value, and active event positions. Read-only.
     Mirrors ``cli.py status`` as structured JSON."""
