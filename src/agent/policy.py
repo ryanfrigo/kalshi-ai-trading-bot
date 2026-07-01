@@ -121,6 +121,9 @@ def derive_policy(
                 "gap": round(gap, 4),
             })
 
+    # Total settled corpus size (every settled record has exactly one side), for
+    # context in the header. NOT the sample behind any one rule — each block /
+    # warning / haircut carries its own ``n``.
     settled_n = sum(int(g.get("n", 0)) for g in by_side.values())
 
     return {
@@ -179,6 +182,9 @@ def apply_policy(policy: Dict[str, Any], decision: Dict[str, Any]) -> Dict[str, 
     est_prob = decision.get("est_prob")
     if est_prob is not None:
         p = float(est_prob)
+        # Haircut bands are disjoint by construction (they come from
+        # calibration_table's contiguous, non-overlapping buckets), so the first
+        # match is the only match — order is irrelevant to correctness.
         for h in policy.get("haircuts", []):
             if _in_band(p, h.get("lo"), h.get("hi")):
                 shrink_to = h.get("shrink_to")
@@ -241,6 +247,26 @@ def diff_policy(old: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
 # 4. build_settled_records — compose the settled corpus the policy learns from
 # ---------------------------------------------------------------------------
 
+def merge_settlement_records(
+    reconciled: List[Dict[str, Any]],
+    settlements: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Union an ALREADY-reconciled journal with settlement-derived records.
+
+    A ticker present in the reconciled journal is NOT re-added from settlements,
+    so nothing is double-counted. Callers that have already reconciled (e.g.
+    ``cli improve``, which reconciles once for the journal write-back) pass their
+    reconciled list here to avoid reconciling twice. PURE.
+    """
+    journaled = {r.get("ticker") for r in reconciled}
+    extra: List[Dict[str, Any]] = []
+    for s in settlements:
+        rec = settlement_to_record(s)
+        if rec and rec.get("ticker") not in journaled:
+            extra.append(rec)
+    return reconciled + extra
+
+
 def build_settled_records(
     journal_records: List[Dict[str, Any]],
     settlements: List[Dict[str, Any]],
@@ -251,18 +277,11 @@ def build_settled_records(
     carries my ``est_prob`` and my ``category``, so it feeds both blocks and
     calibration/haircuts). Authoritative settlements fill in every *other* market
     I held — real outcomes with a derived series category, feeding blocks and
-    side-warnings. A ticker present in the journal is NOT re-added from
-    settlements, so nothing is double-counted. Delegates to already-tested pure
-    functions; ``settlements`` must be in ``settlement_pnl`` (normalized) shape.
+    side-warnings. Delegates to already-tested pure functions; ``settlements``
+    must be in ``settlement_pnl`` (normalized) shape.
     """
     reconciled, _ = reconcile_outcomes(journal_records, settlements)
-    journaled = {r.get("ticker") for r in reconciled}
-    extra: List[Dict[str, Any]] = []
-    for s in settlements:
-        rec = settlement_to_record(s)
-        if rec and rec.get("ticker") not in journaled:
-            extra.append(rec)
-    return reconciled + extra
+    return merge_settlement_records(reconciled, settlements)
 
 
 # ---------------------------------------------------------------------------

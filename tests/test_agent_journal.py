@@ -21,6 +21,17 @@ def test_make_decision_record_core_fields():
     assert r["outcome"] is None  # unsettled until settle() attaches it
 
 
+def test_policy_note_recorded_when_present_absent_otherwise():
+    # A policy override/haircut must land in the DURABLE journal, not just the
+    # ephemeral response — the "override is recorded" claim depends on this.
+    without = make_decision_record(ticker="X", side="no", count=1, price=0.9)
+    assert "policy_note" not in without
+    with_note = make_decision_record(
+        ticker="X", side="no", count=1, price=0.9,
+        policy_note={"overridden_block": ["category=KXCPI loses money"]})
+    assert with_note["policy_note"] == {"overridden_block": ["category=KXCPI loses money"]}
+
+
 def test_summarize_empty():
     s = summarize_journal([])
     assert s["total"] == 0 and s["settled"] == 0 and s["wins"] == 0

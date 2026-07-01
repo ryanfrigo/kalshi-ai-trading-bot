@@ -298,15 +298,19 @@ async def trade(
     category: str = "",
     max_position_pct: float = 0.10,
     confirm: bool = False,
+    override_policy: bool = False,
 ) -> Dict[str, Any]:
     """Place ONE guarded, journaled order — the agent's hands.
 
     SAFETY: defaults to a DRY-RUN preview (``confirm=False``) — it runs the full
-    guard stack (risk-governor halt check, market-tradeable check, 1..99c price
-    sanity, the 10% per-position + cash size cap) and returns what WOULD happen,
-    placing NO order. Only ``confirm=True`` places a live order, and it still goes
-    through the same guards via ``place_guarded_order``. The governor / kill switch /
-    10% cap are authoritative; this tool adds no path around them.
+    guard stack (risk-governor halt check, Edge Policy gate, market-tradeable
+    check, 1..99c price sanity, the 10% per-position + cash size cap) and returns
+    what WOULD happen, placing NO order. Only ``confirm=True`` places a live
+    order, and it still goes through the same guards via ``place_guarded_order``.
+    The governor / kill switch / 10% cap are authoritative; this tool adds no path
+    around them. ``override_policy=True`` overrides an Edge Policy BLOCK (recorded
+    in the journal) — the same full-authority escape hatch as ``cli trade
+    --override-policy``.
     """
     from src.agent.toolbelt import place_guarded_order
 
@@ -314,6 +318,7 @@ async def trade(
         c, ticker=ticker, side=side, count=count, price=price,
         rationale=rationale, est_prob=est_prob, category=category,
         max_position_pct=max_position_pct, dry=not confirm,
+        override_policy=override_policy,
     ))
 
 

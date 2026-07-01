@@ -546,7 +546,7 @@ def cmd_improve(args: argparse.Namespace) -> None:
         from src.agent.journal import load_journal, write_journal, DEFAULT_JOURNAL_PATH
         from src.agent.learnings import reconcile_outcomes, edge_breakdown, calibration_table
         from src.agent.policy import (
-            build_settled_records, derive_policy, diff_policy,
+            merge_settlement_records, derive_policy, diff_policy,
             load_policy, save_policy, DEFAULT_POLICY_PATH,
         )
 
@@ -574,8 +574,9 @@ def cmd_improve(args: argparse.Namespace) -> None:
         if not dry and newly:
             write_journal(reconciled, DEFAULT_JOURNAL_PATH)
 
-        # 3. DERIVE — re-derive the policy from the whole settled record.
-        records = build_settled_records(journal, settlements)
+        # 3. DERIVE — re-derive the policy from the whole settled record. Reuse
+        # the reconciled list from step 2 (single reconciliation per run).
+        records = merge_settlement_records(reconciled, settlements)
         new_policy = derive_policy(
             edge_breakdown(records), calibration_table(records), date=today)
 

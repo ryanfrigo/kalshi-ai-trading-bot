@@ -18,7 +18,7 @@ per-position cap.
   environment exactly as the CLI does.
 - **Your key never leaves your machine.** This server opens no outbound channel of its
   own; it only talks to Kalshi's API, the same as `cli.py`.
-- **Read-only by default; confirm to trade.** Eight tools are read-only. The two mutating
+- **Read-only by default; confirm to trade.** Nine tools are read-only. The two mutating
   tools (`trade`, `close`) default to a **dry-run preview** — they run the full guard
   stack and report what *would* happen, but place no order. You must pass
   `confirm=true` to place a live order, and even then it goes through the governor + cap.
@@ -41,6 +41,7 @@ pip install 'mcp>=1.2'
 | `settle`    | read-only*  | Pull Kalshi settlements; summarize realized win-rate / P&L (*writes local log)|
 | `learnings` | read-only*  | Reconcile outcomes → calibration + edge + candidate learnings (`dry=true` default)|
 | `edge`      | read-only   | **The headline:** Brier / log-loss / edge-vs-book + a gated verdict          |
+| `policy`    | read-only   | The Edge Policy your settled record earns (blocks / warnings / haircuts) — the pre-trade gate |
 | `scores`    | read-only   | Category scores, win rates, allocation limits                                |
 | `history`   | read-only   | Closed-trade history from the local database                                 |
 | `hunt`      | read-only   | Broad live-book scan for edge candidates (research material, not a buy list) |

@@ -31,13 +31,17 @@ def make_decision_record(
     ts: Optional[str] = None,
     action: str = "buy",
     method: Optional[str] = None,
+    policy_note: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build one journal record. ``outcome`` is None until the market settles.
 
     ``method`` (e.g. ``"manual"`` | ``"workflow"``) is an OPTIONAL tag for which
     research approach produced the trade, so the learnings system can later learn
-    which one actually pays. It is backward-compatible: when omitted the key is
-    simply absent, so existing records and callers are unaffected.
+    which one actually pays. ``policy_note`` is an OPTIONAL durable record of any
+    Edge Policy interaction (an overridden block, or an applied haircut) so the
+    audit trail reflects it — not just the ephemeral tool response. Both are
+    backward-compatible: when omitted the key is simply absent, so existing
+    records and callers are unaffected.
     """
     record = {
         "ts": ts or datetime.now(timezone.utc).isoformat(),
@@ -56,6 +60,8 @@ def make_decision_record(
     }
     if method is not None:
         record["method"] = method
+    if policy_note is not None:
+        record["policy_note"] = policy_note
     return record
 
 

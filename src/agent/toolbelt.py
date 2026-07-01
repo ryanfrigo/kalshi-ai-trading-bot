@@ -130,8 +130,11 @@ async def place_guarded_order(
     policy (``data/runtime/edge_policy.json``, kept fresh by ``cli improve``).
     No policy file -> no opinion -> proceeds (backward-compatible). A BLOCK is a
     hard refusal unless ``override_policy=True`` (the agent retains full authority,
-    but the override is recorded). A HAIRCUT shrinks the *journaled* est_prob to
-    the policy's calibrated value so future calibration reflects the correction.
+    but the override is recorded in the journal via ``policy_note``). A HAIRCUT
+    shrinks the *journaled* est_prob to the policy's calibrated value; if that
+    correction pushes edge <= 0 at the chosen price, the order is aborted
+    (``reason="haircut_erased_edge"``) rather than placed as a -EV trade —
+    ``override_policy=True`` forces it through anyway.
     """
     from src.risk.risk_governor import RiskGovernor
     from src.utils.market_prices import get_market_prices, is_tradeable_market
@@ -147,6 +150,7 @@ async def place_guarded_order(
 
     # Edge Policy gate — the settled record constrains the next decision.
     policy_note: Optional[Dict[str, Any]] = None
+    haircut_applied = False
     policy = load_policy(policy_path or DEFAULT_POLICY_PATH)
     if policy:
         verdict = apply_policy(policy, {
@@ -160,6 +164,7 @@ async def place_guarded_order(
             policy_note = {"overridden_block": verdict["reasons"]}
         elif verdict["verdict"] == "HAIRCUT":
             est_prob = verdict.get("adjusted_est_prob", est_prob)
+            haircut_applied = True
             policy_note = {"haircut": verdict["reasons"],
                            "est_prob_shrunk_to": est_prob}
 
@@ -182,6 +187,16 @@ async def place_guarded_order(
         return {"ok": False, "reason": f"size capped to 0 ({cap_reason or 'insufficient cash'})"}
 
     edge = round(est_prob - price_cents / 100.0, 4) if est_prob is not None else None
+
+    # If the policy haircut shrank est_prob below the price, the corrected
+    # estimate says this is a losing entry — honoring the gate means NOT placing
+    # it (the whole point was "your record proves you're overconfident here").
+    # The agent can still force it with override_policy.
+    if haircut_applied and not override_policy and edge is not None and edge <= 0:
+        return {"ok": False, "reason": "haircut_erased_edge",
+                "policy_note": policy_note, "edge_after_haircut": edge,
+                "price_cents": price_cents}
+
     coid = str(uuid.uuid4())
 
     if dry:
@@ -207,6 +222,7 @@ async def place_guarded_order(
             ticker=ticker, side=side, count=n, price=price_cents / 100.0,
             est_prob=est_prob, edge=edge, rationale=rationale, category=category,
             strategy="claude", order_id=result.get("order_id"),
+            policy_note=policy_note,
         ), journal_path or DEFAULT_JOURNAL_PATH)
     if policy_note:
         result["policy_note"] = policy_note

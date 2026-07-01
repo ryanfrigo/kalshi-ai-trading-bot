@@ -98,7 +98,10 @@ def settlement_to_record(settlement: Dict[str, Any]) -> Optional[Dict[str, Any]]
         "order_id": None,
         "source": "settlement",
         "outcome": {
-            "won": bool(settlement.get("won")),
+            # Recompute from (held side == result) rather than trusting the
+            # upstream ``won`` — this drives the policy's block signal, so keep it
+            # decoupled from any future change to settlement_pnl's semantics.
+            "won": side == result,
             "pnl": round(float(settlement.get("pnl") or 0.0), 4),
         },
     }
