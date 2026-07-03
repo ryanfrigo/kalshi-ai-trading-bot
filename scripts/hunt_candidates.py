@@ -175,10 +175,14 @@ async def main():
         print(f"scanned {len(events)} events / {nmkts} markets")
         longshot_no, directional = scan(events, now)
         ls_top, dir_top = longshot_no[:args.top], directional[:args.top]
+        # Sports dominate the volume-sorted list and are the wrong pond (the
+        # liquid book IS the sharp price) — surface the non-sports pool too.
+        ns_top = [r for r in longshot_no if r.get("cat") != "Sports"][:args.top]
         if not args.no_books:
             print("enriching shortlist with LIVE orderbooks...")
             await enrich(client, ls_top)
             await enrich(client, dir_top)
+            await enrich(client, [r for r in ns_top if "no_ask" not in r])
     finally:
         try:
             await client.close()
@@ -186,10 +190,12 @@ async def main():
             pass
 
     _print("LONGSHOT-NO CANDIDATES (fade overpriced lottery-ticket YES)", ls_top, not args.no_books)
+    _print("LONGSHOT-NO NON-SPORTS (the pond where researched fades actually pay)", ns_top, not args.no_books)
     _print("DIRECTIONAL near-close liquid (research vs sharp consensus)", dir_top, not args.no_books)
     try:
         with open(args.out, "w") as f:
-            json.dump({"longshot_no": ls_top, "directional": dir_top}, f, indent=2)
+            json.dump({"longshot_no": ls_top, "longshot_no_nonsports": ns_top,
+                       "directional": dir_top}, f, indent=2)
         print(f"\nwrote {args.out}")
     except Exception as ex:  # noqa: BLE001
         print(f"\n(could not write {args.out}: {ex})")
