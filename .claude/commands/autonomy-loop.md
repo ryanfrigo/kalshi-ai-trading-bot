@@ -13,7 +13,13 @@ steps in order; each tick must end with a report.
 
 Invoke the `kalshi-trade` skill and follow it end to end:
 ASSESS → SURFACE EDGE → RESEARCH → DECIDE → EXECUTE → JOURNAL →
+FILLS (`cli.py fills` — void journaled orders that never executed) →
 LEARN (`cli.py learnings`) → IMPROVE (`cli.py improve`).
+
+Attribution first: this account is ALSO traded manually by Ryan. If positions,
+cash, or orders changed in ways you didn't do, verify attribution (journal,
+fills, daemon logs) before managing anything — and never exit or resize a
+position you didn't place without asking him.
 
 Non-negotiables:
 - Respect the governor and the kill switch (`data/runtime/TRADING_HALTED`).
