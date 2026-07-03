@@ -1,12 +1,13 @@
 ---
-description: One full autonomy tick — trade the live Kalshi account, improve the project, ship to GitHub. Rerun it (or wrap in /loop) to keep the mission going.
+description: One full autonomy tick — trade the live Kalshi account, publish the honest track record, grow the repo, ship to GitHub. Rerun it (or wrap in /loop) to keep the mission going.
 ---
 
 # Autonomy loop — one tick
 
-Run one complete cycle of the standing mission: trade Ryan's live Kalshi account
-profitably with Claude as the decision engine, and keep compounding the project.
-Do the steps in order; each tick must end with a report.
+Two standing goals, one loop: **trade the live account profitably** and **grow the
+GitHub repo**. They're wired together — every trading tick produces the honest,
+settlement-grounded track record that is this repo's unique growth asset. Do the
+steps in order; each tick must end with a report.
 
 ## 1. TRADE (always first)
 
@@ -21,17 +22,29 @@ Non-negotiables:
 - Near a drawdown limit, deploy conservatively; halted ⇒ hold the sound book, no new buys.
 - If a position settles today, check its live status before assuming it's fine.
 
-## 2. IMPROVE THE PROJECT (one finished slice)
+## 2. PUBLISH THE RECORD (every tick)
 
-Pick ONE small, high-value improvement and finish it — code with tests, or docs. Priority:
-1. Whatever the trading tick just exposed (bug, missing data, friction in the loop).
-2. The roadmap in memory (next up: capture a price-history corpus so a real backtest is possible).
-3. Repo health: CI failures, open issues/PRs, doc drift. This is a 500★ public repo — README honesty is a feature.
+Regenerate `docs/TRACK_RECORD.md` from real data — equity + drawdown, settled P&L
+by category, the calibration table, current Edge Policy blocks, and the `cli.py edge`
+verdict. Losses included; that honesty IS the brand ("prove your edge, don't claim it")
+and the reason to star the repo. If the generator doesn't exist yet, building it is
+this tick's GROW slice. Never publish keys, account IDs, or anything beyond what the
+CLI's own reports print.
+
+## 3. GROW (one finished slice, rotate by value)
+
+Pick ONE lane and finish a slice — code with tests, or docs:
+- **Product** — whatever the trading tick just exposed, else the roadmap in memory
+  (next: price-history corpus → real backtester, the open-core future).
+- **Community** — triage any open issues/PRs same-tick (respond, label, fix or close);
+  maintain good-first-issues; tag a release with changelog when something meaningful landed.
+- **Distribution (draft-only)** — draft release notes or a post (HN/Reddit/X) for Ryan
+  to publish. Never post outward-facing content yourself; leave drafts in `docs/drafts/`.
 
 Keep it surgical (Karpathy guidelines). Don't start what one tick can't finish;
 if a slice is too big, land the first shippable piece and note the rest in memory.
 
-## 3. SHIP
+## 4. SHIP
 
 - Run the suite: `PYTHONPATH=. .venv/bin/python -m pytest -q`. Ship only on green.
 - Commit with a conventional message; `git push` the current branch. Never force-push.
@@ -39,15 +52,15 @@ if a slice is too big, land the first shippable piece and note the rest in memor
   `trading_system.db` are gitignored — verify with `git status` before committing).
 - If on `main`, branch first.
 
-## 4. REPORT + MEMORY
+## 5. REPORT + MEMORY
 
 End the tick with: equity and day P&L, trades placed (or why none), what the
-learn/improve loop changed in the Edge Policy, and what shipped to GitHub.
-If a durable lesson emerged, write it to the memory directory (update the
-existing file if one covers it).
+learn/improve loop changed in the Edge Policy, what shipped to GitHub, and which
+GROW lane ran. If a durable lesson emerged, write it to the memory directory
+(update the existing file if one covers it).
 
 ---
 
 **How to rerun (for Ryan):**
 - One tick: `/autonomy-loop`
-- Keep it running: `/loop /autonomy-loop` (self-paced) or `/loop 1h /autonomy-loop`
+- Keep it running: `/loop /autonomy-loop` (self-paced, ~1–2 ticks/day is plenty) or `/loop 4h /autonomy-loop`
