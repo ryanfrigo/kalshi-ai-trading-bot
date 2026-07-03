@@ -735,6 +735,65 @@ def _print_edge_report(report: dict, as_json: bool) -> None:
     print("=" * 70)
 
 
+def cmd_report(args: argparse.Namespace) -> None:
+    """Render the public track record (docs/TRACK_RECORD.md) from persisted data.
+
+    Reads only what the loop already persists — the settlements corpus, the
+    decision journal, and the saved Edge Policy — and renders the honest public
+    track-record page. Works fully offline; the live account snapshot is
+    best-effort and the page notes its absence rather than failing. Pass
+    --stdout to print instead of writing the file.
+    """
+    from datetime import date as _date
+    from pathlib import Path
+    from src.utils.logging_setup import setup_logging
+
+    setup_logging(log_level="WARNING")
+
+    from src.agent.edge import edge_report
+    from src.agent.journal import load_journal
+    from src.agent.learnings import reconcile_outcomes
+    from src.agent.policy import load_policy
+    from src.agent.report import render_track_record
+    from src.agent.settle import load_settlements, summarize_settlements
+
+    settlements = load_settlements()
+    journal = load_journal()
+    # In-memory only — this command never writes journal or settlement state.
+    reconciled, _ = reconcile_outcomes(journal, settlements)
+
+    equity = None
+    try:
+        async def _brief() -> dict:
+            from src.clients.kalshi_client import KalshiClient
+            from src.agent.toolbelt import account_brief
+
+            client = KalshiClient()
+            try:
+                return await account_brief(client)
+            finally:
+                await client.close()
+
+        equity = asyncio.run(_brief())
+    except Exception:
+        pass  # offline render is a supported mode, not an error
+
+    md = render_track_record(
+        date=_date.today().isoformat(),
+        equity=equity,
+        settle_summary=summarize_settlements(settlements),
+        edge=edge_report(reconciled, _date.today().isoformat()),
+        policy=load_policy(),
+    )
+    if getattr(args, "stdout", False):
+        print(md)
+        return
+    out = Path("docs/TRACK_RECORD.md")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(md, encoding="utf-8")
+    print(f"wrote {out}")
+
+
 def cmd_verify(args: argparse.Namespace) -> None:
     """Adversarial-verify a single ticker: research -> skeptic -> deterministic verdict.
 
@@ -1542,6 +1601,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_edge.add_argument("--json", action="store_true",
                         help="Emit machine-readable JSON instead of the human table")
     p_edge.set_defaults(func=cmd_edge)
+
+    # --- report ---
+    p_report = subparsers.add_parser(
+        "report",
+        help="Render the public track record (docs/TRACK_RECORD.md) from persisted data. Offline-capable.",
+        description=(
+            "Render the honest public track-record page from what the loop "
+            "already persists: the settlements corpus, the decision journal, "
+            "and the saved Edge Policy. Losses included, always — the page "
+            "measures edge in public rather than claiming it. The live account "
+            "snapshot is best-effort; without keys the page still renders and "
+            "notes the snapshot's absence. Pass --stdout to print instead of "
+            "writing docs/TRACK_RECORD.md."
+        ),
+    )
+    p_report.add_argument("--stdout", action="store_true",
+                          help="Print the markdown instead of writing docs/TRACK_RECORD.md")
+    p_report.set_defaults(func=cmd_report)
 
     # --- policy ---
     p_policy = subparsers.add_parser(
