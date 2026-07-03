@@ -8,11 +8,11 @@ This is a real Kalshi account, traded autonomously, scored against Kalshi's auth
 
 | Metric | Value |
 |---|---|
-| Equity | $1,822.25 |
-| Cash | $1,196.87 |
-| Open positions | 21 |
-| Drawdown from peak | 0.03% |
-| Day P&L | -$0.52 |
+| Equity | $1,792.39 |
+| Cash | $0.01 |
+| Open positions | 23 |
+| Drawdown from peak | 1.67% |
+| Day P&L | -$30.38 |
 | Governor halted | no |
 
 ## The honest edge verdict (forward-only)

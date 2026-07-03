@@ -287,11 +287,16 @@ class KalshiClient(TradingLoggerMixin):
             params["ticker"] = ticker
         return await self._make_authenticated_request("GET", "/trade-api/v2/portfolio/positions", params=params)
     
-    async def get_fills(self, ticker: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
-        """Get order fills.""" 
+    async def get_fills(self, ticker: Optional[str] = None, limit: int = 100,
+                        order_id: Optional[str] = None) -> Dict[str, Any]:
+        """Get order fills. ``order_id`` scopes to one order's fills exactly —
+        the only honest way to ask "did this specific order fill?" (a recency-
+        limited window can miss old fills and prove nothing by absence)."""
         params = {"limit": limit}
         if ticker:
             params["ticker"] = ticker
+        if order_id:
+            params["order_id"] = order_id
         return await self._make_authenticated_request("GET", "/trade-api/v2/portfolio/fills", params=params)
     
     async def get_orders(self, ticker: Optional[str] = None, status: Optional[str] = None) -> Dict[str, Any]:

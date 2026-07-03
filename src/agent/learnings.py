@@ -131,6 +131,9 @@ def reconcile_outcomes(
         if rec.get("outcome"):
             out.append(rec)  # already reconciled — idempotent skip
             continue
+        if rec.get("voided"):
+            out.append(rec)  # order never filled — must never earn an outcome
+            continue
         settlement = index.get(rec.get("ticker"))
         if not settlement:
             out.append(rec)  # no matching settlement yet

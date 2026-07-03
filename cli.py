@@ -316,6 +316,71 @@ def cmd_settle(args: argparse.Namespace) -> None:
     asyncio.run(_s())
 
 
+def cmd_fills(args: argparse.Namespace) -> None:
+    """Reconcile the decision journal against actual order fills.
+
+    A journal record is written at order placement, but a resting maker order
+    can be cancelled unfilled (or partially filled) afterwards. This command
+    pulls the account's fills and resting orders, voids journal records whose
+    orders never filled, and shrinks partially-filled counts — so calibration
+    and the Edge Policy only ever learn from trades that actually executed.
+    Pass --dry for a read-only preview.
+    """
+    import json
+    from src.utils.logging_setup import setup_logging
+
+    setup_logging(log_level="WARNING")
+    dry = getattr(args, "dry", False)
+
+    async def _f() -> None:
+        from src.clients.kalshi_client import KalshiClient
+        from src.agent.journal import load_journal, reconcile_fills, write_journal
+
+        journal = load_journal()
+        candidates = [
+            r for r in journal
+            if r.get("order_id") and not r.get("outcome") and not r.get("voided")
+        ]
+
+        client = KalshiClient()
+        skipped: list = []
+        fills: list = []
+        try:
+            resting = (await client.get_orders(status="resting")).get("orders", [])
+            resting_ids = {o.get("order_id") for o in resting if o.get("order_id")}
+            # Per-order queries: exact evidence for each order, immune to the
+            # recency window of the unscoped fills endpoint (absence of a fill
+            # in the last-N window is NOT evidence the order never filled).
+            for rec in candidates:
+                oid = rec["order_id"]
+                if oid in resting_ids:
+                    continue
+                try:
+                    fills.extend(
+                        (await client.get_fills(order_id=oid, limit=200)).get("fills", [])
+                    )
+                except Exception:
+                    # Fail safe: no evidence -> record stays untouched.
+                    skipped.append({"ticker": rec.get("ticker"), "order_id": oid})
+                    resting_ids.add(oid)
+        finally:
+            await client.close()
+
+        updated, changes = reconcile_fills(journal, fills, resting_ids)
+        if changes and not dry:
+            write_journal(updated)
+        print(json.dumps({
+            "dry": dry,
+            "records": len(journal),
+            "checked": len(candidates),
+            "changes": changes,
+            "skipped_no_evidence": skipped,
+            "written": bool(changes and not dry),
+        }, indent=2))
+
+    asyncio.run(_f())
+
+
 def cmd_learnings(args: argparse.Namespace) -> None:
     """Reconcile settled outcomes into the journal, then surface candidate learnings.
 
@@ -1581,6 +1646,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_learn.add_argument("--json", action="store_true",
                          help="Emit machine-readable JSON instead of the human tables")
     p_learn.set_defaults(func=cmd_learnings)
+
+    # --- fills ---
+    p_fills = subparsers.add_parser(
+        "fills",
+        help="Void journal records whose orders never filled (keeps calibration honest)",
+        description=(
+            "Reconcile the decision journal against the account's actual fills. "
+            "A record is written at order placement, but a resting maker order "
+            "can be cancelled unfilled (or partially filled) later — leaving a "
+            "phantom prediction that would poison calibration and the Edge "
+            "Policy when the market settles. This voids zero-fill records and "
+            "shrinks partial fills to the executed count. Pass --dry for a "
+            "read-only preview."
+        ),
+    )
+    p_fills.add_argument("--dry", action="store_true",
+                         help="Read-only: report what would change without writing the journal")
+    p_fills.set_defaults(func=cmd_fills)
 
     # --- edge (prove edge vs. the sharp book — the headline metric) ---
     p_edge = subparsers.add_parser(
