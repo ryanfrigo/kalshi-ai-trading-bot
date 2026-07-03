@@ -878,15 +878,13 @@ def cmd_verify(args: argparse.Namespace) -> None:
 
     as_json = getattr(args, "json", False)
     ticker = args.ticker
+    research_file = getattr(args, "research_file", None)
 
     async def _run() -> dict:
         from src.clients.kalshi_client import KalshiClient
-        from src.clients.openrouter_client import OpenRouterClient
         from src.agent.verify import run_verify
-        from json_repair import repair_json
 
         client = KalshiClient()
-        or_client = OpenRouterClient()
         try:
             # 1. Live executable NO ask off the orderbook (best no_ask = 1 - best yes bid).
             ob = await client.get_orderbook(ticker, depth=10)
@@ -913,36 +911,49 @@ def cmd_verify(args: argparse.Namespace) -> None:
 
             candidate = {"ticker": ticker, "question": question, "no_ask": no_ask}
 
-            # 3. The injected LLM adapter — the ONLY place OpenRouter is touched.
-            async def llm_call(prompt: str, schema: dict) -> dict:
-                schema_keys = ", ".join(schema.get("required", []))
-                full = (
-                    prompt
-                    + f"\n\nReturn ONLY a JSON object with these keys: {schema_keys}. "
-                    "No markdown, no prose."
-                )
-                raw = await or_client.get_completion(
-                    full, temperature=0.1, max_tokens=2000,
-                    strategy="verify", query_type="verify",
-                )
-                if raw is None:
-                    raise RuntimeError("LLM unavailable (daily limit hit or all models failed)")
-                # Robust JSON parse: ```json fence, then bare {...}, then repair.
-                fence = re.search(r"```(?:json)?\s*(.*?)\s*```", raw, re.DOTALL)
-                if fence:
-                    json_str = fence.group(1)
-                else:
-                    bare = re.search(r"\{.*\}", raw, re.DOTALL)
-                    if not bare:
-                        raise RuntimeError(f"no JSON object in LLM response: {raw[:200]!r}")
-                    json_str = bare.group(0)
-                try:
-                    return json.loads(json_str)
-                except json.JSONDecodeError:
-                    repaired = repair_json(json_str)
-                    if not repaired:
-                        raise RuntimeError(f"could not parse/repair LLM JSON: {json_str[:200]!r}")
-                    return json.loads(repaired)
+            # 3. The injected LLM: an operator research file when supplied
+            #    (agent-native, no API key), else the OpenRouter adapter.
+            if research_file:
+                from pathlib import Path as _Path
+                from src.agent.verify import make_operator_llm
+
+                payload = json.loads(_Path(research_file).read_text(encoding="utf-8"))
+                llm_call = make_operator_llm(payload)
+            else:
+                from src.clients.openrouter_client import OpenRouterClient
+                from json_repair import repair_json
+
+                or_client = OpenRouterClient()
+
+                async def llm_call(prompt: str, schema: dict) -> dict:
+                    schema_keys = ", ".join(schema.get("required", []))
+                    full = (
+                        prompt
+                        + f"\n\nReturn ONLY a JSON object with these keys: {schema_keys}. "
+                        "No markdown, no prose."
+                    )
+                    raw = await or_client.get_completion(
+                        full, temperature=0.1, max_tokens=2000,
+                        strategy="verify", query_type="verify",
+                    )
+                    if raw is None:
+                        raise RuntimeError("LLM unavailable (daily limit hit or all models failed)")
+                    # Robust JSON parse: ```json fence, then bare {...}, then repair.
+                    fence = re.search(r"```(?:json)?\s*(.*?)\s*```", raw, re.DOTALL)
+                    if fence:
+                        json_str = fence.group(1)
+                    else:
+                        bare = re.search(r"\{.*\}", raw, re.DOTALL)
+                        if not bare:
+                            raise RuntimeError(f"no JSON object in LLM response: {raw[:200]!r}")
+                        json_str = bare.group(0)
+                    try:
+                        return json.loads(json_str)
+                    except json.JSONDecodeError:
+                        repaired = repair_json(json_str)
+                        if not repaired:
+                            raise RuntimeError(f"could not parse/repair LLM JSON: {json_str[:200]!r}")
+                        return json.loads(repaired)
 
             # 4. Run the pure pipeline with the injected IO.
             verdict = await run_verify(candidate, llm_call)
@@ -962,6 +973,9 @@ def cmd_verify(args: argparse.Namespace) -> None:
     implied_yes = round((1.0 - no_ask) * 100.0)
     print("=" * 70)
     print(f"  ADVERSARIAL VERIFY — {verdict['ticker']}")
+    if research_file:
+        print(f"  (research source: operator file {research_file} — judgments supplied,")
+        print("   edge still recomputed off the live book)")
     print("=" * 70)
     print(f"  {candidate['question']}")
     print(f"  NO ask: {no_ask:.2f}  (implied YES {implied_yes}%)")
@@ -1759,6 +1773,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_verify.add_argument("--ticker", required=True, help="Kalshi market ticker to verify")
     p_verify.add_argument("--json", action="store_true", help="Emit the verdict as JSON")
+    p_verify.add_argument(
+        "--research-file",
+        help=(
+            "Path to an operator research JSON ({\"research\": {...}, \"skeptic\": "
+            "{...}} matching RESEARCH_SCHEMA / SKEPTIC_SCHEMA) produced out-of-band "
+            "by a human or agent. Runs the gate with no LLM API key; the edge is "
+            "still recomputed off the live book. Strictly validated — a half-"
+            "filled file fails, it never silently passes."
+        ),
+    )
     p_verify.set_defaults(func=cmd_verify)
 
     # --- scores ---

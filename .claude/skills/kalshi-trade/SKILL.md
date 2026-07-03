@@ -52,6 +52,10 @@ memory — read it if you lack context.
      `BUY_NO`; treat `PASS` as a hard stop** (it fired because the fade didn't survive,
      edge < 5pts, a positive/live catalyst, or an election frontrunner). Use its
      `size_hint` (full only for genuine sub-5% longshots) to size down.
+     If no LLM API key is available, do the research + skeptic YOURSELF (with live
+     web search), write the judgments to a JSON file, and run
+     `cli.py verify --ticker T --research-file f.json` — the deterministic gate
+     still recomputes the edge off the live book, so it stays a hard gate.
 5. **EXECUTE** — `cli.py trade --live --ticker T --side no --count N --price 0.NN
    --est-prob P --rationale "why" --category C`. The tool re-checks the governor,
    caps size (≤10% equity, ≤cash), places a resting maker limit by default (low fees),

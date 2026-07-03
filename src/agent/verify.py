@@ -257,6 +257,42 @@ def aggregate_verdict(
     }
 
 
+def make_operator_llm(
+    payload: Dict[str, Any],
+) -> Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]:
+    """Build an ``llm_call`` that answers from operator-supplied research. PURE.
+
+    ``payload`` is ``{"research": {...RESEARCH_SCHEMA...}, "skeptic":
+    {...SKEPTIC_SCHEMA...}}`` — produced by a human or an agent that did the
+    research out-of-band (e.g. Claude in-session with live web search). This
+    keeps the verify gate usable with no API key, per the repo's agent-native
+    design: the operator supplies the *judgments*, but the deterministic
+    verdict still recomputes the edge off the live book, so the gate cannot be
+    fudged by optimistic pricing.
+
+    Validation is strict: a missing section or missing required key raises
+    ``ValueError`` — a half-filled research file must never silently pass the
+    gate.
+    """
+    def _validated(name: str, schema: Dict[str, Any]) -> Dict[str, Any]:
+        section = payload.get(name)
+        if not isinstance(section, dict):
+            raise ValueError(f"operator research file has no '{name}' object")
+        missing = [k for k in schema.get("required", []) if k not in section]
+        if missing:
+            raise ValueError(f"'{name}' section missing required keys: {missing}")
+        return section
+
+    async def llm_call(prompt: str, schema: Dict[str, Any]) -> Dict[str, Any]:
+        if schema is RESEARCH_SCHEMA:
+            return _validated("research", RESEARCH_SCHEMA)
+        if schema is SKEPTIC_SCHEMA:
+            return _validated("skeptic", SKEPTIC_SCHEMA)
+        raise ValueError("operator llm_call got an unknown schema")
+
+    return llm_call
+
+
 # ---------------------------------------------------------------------------
 # 3. Orchestrator — wires the three pure pieces with an injected LLM
 # ---------------------------------------------------------------------------

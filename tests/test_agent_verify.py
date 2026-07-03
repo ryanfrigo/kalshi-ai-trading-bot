@@ -264,3 +264,57 @@ def test_run_verify_passes_through_skeptic_pass():
     # edge_pts = round((100 - 2) - 0.90*100) = round(98 - 90) = 8, but survives=False -> PASS
     assert verdict["recommend"] == "PASS"
     assert verdict["size_hint"] == "none"
+
+
+# ---------------------------------------------------------------------------
+# make_operator_llm — the no-API-key operator research path
+# ---------------------------------------------------------------------------
+
+def test_operator_llm_feeds_run_verify_end_to_end():
+    from src.agent.verify import make_operator_llm
+
+    payload = {"research": _research(), "skeptic": _skeptic()}
+    llm = make_operator_llm(payload)
+    verdict = asyncio.run(run_verify(_candidate(no_ask=0.90), llm))
+    # Same numbers as the mock-LLM BUY_NO case: edge = round(98 - 90) = 8 pts.
+    assert verdict["recommend"] == "BUY_NO"
+    assert verdict["edge_pts"] == 8
+
+
+def test_operator_llm_dispatches_by_schema():
+    from src.agent.verify import make_operator_llm
+
+    llm = make_operator_llm({"research": _research(), "skeptic": _skeptic()})
+    research = asyncio.run(llm("any prompt", RESEARCH_SCHEMA))
+    skeptic = asyncio.run(llm("any prompt", SKEPTIC_SCHEMA))
+    assert research["true_yes_pct"] == 2.0
+    assert skeptic["recommend"] == "BUY_NO"
+
+
+def test_operator_llm_missing_section_raises():
+    import pytest
+    from src.agent.verify import make_operator_llm
+
+    llm = make_operator_llm({"research": _research()})  # no skeptic section
+    with pytest.raises(ValueError, match="skeptic"):
+        asyncio.run(llm("any prompt", SKEPTIC_SCHEMA))
+
+
+def test_operator_llm_missing_required_key_raises():
+    import pytest
+    from src.agent.verify import make_operator_llm
+
+    research = _research()
+    del research["direction"]
+    llm = make_operator_llm({"research": research, "skeptic": _skeptic()})
+    with pytest.raises(ValueError, match="direction"):
+        asyncio.run(llm("any prompt", RESEARCH_SCHEMA))
+
+
+def test_operator_llm_unknown_schema_raises():
+    import pytest
+    from src.agent.verify import make_operator_llm
+
+    llm = make_operator_llm({"research": _research(), "skeptic": _skeptic()})
+    with pytest.raises(ValueError, match="unknown schema"):
+        asyncio.run(llm("any prompt", {"required": ["other"]}))
