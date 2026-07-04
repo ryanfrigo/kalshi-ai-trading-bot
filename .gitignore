@@ -207,6 +207,7 @@ graphify-out/
 # Runtime state + local trading/backtest data — NEVER commit (mission constraint)
 data/runtime/
 data/backtest/
+data/corpus/
 *.jsonl
 # ...but the shipped demo fixtures MUST travel with the repo (cli policy --demo).
 !tests/fixtures/demo_*.jsonl

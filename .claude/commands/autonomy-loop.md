@@ -28,6 +28,10 @@ Non-negotiables:
 - Near a drawdown limit, deploy conservatively; halted ⇒ hold the sound book, no new buys.
 - If a position settles today, check its live status before assuming it's fine.
 
+Also run `PYTHONPATH=. .venv/bin/python scripts/capture_corpus.py` once per tick —
+it snapshots the full market universe to `data/corpus/` (idempotent per UTC day).
+This corpus is what will make a real backtest possible; gaps are honest, never fatal.
+
 ## 2. PUBLISH THE RECORD (every tick)
 
 Regenerate `docs/TRACK_RECORD.md` from real data — equity + drawdown, settled P&L
