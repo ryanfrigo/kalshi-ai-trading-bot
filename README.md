@@ -114,16 +114,19 @@ The toolkit is built to be driven by an agent (Claude, or anything else) through
 | Tool | Kind | What it does |
 |---|---|---|
 | `brief` | read-only | One-shot situational awareness: governor verdict, equity, positions, resting orders (JSON) |
+| `verify` | read-only | The **adversarial-verify gate** before any live buy: research the catalyst → a SKEPTIC tries to refute the fade → a deterministic gate recomputes the edge off the live book and rules `BUY_NO`/`PASS`. Works with no API key via `--research-file` |
 | `trade` | mutating | Place ONE guarded, journaled order through the full risk stack. Dry-run unless `--live` |
 | `close` | mutating | Sell ONE held position at the current bid (allowed even when halted — selling cuts risk). Dry-run unless `--live` |
+| `fills` | writes | Reconcile the journal against actual order fills — void records whose orders never filled, shrink partial fills — so calibration and the policy only learn from trades that executed. `--dry` for read-only |
 | `settle` | read-only* | Pull Kalshi's authoritative settlements; report realized win-rate / P&L (*writes the local settlements log) |
 | `learnings` | writes | Reconcile outcomes → calibration + per-category/side edge → append genuinely new candidate learnings. `--dry` for read-only |
 | `edge` | read-only | **The headline** — Brier / log-loss / edge-vs-book + the gated, forward-only verdict |
+| `report` | writes | Render the public **[Live Track Record](docs/TRACK_RECORD.md)** from the persisted settlements / journal / policy — losses included. Offline-capable |
 | `policy` | read-only | The data-driven **Edge Policy** your settled record earns: block losing categories, warn on losing sides, haircut overconfident bands. `--demo` runs on a shipped fixture |
 | `improve` | writes | **The self-improvement loop** — settle → reconcile → re-derive the policy → diff what changed → persist the gate. `--dry` for read-only |
 | `scores` · `history` · `status` | read-only | Category scores, closed-trade history, live balance/positions |
 
-Plus `run` / `daily` (strategy loops) and `health` (connectivity check). `trade` and `close` both default to a dry-run preview and route through the risk governor + per-position cap — the same guard stack everything else uses.
+Plus `run` / `daily` (strategy loops), `health` (connectivity check), and `scripts/capture_corpus.py` (daily price-snapshot capture that feeds a future backtest). `trade` and `close` both default to a dry-run preview and route through the risk governor + per-position cap — the same guard stack everything else uses.
 
 **The `kalshi-trade` skill** (`.claude/skills/kalshi-trade/SKILL.md`) encodes the disciplined process for managing the live account on each loop tick: assess state, surface edge, research true probabilities, decide under strict risk rules, execute guarded orders, journal the prediction, and measure realized edge.
 
