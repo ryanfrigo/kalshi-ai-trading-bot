@@ -8,11 +8,11 @@ This is a real Kalshi account, traded autonomously, scored against Kalshi's auth
 
 | Metric | Value |
 |---|---|
-| Equity | $2,416.83 |
-| Cash | $0.01 |
-| Open positions | 22 |
-| Drawdown from peak | 1.98% |
-| Day P&L | +$594.06 |
+| Equity | $2,587.01 |
+| Cash | $1,736.17 |
+| Open positions | 21 |
+| Drawdown from peak | 0.03% |
+| Day P&L | +$75.33 |
 | Governor halted | no |
 
 ## The honest edge verdict (forward-only)
@@ -35,14 +35,14 @@ Every settlement Kalshi reports for this account — including the legacy mechan
 
 | Metric | Value |
 |---|---|
-| Settled markets | 150 |
-| Win rate | 65% |
-| Net realized P&L | -$38.13 |
+| Settled markets | 151 |
+| Win rate | 66% |
+| Net realized P&L | +$84.55 |
 
 | Side held | n | Win rate | P&L |
 |---|---|---|---|
 | NO | 82 | 79% | -$42.30 |
-| YES | 68 | 49% | +$4.17 |
+| YES | 69 | 49% | +$126.86 |
 
 ## Calibration
 
@@ -52,7 +52,7 @@ _No forward-settled journaled trades with predictions yet — the calibration cu
 
 The pre-trade gate the settled record has *earned*: categories the account provably loses money in are auto-blocked before the next trade. The gate only ever tightens from evidence.
 
-Derived from **150 settled trades** on 2026-07-03.
+Derived from **151 settled trades** on 2026-07-03.
 
 | Blocked | n | P&L |
 |---|---|---|
