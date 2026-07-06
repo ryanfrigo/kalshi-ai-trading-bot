@@ -38,7 +38,14 @@ def _account_section(equity: Optional[Dict[str, Any]]) -> List[str]:
         ]
     gov = equity.get("governor") or {}
     lines = [
-        "## Account",
+        "## Account (blended — operator + strategy)",
+        "",
+        "These are **whole-account** figures. This live account is *also* traded "
+        "manually by its operator, so equity, drawdown, and day P&L blend the "
+        "operator's discretionary positions with the autonomous strategy — a big "
+        "manual sports bet can swing them far more than any strategy trade. "
+        "**The strategy's own edge is measured below**, from its decision journal "
+        "against settled reality, not from this blended equity.",
         "",
         "| Metric | Value |",
         "|---|---|",

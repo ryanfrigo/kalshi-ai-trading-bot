@@ -127,6 +127,15 @@ def test_account_snapshot_and_governor_render():
     assert "| Governor halted | no |" in md
 
 
+def test_account_section_flags_blended_operator_plus_strategy():
+    # The account equity blends the operator's manual trades with the strategy;
+    # the page must say so, so a manual-driven drawdown is never misread as the
+    # strategy failing. The strategy's real edge lives in the verdict section.
+    md = _render()
+    assert "blended" in md.lower()
+    assert "manually" in md.lower()
+
+
 def test_policy_block_and_haircut_render():
     md = _render()
     assert "category=KXCPI" in md
