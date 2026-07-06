@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`cli verify --research-file`** — run the adversarial-verify gate with **no LLM
+  API key**: supply the research + skeptic judgments as JSON (a human or agent does
+  them out-of-band), and the deterministic gate still recomputes the edge off the
+  live orderbook, so the fade can't be fudged by optimistic pricing.
+- **`cli report`** — renders a public **[Live Track Record](docs/TRACK_RECORD.md)**
+  from the persisted settlements / journal / policy, losses included. The account
+  section is explicitly framed as *blended* (operator manual trades + autonomous
+  strategy) so a manual-driven drawdown is never misread as the strategy failing;
+  the strategy's real edge lives in the journal-based metrics. Offline-capable.
+- **`cli fills`** — reconciles the decision journal against actual order fills:
+  voids records whose maker orders were cancelled unfilled and shrinks partial
+  fills, so calibration and the Edge Policy only ever learn from trades that
+  actually executed (no phantom predictions).
+- **`scripts/capture_corpus.py`** — captures a daily price snapshot of the full
+  open-market universe to `data/corpus/` (idempotent per UTC day). Joined against
+  settlements, this is the entry-price corpus a real out-of-sample backtest needs.
+- **Non-sports longshot bucket** in `scripts/hunt_candidates.py` — surfaces the
+  pond where researched fades actually pay (liquid sports books are already sharp).
 - **The self-improvement loop is closed.** A new data-driven **Edge Policy**
   (`src/agent/policy.py`) turns your settled track record into a pre-trade gate:
   it **blocks** category/method groups your record proves lose money (≥5 settled
