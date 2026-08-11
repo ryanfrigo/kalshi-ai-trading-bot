@@ -22,6 +22,7 @@ Key innovations:
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
@@ -478,6 +479,22 @@ class UnifiedAdvancedTradingSystem:
                         continue
                     
                     self.logger.info(f"✅ CASH RESERVES OK FOR ALLOCATION: {market_id}")
+
+                    # Re-entry cooldown: refuse to pile back into a market we
+                    # just closed out. add_position() only dedups while a
+                    # position is open, so without this a fast exit can be
+                    # re-entered every cycle indefinitely — costing an LLM
+                    # decision each time. Set REENTRY_COOLDOWN_MINUTES=0 to
+                    # disable.
+                    cooldown_minutes = int(os.getenv("REENTRY_COOLDOWN_MINUTES", "60"))
+                    if cooldown_minutes > 0 and await self.db_manager.was_recently_traded(
+                        market_id, intended_side, minutes=cooldown_minutes
+                    ):
+                        self.logger.info(
+                            f"⏳ RE-ENTRY COOLDOWN: {market_id} {intended_side} was closed "
+                            f"within the last {cooldown_minutes}m; skipping."
+                        )
+                        continue
                     
                     # Get current market data
                     market_data = await self.kalshi_client.get_market(market_id)
@@ -488,12 +505,34 @@ class UnifiedAdvancedTradingSystem:
                     # FIXED: Extract from nested 'market' object
                     market_info = market_data.get('market', {})
                     
-                    # Get price for the intended side (already determined above)
-                    if intended_side == "YES":
-                        price = market_info.get('yes_price', 50) / 100
-                    else:
-                        price = market_info.get('no_price', 50) / 100
-                    
+                    # Price the intended side off the real book.
+                    #
+                    # This previously read market_info.get('no_price', 50) / 100.
+                    # Kalshi API v2 does not return the legacy yes_price /
+                    # no_price fields at all (the market object carries only
+                    # *_dollars fields), so `.get(..., 50)` silently fell through
+                    # to the literal default and every position was created at a
+                    # phantom $0.50. That both mis-sized quantity (~2x too many
+                    # contracts on a ~$0.95 market) and anchored the stop-loss /
+                    # take-profit levels below to 0.50 while the real fill was
+                    # ~0.95 — so every position stopped out on its first
+                    # tracking pass.
+                    #
+                    # Buy at the ask (what a taker actually pays) via the repo's
+                    # existing normalizer, and skip the allocation if the book
+                    # gives us nothing usable rather than inventing a price.
+                    from src.utils.market_prices import get_market_prices
+                    yes_bid, yes_ask, no_bid, no_ask = get_market_prices(market_info)
+                    price = yes_ask if intended_side == "YES" else no_ask
+
+                    if not price or price <= 0.0 or price >= 1.0:
+                        self.logger.warning(
+                            f"No usable {intended_side} ask for {market_id} "
+                            f"(yes_ask={yes_ask}, no_ask={no_ask}); skipping allocation "
+                            f"rather than assuming a price."
+                        )
+                        continue
+
                     # Calculate quantity
                     quantity = max(1, int(position_value / price))
                     

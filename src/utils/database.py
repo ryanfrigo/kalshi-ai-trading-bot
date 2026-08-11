@@ -870,6 +870,37 @@ class DatabaseManager(TradingLoggerMixin):
             count = (await cursor.fetchone())[0]
             return count > 0
 
+    async def was_recently_traded(
+        self, market_id: str, side: str = None, minutes: int = 60
+    ) -> bool:
+        """Check whether this market was closed out within the last *minutes*.
+
+        Re-entry cooldown. ``add_position`` already refuses a duplicate while a
+        position is OPEN, but the moment one closes the market becomes eligible
+        again — so a position that exits quickly can be re-entered on the very
+        next cycle, indefinitely, burning an LLM decision each time.
+
+        Args:
+            market_id: Market to check.
+            side: Optional side filter ("YES"/"NO"); any side when omitted.
+            minutes: Cooldown window in minutes.
+
+        Returns:
+            True if a trade in this market closed inside the window.
+        """
+        cutoff_str = (datetime.now() - timedelta(minutes=minutes)).isoformat()
+
+        query = "SELECT COUNT(*) FROM trade_logs WHERE market_id = ? AND exit_timestamp > ?"
+        params = [market_id, cutoff_str]
+        if side:
+            query += " AND side = ?"
+            params.append(side)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(query, tuple(params))
+            count = (await cursor.fetchone())[0]
+            return count > 0
+
     async def get_daily_ai_cost(self, date: str = None) -> float:
         """Get total AI cost for a specific date (defaults to today)."""
         if date is None:

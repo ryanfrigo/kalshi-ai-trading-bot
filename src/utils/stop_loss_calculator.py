@@ -6,9 +6,27 @@ Provides consistent stop-loss calculation across all trading strategies.
 
 Key Features:
 - 5-10% stop-loss based on entry price and confidence
-- Adaptive stop-loss based on market volatility  
+- Adaptive stop-loss based on market volatility
 - Take-profit targets to lock in gains
 - Time-based exit strategies
+
+PRICE CONVENTION — read before editing
+--------------------------------------
+Every price here is the **price of the contract actually held** ("own-side"
+price), never the YES price of the market. On Kalshi you buy a contract: a NO
+position is a NO contract bought at the NO ask, and it is worth $1 if NO
+resolves. So a position of EITHER side loses value when its own contract price
+falls, and gains when it rises. Stop-loss is therefore always BELOW entry and
+triggers on a fall; take-profit is always ABOVE entry and triggers on a rise.
+There is no YES/NO asymmetry, and the `side` arguments are retained only for
+call-site compatibility and logging.
+
+This replaces an earlier YES-space convention (for NO: stop above entry,
+trigger on a rise). That convention was self-consistent but every caller fed it
+own-side prices — `Position.entry_price` is the fill price of the side traded
+and `track.py` passes `current_no_price` for NO positions — so a NO position at
+0.95 was compared against a stop of 0.95*1.07 and stopped out on its first
+tracking pass, every time.
 """
 
 from typing import Dict, Optional
@@ -87,16 +105,12 @@ class StopLossCalculator:
         else:
             take_profit_pct = cls.MIN_TAKE_PROFIT_PCT  # 15% for low confidence
             
-        # Calculate actual price levels based on side
-        if side.upper() == "YES":
-            # For YES positions, stop-loss is below entry, take-profit is above
-            stop_loss_price = entry_price * (1 - adjusted_stop_loss_pct)
-            take_profit_price = entry_price * (1 + take_profit_pct)
-        else:
-            # For NO positions, stop-loss is above entry, take-profit is below  
-            stop_loss_price = entry_price * (1 + adjusted_stop_loss_pct)
-            take_profit_price = entry_price * (1 - take_profit_pct)
-            
+        # Own-side price convention (see module docstring): a position of either
+        # side loses when its own contract price falls. Stop below, target above.
+        stop_loss_price = entry_price * (1 - adjusted_stop_loss_pct)
+        take_profit_price = entry_price * (1 + take_profit_pct)
+
+
         # Ensure prices are within valid bounds (1¢ to 99¢)
         stop_loss_price = max(0.01, min(0.99, stop_loss_price))
         take_profit_price = max(0.01, min(0.99, take_profit_price))
@@ -133,11 +147,9 @@ class StopLossCalculator:
         Returns:
             Stop-loss price
         """
-        if side.upper() == "YES":
-            stop_loss_price = entry_price * (1 - stop_loss_pct)
-        else:
-            stop_loss_price = entry_price * (1 + stop_loss_pct)
-            
+        # Own-side price convention (see module docstring): stop always below entry.
+        stop_loss_price = entry_price * (1 - stop_loss_pct)
+
         return max(0.01, min(0.99, round(stop_loss_price, 2)))
     
     @classmethod
@@ -160,12 +172,9 @@ class StopLossCalculator:
         Returns:
             True if stop-loss should be triggered
         """
-        if position_side.upper() == "YES":
-            # For YES positions, trigger if price drops below stop-loss
-            return current_price <= stop_loss_price
-        else:
-            # For NO positions, trigger if price rises above stop-loss
-            return current_price >= stop_loss_price
+        # Own-side price convention (see module docstring): both sides lose when
+        # the held contract's own price falls, so the test is side-independent.
+        return current_price <= stop_loss_price
     
     @classmethod
     def calculate_pnl_at_stop_loss(
@@ -181,11 +190,13 @@ class StopLossCalculator:
         Returns:
             Expected P&L (negative for loss)
         """
-        if side.upper() == "YES":
-            pnl_per_share = stop_loss_price - entry_price
-        else:
-            pnl_per_share = entry_price - stop_loss_price
-            
+        # Own-side price convention (see module docstring): P&L per contract is
+        # exit minus entry for either side, so a stop below entry yields a loss.
+        # The previous NO branch returned entry - stop, which reported a POSITIVE
+        # number for a stopped-out NO position (visible in exit reasons logged as
+        # "stop_loss_triggered_pnl_12.60" on trades that actually lost money).
+        pnl_per_share = stop_loss_price - entry_price
+
         return pnl_per_share * quantity
 
 

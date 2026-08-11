@@ -34,9 +34,16 @@ async def should_exit_position(
     
     # 1. Market resolution (original logic)
     if market_status == 'closed':
-        # If market resolved, use the result to determine exit price
+        # If market resolved, use the result to determine exit price.
+        # Case-normalise both sides: Kalshi returns result as lowercase
+        # "yes"/"no" while Position.side is stored uppercase "YES"/"NO", so a
+        # raw == comparison is ALWAYS False and every resolved position settled
+        # at 0.0 — booking a total loss on winners too. (paper_trader.py already
+        # did result.lower() for the same field.)
         if market_result:
-            exit_price = 1.0 if market_result == position.side else 0.0
+            resolved_side = str(market_result).strip().lower()
+            held_side = str(position.side).strip().lower()
+            exit_price = 1.0 if resolved_side == held_side else 0.0
         else:
             # Fallback to current price if no result available
             exit_price = current_price
@@ -65,15 +72,12 @@ async def should_exit_position(
     
     # 3. Take-profit exit (enhanced logic for YES/NO)
     if position.take_profit_price:
-        take_profit_triggered = False
-        
-        if position.side == "YES":
-            # For YES positions, take profit when price rises above target
-            take_profit_triggered = current_price >= position.take_profit_price
-        else:
-            # For NO positions, take profit when price falls below target
-            take_profit_triggered = current_price <= position.take_profit_price
-            
+        # Own-side price convention (see src/utils/stop_loss_calculator.py):
+        # `current_price` above is already the held side's own price, and a
+        # position of either side gains when that price rises. The previous NO
+        # branch fired on a *fall*, i.e. it took profit while losing money.
+        take_profit_triggered = current_price >= position.take_profit_price
+
         if take_profit_triggered:
             return True, "take_profit", current_price
     
@@ -186,21 +190,59 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
                     logger.warning(f"Could not retrieve market data for {position.market_id}. Skipping.")
                     continue
 
-                # Get current prices
-                current_yes_price = market_data.get('yes_price', 0) / 100  # Convert cents to dollars
-                current_no_price = market_data.get('no_price', 0) / 100
+                # Get current prices. The legacy yes_price / no_price fields are
+                # not returned by Kalshi API v2 (only *_dollars), so reading them
+                # yielded 0.0 for every position and every exit decision below
+                # was made against a zero mark. Use the repo's normalizer and
+                # mark at mid-book, falling back to the last trade.
+                from src.utils.market_prices import get_market_prices
+                yes_bid, yes_ask, no_bid, no_ask = get_market_prices(market_data)
+                if yes_bid + yes_ask > 0:
+                    current_yes_price = (yes_bid + yes_ask) / 2
+                else:
+                    current_yes_price = float(market_data.get('last_price_dollars') or 0)
+                if no_bid + no_ask > 0:
+                    current_no_price = (no_bid + no_ask) / 2
+                else:
+                    current_no_price = (1.0 - current_yes_price) if current_yes_price > 0 else 0.0
+
+                # Last resort: the pre-v2 cent-denominated fields, for any
+                # payload that still carries them.
+                if current_yes_price <= 0 and market_data.get('yes_price'):
+                    current_yes_price = float(market_data['yes_price']) / 100
+                if current_no_price <= 0 and market_data.get('no_price'):
+                    current_no_price = float(market_data['no_price']) / 100
                 market_status = market_data.get('status', 'unknown')
                 market_result = market_data.get('result')  # Market resolution result
                 
-                # If position doesn't have exit strategy set, calculate defaults
-                if not position.stop_loss_price and not position.take_profit_price:
-                    logger.info(f"Setting up exit strategy for position {position.market_id}")
+                # Exit levels must bracket the entry price under the own-side
+                # convention (see src/utils/stop_loss_calculator.py): stop BELOW
+                # entry, target ABOVE it. Levels that fail that test are either
+                # missing or mis-anchored — e.g. rows written while positions
+                # were priced at a phantom $0.50 carry stop 0.535 / target 0.40
+                # against a real ~0.955 fill, and a target below the current
+                # mark fires a bogus "take_profit" on the very next pass.
+                # Re-anchor from the position's actual entry price.
+                levels_incoherent = (
+                    (position.stop_loss_price or 0) >= position.entry_price
+                    or (position.take_profit_price or 1.0) <= position.entry_price
+                )
+                if (not position.stop_loss_price and not position.take_profit_price) or levels_incoherent:
+                    if levels_incoherent:
+                        logger.warning(
+                            f"Re-anchoring incoherent exit levels for {position.market_id}: "
+                            f"entry={position.entry_price:.3f} stop={position.stop_loss_price} "
+                            f"target={position.take_profit_price}"
+                        )
+                    else:
+                        logger.info(f"Setting up exit strategy for position {position.market_id}")
+
                     exit_levels = await calculate_dynamic_exit_levels(position)
-                    
-                    # Update position with exit strategy (this would need a new DB method)
-                    # For now, we'll apply them dynamically
+
+                    # Applied in-memory for this pass; add_position persists the
+                    # levels for new positions.
                     position.stop_loss_price = exit_levels["stop_loss_price"]
-                    position.take_profit_price = exit_levels["take_profit_price"] 
+                    position.take_profit_price = exit_levels["take_profit_price"]
                     position.max_hold_hours = exit_levels["max_hold_hours"]
                     position.target_confidence_change = exit_levels["target_confidence_change"]
 

@@ -145,6 +145,12 @@ class OpenRouterClient(TradingLoggerMixin):
 
         # Aggregate cost tracking
         self.total_cost: float = 0.0
+        # Cost of the most recent request. The XAIClient shim reads this via
+        # getattr(client, "_last_request_cost", 0.0) to mirror spend into the
+        # tracker beast_mode_bot's cycle throttle checks; the attribute was
+        # never set, so that mirror recorded 0.0 forever. Declared here so it
+        # always exists.
+        self._last_request_cost: float = 0.0
         self.request_count: int = 0
 
         # Daily usage tracker (same pattern as XAIClient)
@@ -203,6 +209,10 @@ class OpenRouterClient(TradingLoggerMixin):
 
     def _update_daily_cost(self, cost: float) -> None:
         """Add *cost* to the daily tracker and check the limit."""
+        # Publish the last request's cost so the XAIClient shim can mirror it
+        # into the tracker beast_mode_bot's cycle throttle actually reads.
+        self._last_request_cost = cost
+
         self.daily_tracker.total_cost += cost
         self.daily_tracker.request_count += 1
         self._save_daily_tracker()
