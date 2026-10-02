@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **First forward-only edge verdict on the live account (2026-10-02)** — `cli edge` now
+  scores forward-settled trades end to end and the verdict is published in
+  `docs/TRACK_RECORD.md`, losses included: **NO MEASURED EDGE** (n=55 forward trades,
+  won 58% vs 60% implied, edge −1.9 pts; Brier 0.2356). Splits: NO side +7.6 pts vs
+  the book (n=37), YES side −22.7 pts (n=17); the Edge Policy haircuts encode exactly
+  this overconfidence.
+- **Maker closeout program** — `scripts/maker_closeout.py` rests 15-contract bids at the
+  certainty end (95–99c) of liquid near-resolution markets, evidence from 586M–1.16B
+  contracts/cell (98.4–98.9% win, +0.6–1.1% EV/risk); event-level diversification caps,
+  lead-time guards, and a stale-scan re-verify before every order.
+- **Path/convergence pricing** — per-fuel print-path models price the weekly/monthly
+  diesel & gas ladders (`aaa_pricer.py path`), with per-strike fee-aware edges and
+  forward scoring; first live constitution-sized tranche filled 2026-09-29.
+- **State-transfer family** — per-state gas print series across 21 states
+  (200–450 prints each), state→state delta-transfer models, calibration audited
+  (beta 0.80–0.98 per state).
+- **Weather v1 capture** — GEFS-31 daily-max ensembles + NWS observed-max buckets by
+  ET day, banked daily for future calibration (`scripts/weather_data.py`).
 - **Ornn OCPI toolkit** — `scripts/ornn_data.py` (free public daily OCPI series for
   A100/H100/H200/B200/RTX5090; month stats + strike break-even math for the
   KXA100MS monthly compute-price markets), cached under `data/ornn/`, wired into
@@ -32,6 +50,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `data/runtime/governor_audit.jsonl`), so a reset never hides a drawdown publicly.
 
 ### Fixed
+- **Edge measurement was blind in practice** — the settle→journal reconcile dropped
+  `settled_time`, so every settled trade classified as "unknown" and the forward-only
+  verdict could never render. The reconcile now attaches the authoritative resolution
+  timestamp (add-only; `won`/`pnl` remain immutable) and legacy settled trades backfill
+  it on the next `cli improve` pass.
+- **Maker closeout stale-scan** — the pilot ordered already-closed markets (16× HTTP 404
+  on 2026-10-01); each candidate is now re-verified (status + remaining lead time)
+  immediately before the order is placed.
+- **`ornn_stop_check.py`** was hardwired to the resolved September strike and crashed
+  once the month rolled over; it now targets the active month's `KXA100MS-26MMM-1.000`
+  market and exits cleanly on resolved months.
+- **Repo weight** — 4.16 GB of `data/external` parquet backfill dumps removed from
+  branch history and gitignored; clones are normal-sized again.
 - **`KalshiClient.cancel_order`** used the deprecated v1 path (HTTP 410); it now calls
   `DELETE /trade-api/v2/portfolio/events/orders/{id}`.
 
