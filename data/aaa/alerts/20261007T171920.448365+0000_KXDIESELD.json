@@ -1,0 +1,21 @@
+{
+ "ts": "2026-10-07T17:19:20.448365+00:00",
+ "series": "KXDIESELD",
+ "target_date": "2026-10-08",
+ "threshold": 0.1,
+ "rows": [
+  {
+   "ticker": "KXDIESELD-26OCT08-T6.295",
+   "strike": 6.295,
+   "fair_yes": 0.2968,
+   "yes_bid": 0.12,
+   "yes_ask": 0.16000000000000003,
+   "n_levels": 18,
+   "buy_yes_edge": 0.1268,
+   "buy_no_edge": -0.1868,
+   "buy_yes_cost": 0.17,
+   "buy_no_cost": 0.89,
+   "last": "0.1800"
+  }
+ ]
+}
