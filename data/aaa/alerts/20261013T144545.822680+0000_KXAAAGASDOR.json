@@ -1,0 +1,73 @@
+{
+ "ts": "2026-10-13T14:45:45.822680+00:00",
+ "series": "KXAAAGASDOR",
+ "target_date": "2026-10-14",
+ "threshold": 0.15,
+ "rows": [
+  {
+   "ticker": "KXAAAGASDOR-26OCT14-4.9750",
+   "strike": 4.975,
+   "fair_yes": 0.1431,
+   "yes_bid": 0.98,
+   "yes_ask": 0.99,
+   "n_levels": 9,
+   "buy_yes_edge": -0.8569,
+   "buy_no_edge": 0.8269,
+   "buy_yes_cost": 1.0,
+   "buy_no_cost": 0.03,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXAAAGASDOR-26OCT14-4.9700",
+   "strike": 4.97,
+   "fair_yes": 0.2034,
+   "yes_bid": 0.95,
+   "yes_ask": 0.99,
+   "n_levels": 9,
+   "buy_yes_edge": -0.7966,
+   "buy_no_edge": 0.7366,
+   "buy_yes_cost": 1.0,
+   "buy_no_cost": 0.06,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXAAAGASDOR-26OCT14-4.9650",
+   "strike": 4.965,
+   "fair_yes": 0.3003,
+   "yes_bid": 0.94,
+   "yes_ask": 0.99,
+   "n_levels": 10,
+   "buy_yes_edge": -0.6997,
+   "buy_no_edge": 0.6297,
+   "buy_yes_cost": 1.0,
+   "buy_no_cost": 0.07,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXAAAGASDOR-26OCT14-4.9600",
+   "strike": 4.96,
+   "fair_yes": 0.4636,
+   "yes_bid": 0.99,
+   "yes_ask": 1.0,
+   "n_levels": 11,
+   "buy_yes_edge": -0.5364,
+   "buy_no_edge": 0.5164,
+   "buy_yes_cost": 1.0,
+   "buy_no_cost": 0.02,
+   "last": "0.9900"
+  },
+  {
+   "ticker": "KXAAAGASDOR-26OCT14-4.9800",
+   "strike": 4.98,
+   "fair_yes": 0.1034,
+   "yes_bid": 0.29,
+   "yes_ask": 0.99,
+   "n_levels": 6,
+   "buy_yes_edge": -0.8966,
+   "buy_no_edge": 0.1666,
+   "buy_yes_cost": 1.0,
+   "buy_no_cost": 0.73,
+   "last": "0.0000"
+  }
+ ]
+}

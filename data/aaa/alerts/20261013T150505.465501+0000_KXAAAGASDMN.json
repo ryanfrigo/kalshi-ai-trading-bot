@@ -1,0 +1,21 @@
+{
+ "ts": "2026-10-13T15:05:05.465501+00:00",
+ "series": "KXAAAGASDMN",
+ "target_date": "2026-10-14",
+ "threshold": 0.15,
+ "rows": [
+  {
+   "ticker": "KXAAAGASDMN-26OCT14-4.2300",
+   "strike": 4.23,
+   "fair_yes": 0.3967,
+   "yes_bid": 0.02,
+   "yes_ask": 0.13,
+   "n_levels": 4,
+   "buy_yes_edge": 0.2567,
+   "buy_no_edge": -0.3867,
+   "buy_yes_cost": 0.14,
+   "buy_no_cost": 0.99,
+   "last": "0.0000"
+  }
+ ]
+}
