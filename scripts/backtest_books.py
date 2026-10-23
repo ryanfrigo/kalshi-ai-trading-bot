@@ -129,8 +129,14 @@ def render(s: dict) -> str:
     return "\n".join(lines)
 
 
-async def fetch_outcomes() -> int:
-    """Pull settled market results once and cache them (tickers we captured)."""
+async def fetch_outcomes(max_pages: int = 20) -> int:
+    """Pull settled market results once and cache them (tickers we captured).
+
+    Paginates the settled-markets feed newest-first and stops as soon as every
+    captured ticker is accounted for — our candidates settle in the future, so they
+    surface near the front once they resolve. The page cap keeps a cold cache from
+    walking the entire settled history: hitting it just means "run again later".
+    """
     from src.clients.kalshi_client import KalshiClient
 
     want = {r["ticker"] for r in load_books()}
@@ -141,9 +147,11 @@ async def fetch_outcomes() -> int:
         return 0
     client = KalshiClient()
     written = 0
+    pages = 0
     try:
         cursor = None
-        while True:
+        while pages < max_pages:
+            pages += 1
             params = {"status": "settled", "limit": 1000}
             if cursor:
                 params["cursor"] = cursor
@@ -156,9 +164,14 @@ async def fetch_outcomes() -> int:
                     with open(OUTCOMES, "a") as f:
                         f.write(json.dumps({"ticker": t, "result": res}) + "\n")
                     written += 1
+            if len(have) + written >= len(want):
+                break                      # everything captured is accounted for
             cursor = resp.get("cursor")
             if not markets or not cursor:
                 break
+        else:
+            print(f"stopped after {max_pages} pages ({written} cached so far) — "
+                  f"settled history is deeper; run again later")
     finally:
         await client.close()
     print(f"cached {written} outcomes -> {OUTCOMES}")
