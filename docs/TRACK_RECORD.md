@@ -10,12 +10,12 @@ These are **whole-account** figures. This live account is *also* traded manually
 
 | Metric | Value |
 |---|---|
-| Equity | $14,673.42 |
+| Equity | $14,631.43 |
 | Cash | $8,102.75 |
 | Open positions | 13 |
-| Drawdown from all-time peak ($14,673.42) | 0.0% |
-| Drawdown since governor re-baseline (2026-09-25) | 0.0% |
-| Day P&L | +$423.79 |
+| Drawdown from all-time peak ($14,673.42) | 0.3% |
+| Drawdown since governor re-baseline (2026-09-25) | 0.29% |
+| Day P&L | +$381.80 |
 | Governor halted | no |
 
 ## The honest edge verdict (forward-only)
@@ -85,4 +85,4 @@ Overconfidence haircuts:
 
 ---
 
-**How this page is made:** every loop tick runs settle → learn → improve, persists the settled corpus, re-derives the Edge Policy, and re-renders this page from those files. See the README's [Prove Your Edge](../README.md#prove-your-edge-the-headline) and [Self-Improvement Loop](../README.md#the-self-improvement-loop) sections for the method, and `src/agent/edge.py` for the scoring code (pure, deterministic, forward-only gated).
+**How this page is made:** every loop tick runs settle → learn → improve, persists the settled corpus, re-derives the Edge Policy, and re-renders this page from those files. See the README's [Prove Your Edge](../README.md#prove-your-edge-the-headline) and [Self-Improvement Loop](../README.md#the-self-improvement-loop) sections for the method, and `src/agent/edge.py` for the scoring code (pure, deterministic, forward-only gated). New to the toolkit? The free [Operator's Playbook](OPERATOR_PLAYBOOK.md) covers the setup traps, and the [Kalshi API field map](https://kalshi-community.vercel.app/reference/kalshi-fields) lists the `*_dollars` / `*_fp` names that break bots when they change.

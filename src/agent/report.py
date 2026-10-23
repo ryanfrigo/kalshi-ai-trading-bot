@@ -241,7 +241,10 @@ def render_track_record(
         "[Prove Your Edge](../README.md#prove-your-edge-the-headline) and "
         "[Self-Improvement Loop](../README.md#the-self-improvement-loop) "
         "sections for the method, and `src/agent/edge.py` for the scoring "
-        "code (pure, deterministic, forward-only gated).",
+        "code (pure, deterministic, forward-only gated). "
+        "New to the toolkit? The free [Operator's Playbook](OPERATOR_PLAYBOOK.md) covers the "
+        "setup traps, and the [Kalshi API field map](https://kalshi-community.vercel.app/reference/kalshi-fields) "
+        "lists the `*_dollars` / `*_fp` names that break bots when they change.",
         "",
     ]
     return "\n".join(lines)
