@@ -2,7 +2,7 @@
 
 ### Running an AI trading bot on Kalshi without lighting your money on fire
 
-*A field guide from the maintainer of [kalshi-ai-trading-bot](https://github.com/ryanfrigo/kalshi-ai-trading-bot) — the most-starred Kalshi bot on GitHub.*
+*A field guide from the maintainer of [kalshi-ai-trading-bot](https://github.com/ryanfrigo/kalshi-ai-trading-bot) — one of the most-starred open-source Kalshi bots on GitHub.*
 
 > ⚠️ **Read this first.** Nothing here is financial advice, and no bot in this guide is guaranteed to make money. I ran one of these strategies live and drew my account down ~86% before I understood what I'm about to teach you. This guide is about *operating the software correctly* — getting it connected, keeping it alive, and reading what it's telling you. It will not pick winners for you. Paper-trade first. Only ever risk money you are fully prepared to lose.
 
