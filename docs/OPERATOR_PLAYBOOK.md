@@ -187,6 +187,8 @@ This free playbook covers getting connected, understanding the silence, and stay
 - **Reading the dashboard like an operator** — what every metric means, when to intervene, and when to walk away.
 - **The full paper-first protocol** I now follow after the 86% lesson.
 
+**Get the full guide →** https://kalshi-community.vercel.app/guide
+
 ---
 
 *Built something with the toolkit, or stuck on a wall this guide didn't cover? Open a thread in [Discussions](https://github.com/ryanfrigo/kalshi-ai-trading-bot/discussions). If this saved you an afternoon, a ⭐ on the [repo](https://github.com/ryanfrigo/kalshi-ai-trading-bot) helps other operators find it.*
