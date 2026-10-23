@@ -47,3 +47,31 @@ fade (B109/B129 YES) is dead. Resolution: Roll Call count 10am ET Monday.
 estimate ~17.5-17.7 final vs strikes 17.8/17.3: leans NO but thinner than the
 morning's 0.70/0.80 estimates. Holds: 79 NO @0.27, 100 NO @0.05. Monday 10am
 chart settles it.
+
+
+## 2026-10-23 — forward-score refresh (n=2,561 scored strike-observations)
+
+First full forward-scored read across every family. **Overall the book wins decisively:**
+model Brier **0.1587** vs book **0.0475** (the book is ~3.3x better calibrated).
+
+Per-series (n>=15), the model beats the book in exactly **two** series:
+
+| series | n | model Brier | book Brier | winner |
+|---|---|---|---|---|
+| KXDIESELW | 85 | **0.0306** | 0.0925 | model |
+| KXDIESELMON | 80 | **0.0477** | 0.0576 | model |
+
+Every `KXAAAGASD*` state series loses, often badly (OH 0.4406 vs 0.0520; FL 0.2926 vs 0.0487;
+WA 0.2908 vs 0.0278). **States stay dead; diesel weekly/monthly is the only family whose model
+has now earned a forward-scored right to be considered.**
+
+**The live trade is still blocked, though.** Today's `KXDIESELW` path snapshot (target
+2026-10-25) shows `excess_gap_cents = 14.5` — far above the ~5c rule — and its best-looking
+strike (`T6.32`, model fair 0.368 vs book bid 0.64 / ask 0.78) sits on a **non-monotonic, thin
+book** (T6.32 yes_bid 0.64 > T6.30 yes_bid 0.55), which is the stale-quote signature the
+wholesale check exists to catch. The standing rule holds: **no size while the excess gap > ~5c**,
+even though the model now wins on Brier.
+
+`KXDIESELMON` (target 2026-10-27): the largest |edge| today is ~2c — below the fee floor. No trade.
+Also note the model prints `fair_yes = 1.000` for every monthly strike <= 6.20, which is
+overconfident given diesel is on a multi-day decline streak; do not read those as free YES buys.
