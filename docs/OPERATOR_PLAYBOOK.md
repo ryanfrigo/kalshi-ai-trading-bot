@@ -94,12 +94,12 @@ Almost certainly **not broken — it's being conservative**, exactly as designed
 Every candidate market has to pass *all* of the filters before a single dollar moves. With the defaults, that means:
 
 - **Confidence ≥ 45%** on the directional read,
-- **Position ≤ 3%** of capital,
+- **Position ≤ 10%** of capital,
 - **Sector concentration ≤ 30%**,
-- **Drawdown circuit-breaker at 15%**,
+- **Drawdown circuit-breaker at 20%**,
 - **quarter-Kelly** sizing on top of all that.
 
-The **Safe Compounder** is even pickier: NO-side only, YES last ≤ 20¢, NO ask > 80¢, edge > 5¢, and it skips sports / entertainment / "mention" markets entirely. On a quiet day, *nothing* clears that bar. Zero trades is a valid, healthy output. A bot that trades constantly is usually a bot with its safeties off.
+The **Safe Compounder** is even pickier: NO-side only, YES last ≤ 20¢, NO ask > 80¢, edge > 3¢, and it skips sports / entertainment / "mention" markets entirely. On a quiet day, *nothing* clears that bar. Zero trades is a valid, healthy output. A bot that trades constantly is usually a bot with its safeties off.
 
 ### 2.2 How to tell "conservative" from "actually broken"
 
