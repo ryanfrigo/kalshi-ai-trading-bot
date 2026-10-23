@@ -190,6 +190,8 @@ This free playbook covers getting connected, understanding the silence, and stay
 - **Surviving Kalshi API drift** — the recurring field changes that break bots (`*_dollars` price fields, `volume_fp`, ticker collisions) and how to pin a release and recover in minutes.
 - **Reading the dashboard like an operator** — what every metric means, when to intervene, and when to walk away.
 - **The full paper-first protocol** I now follow after the 86% lesson.
+- **Telling a real edge from a mirage** — stored prices vs live books, counting events not rows, and why a big edge on a liquid market is a warning, not a gift.
+- **Two appendices** — a get-out checklist, and a 16-row troubleshooting table (401s, missing tables, the silently-paused bot, field drift).
 
 **Get the full guide →** https://kalshi-community.vercel.app/guide
 
