@@ -118,6 +118,13 @@ python cli.py dashboard
 > - Kalshi key + private key → [kalshi.com/account/settings](https://kalshi.com/account/settings)
 > - OpenRouter key → [openrouter.ai](https://openrouter.ai/)
 
+> **Free reference (no signup):** the [Operator's Playbook](docs/OPERATOR_PLAYBOOK.md)
+> (setup traps: the private-key 401 wall, "it runs but never trades", staying online),
+> the [Kalshi API field map](https://kalshi-community.vercel.app/reference/kalshi-fields)
+> (the `*_dollars` / `*_fp` names, and why snapshot prices lie), and a
+> [fee calculator](https://kalshi-community.vercel.app/tools/kalshi-fee-calculator)
+> that shows the breakeven win rate before you size anything.
+
 ---
 
 ## Data-Fed Families (priced from the resolution source)
