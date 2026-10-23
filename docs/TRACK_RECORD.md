@@ -20,7 +20,7 @@ These are **whole-account** figures. This live account is *also* traded manually
 
 ## The honest edge verdict (forward-only)
 
-> **BEATING THE BOOK by 0.1 pts over 60 forward trades (won 62% vs. 62% implied; $+0.001/contract)**
+> **NO MEASURED EDGE — edge +0.1 pts over 60 forward trades is within noise (won 62% vs. 62% implied)**
 
 Only *forward-settled* trades — where the market resolved strictly after the trade — count as out-of-sample evidence. Everything else is quarantined, never silently counted.
 
