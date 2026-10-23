@@ -38,6 +38,8 @@ echo "[run_daily] $(date) mode=$MODE -> $LOG"
 #   * AAA ladder pricing snapshot vs the live book (forward-scored by
 #     scripts/aaa_pricer.py score once the print lands)
 PYTHONPATH="$REPO" "$PYBIN" scripts/capture_corpus.py >>"$LOG" 2>&1 || true
+# live-book slice (the corpus prices a fade can actually be backtested against)
+PYTHONPATH="$REPO" "$PYBIN" scripts/capture_books.py >>"$LOG" 2>&1 || true
 PYTHONPATH="$REPO" "$PYBIN" scripts/aaa_data.py today >>"$LOG" 2>&1 || true
 # AAA state dailies for the KXAAAGASD<ST> ladders (21 states, idempotent per day)
 PYTHONPATH="$REPO" "$PYBIN" scripts/aaa_data.py states >>"$LOG" 2>&1 || true
