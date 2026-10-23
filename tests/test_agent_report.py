@@ -138,6 +138,19 @@ def test_rebased_governor_still_publishes_all_time_drawdown():
     assert "| Drawdown from peak |" not in md
 
 
+def test_new_high_lifts_the_all_time_peak_no_negative_drawdown():
+    # A deposit (or any new high) pushes equity above the frozen pre-rebaseline
+    # peak. The public page must ratchet the peak and print 0.0%, never a
+    # nonsensical negative drawdown like "-393.2%".
+    eq = _equity()
+    eq["equity"] = 14673.42
+    eq["rebase"] = {"date": "2026-09-25", "prior_peak_cents": 297525}
+    eq["governor"]["peak_equity_cents"] = 1465240
+    md = _render(equity=eq)
+    assert "| Drawdown from all-time peak ($14,673.42) | 0.0% |" in md
+    assert "-393.2%" not in md
+
+
 def test_account_section_flags_blended_operator_plus_strategy():
     # The account equity blends the operator's manual trades with the strategy;
     # the page must say so, so a manual-driven drawdown is never misread as the
