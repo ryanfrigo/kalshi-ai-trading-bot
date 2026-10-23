@@ -6,6 +6,8 @@
 
 > ⚠️ **Read this first.** Nothing here is financial advice, and no bot in this guide is guaranteed to make money. I ran one of these strategies live and drew my account down ~86% before I understood what I'm about to teach you. This guide is about *operating the software correctly* — getting it connected, keeping it alive, and reading what it's telling you. It will not pick winners for you. Paper-trade first. Only ever risk money you are fully prepared to lose.
 
+> **Want the rest of the operator's manual?** This free playbook covers getting connected, the silence, and staying online. The paid companion — *Build & Run an AI Kalshi Bot* — covers AI spend, Kalshi API drift, the dashboard, and the paper-first protocol. → **https://kalshi-community.vercel.app/guide**
+
 ---
 
 ## Why this guide exists
