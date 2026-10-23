@@ -55,6 +55,9 @@ step() {  # run a data step; never abort the run, but never hide the failure eit
   fi
 }
 
+# compress logs older than a week (the disk was at 100%; nothing is ever deleted)
+step rotate_logs scripts/rotate_logs.py
+
 step capture_corpus scripts/capture_corpus.py
 # live-book slice (the corpus prices a fade can actually be backtested against)
 step capture_books scripts/capture_books.py
