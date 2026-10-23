@@ -28,6 +28,7 @@ _Drafts only. Nothing here has been posted or published by an agent._
 |---|---|---|
 | `2026-10-launch-playbook.md` | Show HN / Reddit / X | the posts; has a "fire-today" update block with current numbers |
 | `2026-10-release-notes.md` | GitHub Release | repo has **no tags or releases** yet; body + command ready |
+| `2026-10-blog-post.md` | Ryan's own site | evergreen SEO piece; the honesty story told through three concrete bug fixes |
 
 ## Rules for whoever fires these
 - No fabricated numbers, testimonials, ratings, or user counts — ever.
