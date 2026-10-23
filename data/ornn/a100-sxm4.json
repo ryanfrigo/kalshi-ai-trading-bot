@@ -1,47 +1,7 @@
 {
  "gpu": "A100 SXM4",
- "fetched": "2026-10-13T17:12:42.770850+00:00",
+ "fetched": "2026-10-23T17:00:53.988225+00:00",
  "data": [
-  {
-   "timestamp": "2026-07-13T20:00:00.000Z",
-   "index_value": 1.03
-  },
-  {
-   "timestamp": "2026-07-14T20:00:00.000Z",
-   "index_value": 1.03
-  },
-  {
-   "timestamp": "2026-07-15T20:00:00.000Z",
-   "index_value": 1.04
-  },
-  {
-   "timestamp": "2026-07-16T20:00:00.000Z",
-   "index_value": 1.04
-  },
-  {
-   "timestamp": "2026-07-17T20:00:00.000Z",
-   "index_value": 1.02
-  },
-  {
-   "timestamp": "2026-07-18T20:00:00.000Z",
-   "index_value": 0.99
-  },
-  {
-   "timestamp": "2026-07-19T20:00:00.000Z",
-   "index_value": 1.01
-  },
-  {
-   "timestamp": "2026-07-20T20:00:00.000Z",
-   "index_value": 1.02
-  },
-  {
-   "timestamp": "2026-07-21T20:00:00.000Z",
-   "index_value": 1.04
-  },
-  {
-   "timestamp": "2026-07-22T20:00:00.000Z",
-   "index_value": 1.03
-  },
   {
    "timestamp": "2026-07-23T20:00:00.000Z",
    "index_value": 1.06
@@ -369,6 +329,46 @@
   {
    "timestamp": "2026-10-12T20:00:00.000Z",
    "index_value": 0.95
+  },
+  {
+   "timestamp": "2026-10-13T20:00:00.000Z",
+   "index_value": 0.96
+  },
+  {
+   "timestamp": "2026-10-14T20:00:00.000Z",
+   "index_value": 0.96
+  },
+  {
+   "timestamp": "2026-10-15T20:00:00.000Z",
+   "index_value": 0.95
+  },
+  {
+   "timestamp": "2026-10-16T20:00:00.000Z",
+   "index_value": 0.94
+  },
+  {
+   "timestamp": "2026-10-17T20:00:00.000Z",
+   "index_value": 0.97
+  },
+  {
+   "timestamp": "2026-10-18T20:00:00.000Z",
+   "index_value": 0.97
+  },
+  {
+   "timestamp": "2026-10-19T20:00:00.000Z",
+   "index_value": 1
+  },
+  {
+   "timestamp": "2026-10-20T20:00:00.000Z",
+   "index_value": 1.04
+  },
+  {
+   "timestamp": "2026-10-21T20:00:00.000Z",
+   "index_value": 1.07
+  },
+  {
+   "timestamp": "2026-10-22T20:00:00.000Z",
+   "index_value": 1.09
   }
  ]
 }

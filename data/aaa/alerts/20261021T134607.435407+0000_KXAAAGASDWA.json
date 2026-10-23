@@ -1,0 +1,99 @@
+{
+ "ts": "2026-10-21T13:46:07.435407+00:00",
+ "series": "KXAAAGASDWA",
+ "target_date": "2026-10-22",
+ "threshold": 0.15,
+ "rows": [
+  {
+   "ticker": "KXAAAGASDWA-26OCT22-5.3300",
+   "strike": 5.33,
+   "fair_yes": 0.0041,
+   "yes_bid": 0.98,
+   "yes_ask": 0.99,
+   "n_levels": 7,
+   "buy_yes_edge": -0.9959,
+   "buy_no_edge": 0.9659,
+   "buy_yes_cost": 1.0,
+   "buy_no_cost": 0.03,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXAAAGASDWA-26OCT22-5.3250",
+   "strike": 5.325,
+   "fair_yes": 0.0123,
+   "yes_bid": 0.98,
+   "yes_ask": 0.99,
+   "n_levels": 6,
+   "buy_yes_edge": -0.9877,
+   "buy_no_edge": 0.9577,
+   "buy_yes_cost": 1.0,
+   "buy_no_cost": 0.03,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXAAAGASDWA-26OCT22-5.3350",
+   "strike": 5.335,
+   "fair_yes": 0.0008,
+   "yes_bid": 0.96,
+   "yes_ask": 0.99,
+   "n_levels": 6,
+   "buy_yes_edge": -0.9992,
+   "buy_no_edge": 0.9492,
+   "buy_yes_cost": 1.0,
+   "buy_no_cost": 0.05,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXAAAGASDWA-26OCT22-5.3200",
+   "strike": 5.32,
+   "fair_yes": 0.0305,
+   "yes_bid": 0.98,
+   "yes_ask": 0.99,
+   "n_levels": 7,
+   "buy_yes_edge": -0.9695,
+   "buy_no_edge": 0.9395,
+   "buy_yes_cost": 1.0,
+   "buy_no_cost": 0.03,
+   "last": "0.9900"
+  },
+  {
+   "ticker": "KXAAAGASDWA-26OCT22-5.3150",
+   "strike": 5.315,
+   "fair_yes": 0.0606,
+   "yes_bid": 0.98,
+   "yes_ask": 0.99,
+   "n_levels": 7,
+   "buy_yes_edge": -0.9394,
+   "buy_no_edge": 0.9094,
+   "buy_yes_cost": 1.0,
+   "buy_no_cost": 0.03,
+   "last": "0.9900"
+  },
+  {
+   "ticker": "KXAAAGASDWA-26OCT22-5.3400",
+   "strike": 5.34,
+   "fair_yes": 0.0001,
+   "yes_bid": 0.86,
+   "yes_ask": 0.87,
+   "n_levels": 7,
+   "buy_yes_edge": -0.8799,
+   "buy_no_edge": 0.8498,
+   "buy_yes_cost": 0.88,
+   "buy_no_cost": 0.15,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXAAAGASDWA-26OCT22-5.3450",
+   "strike": 5.345,
+   "fair_yes": 0.0001,
+   "yes_bid": 0.4,
+   "yes_ask": 0.42000000000000004,
+   "n_levels": 9,
+   "buy_yes_edge": -0.44,
+   "buy_no_edge": 0.38,
+   "buy_yes_cost": 0.44,
+   "buy_no_cost": 0.62,
+   "last": "0.4000"
+  }
+ ]
+}

@@ -1,47 +1,7 @@
 {
  "gpu": "H200",
- "fetched": "2026-10-13T17:12:43.430360+00:00",
+ "fetched": "2026-10-23T17:00:54.690497+00:00",
  "data": [
-  {
-   "timestamp": "2026-07-13T20:00:00.000Z",
-   "index_value": 4.39
-  },
-  {
-   "timestamp": "2026-07-14T20:00:00.000Z",
-   "index_value": 4.36
-  },
-  {
-   "timestamp": "2026-07-15T20:00:00.000Z",
-   "index_value": 4.62
-  },
-  {
-   "timestamp": "2026-07-16T20:00:00.000Z",
-   "index_value": 4.77
-  },
-  {
-   "timestamp": "2026-07-17T20:00:00.000Z",
-   "index_value": 4.79
-  },
-  {
-   "timestamp": "2026-07-18T20:00:00.000Z",
-   "index_value": 4.78
-  },
-  {
-   "timestamp": "2026-07-19T20:00:00.000Z",
-   "index_value": 4.9
-  },
-  {
-   "timestamp": "2026-07-20T20:00:00.000Z",
-   "index_value": 4.99
-  },
-  {
-   "timestamp": "2026-07-21T20:00:00.000Z",
-   "index_value": 4.96
-  },
-  {
-   "timestamp": "2026-07-22T20:00:00.000Z",
-   "index_value": 4.84
-  },
   {
    "timestamp": "2026-07-23T20:00:00.000Z",
    "index_value": 4.66
@@ -369,6 +329,46 @@
   {
    "timestamp": "2026-10-12T20:00:00.000Z",
    "index_value": 5.24
+  },
+  {
+   "timestamp": "2026-10-13T20:00:00.000Z",
+   "index_value": 5.51
+  },
+  {
+   "timestamp": "2026-10-14T20:00:00.000Z",
+   "index_value": 6.12
+  },
+  {
+   "timestamp": "2026-10-15T20:00:00.000Z",
+   "index_value": 6.51
+  },
+  {
+   "timestamp": "2026-10-16T20:00:00.000Z",
+   "index_value": 6.34
+  },
+  {
+   "timestamp": "2026-10-17T20:00:00.000Z",
+   "index_value": 6.39
+  },
+  {
+   "timestamp": "2026-10-18T20:00:00.000Z",
+   "index_value": 6.34
+  },
+  {
+   "timestamp": "2026-10-19T20:00:00.000Z",
+   "index_value": 6.35
+  },
+  {
+   "timestamp": "2026-10-20T20:00:00.000Z",
+   "index_value": 6.16
+  },
+  {
+   "timestamp": "2026-10-21T20:00:00.000Z",
+   "index_value": 5.88
+  },
+  {
+   "timestamp": "2026-10-22T20:00:00.000Z",
+   "index_value": 6.02
   }
  ]
 }

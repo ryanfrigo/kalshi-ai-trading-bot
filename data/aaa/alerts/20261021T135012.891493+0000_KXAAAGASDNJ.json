@@ -1,0 +1,21 @@
+{
+ "ts": "2026-10-21T13:50:12.891493+00:00",
+ "series": "KXAAAGASDNJ",
+ "target_date": "2026-10-22",
+ "threshold": 0.15,
+ "rows": [
+  {
+   "ticker": "KXAAAGASDNJ-26OCT22-4.2100",
+   "strike": 4.21,
+   "fair_yes": 0.4959,
+   "yes_bid": 0.12,
+   "yes_ask": 0.13,
+   "n_levels": 10,
+   "buy_yes_edge": 0.3559,
+   "buy_no_edge": -0.3859,
+   "buy_yes_cost": 0.14,
+   "buy_no_cost": 0.89,
+   "last": "0.2000"
+  }
+ ]
+}

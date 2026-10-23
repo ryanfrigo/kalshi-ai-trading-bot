@@ -1,0 +1,21 @@
+{
+ "ts": "2026-10-15T16:04:43.577562+00:00",
+ "series": "KXAAAGASDOH",
+ "target_date": "2026-10-16",
+ "threshold": 0.15,
+ "rows": [
+  {
+   "ticker": "KXAAAGASDOH-26OCT16-3.9850",
+   "strike": 3.985,
+   "fair_yes": 0.5405,
+   "yes_bid": 0.79,
+   "yes_ask": 0.98,
+   "n_levels": 5,
+   "buy_yes_edge": -0.4495,
+   "buy_no_edge": 0.2295,
+   "buy_yes_cost": 0.99,
+   "buy_no_cost": 0.23,
+   "last": "0.0000"
+  }
+ ]
+}

@@ -1,0 +1,112 @@
+{
+ "ts": "2026-10-19T13:55:22.528363+00:00",
+ "series": "KXAAAGASDWA",
+ "target_date": "2026-10-20",
+ "threshold": 0.15,
+ "rows": [
+  {
+   "ticker": "KXAAAGASDWA-26OCT20-5.3600",
+   "strike": 5.36,
+   "fair_yes": 0.0824,
+   "yes_bid": 0.98,
+   "yes_ask": 0.99,
+   "n_levels": 7,
+   "buy_yes_edge": -0.9175,
+   "buy_no_edge": 0.8875,
+   "buy_yes_cost": 1.0,
+   "buy_no_cost": 0.03,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXAAAGASDWA-26OCT20-5.3550",
+   "strike": 5.355,
+   "fair_yes": 0.1115,
+   "yes_bid": 0.98,
+   "yes_ask": 0.99,
+   "n_levels": 5,
+   "buy_yes_edge": -0.8885,
+   "buy_no_edge": 0.8585,
+   "buy_yes_cost": 1.0,
+   "buy_no_cost": 0.03,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXAAAGASDWA-26OCT20-5.3650",
+   "strike": 5.365,
+   "fair_yes": 0.0658,
+   "yes_bid": 0.93,
+   "yes_ask": 0.98,
+   "n_levels": 8,
+   "buy_yes_edge": -0.9242,
+   "buy_no_edge": 0.8542,
+   "buy_yes_cost": 0.99,
+   "buy_no_cost": 0.08,
+   "last": "0.9700"
+  },
+  {
+   "ticker": "KXAAAGASDWA-26OCT20-5.3700",
+   "strike": 5.37,
+   "fair_yes": 0.0554,
+   "yes_bid": 0.9,
+   "yes_ask": 0.97,
+   "n_levels": 12,
+   "buy_yes_edge": -0.9246,
+   "buy_no_edge": 0.8346,
+   "buy_yes_cost": 0.98,
+   "buy_no_cost": 0.11,
+   "last": "0.9200"
+  },
+  {
+   "ticker": "KXAAAGASDWA-26OCT20-5.3500",
+   "strike": 5.35,
+   "fair_yes": 0.1579,
+   "yes_bid": 0.98,
+   "yes_ask": 0.99,
+   "n_levels": 6,
+   "buy_yes_edge": -0.8421,
+   "buy_no_edge": 0.8121,
+   "buy_yes_cost": 1.0,
+   "buy_no_cost": 0.03,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXAAAGASDWA-26OCT20-5.3450",
+   "strike": 5.345,
+   "fair_yes": 0.2301,
+   "yes_bid": 0.98,
+   "yes_ask": 0.99,
+   "n_levels": 6,
+   "buy_yes_edge": -0.77,
+   "buy_no_edge": 0.7399,
+   "buy_yes_cost": 1.0,
+   "buy_no_cost": 0.03,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXAAAGASDWA-26OCT20-5.3750",
+   "strike": 5.375,
+   "fair_yes": 0.0436,
+   "yes_bid": 0.69,
+   "yes_ask": 0.79,
+   "n_levels": 7,
+   "buy_yes_edge": -0.7664,
+   "buy_no_edge": 0.6264,
+   "buy_yes_cost": 0.81,
+   "buy_no_cost": 0.33,
+   "last": "0.3800"
+  },
+  {
+   "ticker": "KXAAAGASDWA-26OCT20-5.3800",
+   "strike": 5.38,
+   "fair_yes": 0.0369,
+   "yes_bid": 0.37,
+   "yes_ask": 0.47,
+   "n_levels": 8,
+   "buy_yes_edge": -0.4531,
+   "buy_no_edge": 0.3131,
+   "buy_yes_cost": 0.49,
+   "buy_no_cost": 0.65,
+   "last": "0.4600"
+  }
+ ]
+}
