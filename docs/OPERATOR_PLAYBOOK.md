@@ -20,6 +20,8 @@ Most people who clone the repo hit the same five walls, in the same order:
 4. The AI bill arrives and there's nothing to show for it.
 5. Kalshi changes an API field and everything breaks.
 
+> The free field-by-field **Kalshi API map** (what the live responses actually contain, and why snapshot prices lie): **https://kalshi-community.vercel.app/reference/kalshi-fields**
+
 None of these are exotic. They're the same questions in the issue tracker over and over. This guide is the answer key — the things I wish someone had handed me on day one.
 
 ---
