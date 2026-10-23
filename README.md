@@ -8,6 +8,7 @@
 [![GitHub Stars](https://img.shields.io/github/stars/ryanfrigo/kalshi-ai-trading-bot?style=flat&color=yellow)](https://github.com/ryanfrigo/kalshi-ai-trading-bot/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/ryanfrigo/kalshi-ai-trading-bot?style=flat&color=blue)](https://github.com/ryanfrigo/kalshi-ai-trading-bot/network)
 [![GitHub Issues](https://img.shields.io/github/issues/ryanfrigo/kalshi-ai-trading-bot)](https://github.com/ryanfrigo/kalshi-ai-trading-bot/issues)
+[![Listed on Prediction Market Use Cases](https://prediction-market-use-cases.vercel.app/badge-listed.svg)](https://prediction-market-use-cases.vercel.app/use-case/kalshi-ai-trading-toolkit/)
 
 **The honest edge layer for prediction-market trading.**
 
