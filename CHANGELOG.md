@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Track record: the all-time peak now ratchets with deposits** (2026-10-23) —
+  `cli.py report` used the frozen pre-rebaseline peak, so on a funded account the
+  public page printed a nonsensical `Drawdown from all-time peak ($2,975.25) | -393.2%`.
+  The peak now ratchets against the live governor peak and current equity and clamps at
+  0, so a deposit can never show as a negative drawdown. Regression test added.
+- **Edge verdict: a sub-point edge is noise, not a win** (2026-10-23) — `cli.py edge`
+  printed "BEATING THE BOOK by 0.1 pts" for a +0.001/contract edge. A positive edge below
+  the new `_MIN_EDGE_PTS = 1.0` floor now reports **NO MEASURED EDGE … within noise**,
+  matching the repo's rule of never claiming edge the data cannot support. Regression test
+  added.
+
 ### Added
+- **Operator's Playbook** — `docs/OPERATOR_PLAYBOOK.md`, the free field guide for the setup
+  traps (the private-key 401 wall, "it runs but never trades", staying online), linked from
+  the README nav; launch-post drafts live in `docs/drafts/`.
 - **First forward-only edge verdict on the live account (2026-10-02)** — `cli edge` now
   scores forward-settled trades end to end and the verdict is published in
   `docs/TRACK_RECORD.md`, losses included: **NO MEASURED EDGE** (n=55 forward trades,
