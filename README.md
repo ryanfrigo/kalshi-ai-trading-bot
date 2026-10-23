@@ -15,7 +15,7 @@ An agent-native toolkit for [Kalshi](https://kalshi.com) whose flagship isn't "a
 
 Under the hood: a signed Kalshi API client, market-data ingestion, position tracking, SQLite telemetry, a Streamlit dashboard, a pluggable LLM client (any model on OpenRouter), atomic agent CLI tools, a Claude skill, and a first-mover MCP server. Example strategies ship as starting points — fork them, replace them, or write your own.
 
-[**Live Track Record**](docs/TRACK_RECORD.md) · [**Jev on Kalshi: measured**](docs/JEV.md) · [Quick Start](#quick-start) · [Prove Your Edge](#prove-your-edge-the-headline) · [Agent-Native Surface](#agent-native-surface) · [What's Included](#whats-included) · [Example Strategies](#example-strategies) · [Configuration](#configuration) · [Contributing](CONTRIBUTING.md)
+[**Live Track Record**](docs/TRACK_RECORD.md) · [**Operator's Playbook**](docs/OPERATOR_PLAYBOOK.md) · [**Jev on Kalshi: measured**](docs/JEV.md) · [Quick Start](#quick-start) · [Prove Your Edge](#prove-your-edge-the-headline) · [Agent-Native Surface](#agent-native-surface) · [What's Included](#whats-included) · [Example Strategies](#example-strategies) · [Configuration](#configuration) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
