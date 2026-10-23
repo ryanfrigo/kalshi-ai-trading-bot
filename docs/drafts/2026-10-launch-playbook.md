@@ -105,3 +105,23 @@ it silent", staying online. And a full guide for running it properly.
 3. Reply to every substantive comment with real numbers from `docs/TRACK_RECORD.md`.
 4. Only then push the paid guide in a follow-up ("the playbook got X requests, here's
    the deeper guide") — do not lead with the paid thing.
+
+---
+
+## Update before firing (2026-10-23)
+
+Numbers moved since these were drafted. Whatever you publish, use the **then-current**
+`docs/TRACK_RECORD.md`; as of now:
+
+- Forward-only verdict: **NO MEASURED EDGE — edge +0.1 pts over 60 forward trades is
+  within noise** (won 62% vs 62% implied). The 10/02 "−1.9 pts" quote above is historical.
+- Full settlement history: 232 settled, 65% win rate, **net realized +$465.58**.
+- Repo: **631 stars / 198 forks**.
+
+**A sharper angle than the drafts use** — and a better story than "we lost money":
+> Our own harness used to print **"BEATING THE BOOK"** for a **+0.1-point** edge. We fixed
+> it: a positive edge below 1 point is now reported as **within noise**. A measurement
+> harness that would have called that a win is exactly what this repo exists to refuse.
+
+That is the differentiator stated as an action we took on ourselves, with a receipt in the
+changelog — stronger than any claim, and impossible to accuse of marketing.
