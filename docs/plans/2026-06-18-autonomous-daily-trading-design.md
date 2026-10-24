@@ -77,6 +77,12 @@ dry-run-verified before it is scheduled.
 
 ## Risk model (owner-selected: repo % defaults)
 
+> **Superseded in part (2026-10-23).** The *numbers* below were the intent on 2026-06-18 and have
+> since changed — the live values are in `src/config/settings.py` (position cap 10%, daily loss 5%,
+> drawdown 20%). **The `fail-closed balance` requirement still stands and is not implemented:**
+> `kalshi_client.place_order` logs "risk governor unavailable, failing open" and proceeds, so an
+> infrastructure error disables the risk gate. Tracked in issue #98.
+
 3%/position · 10% daily-loss kill · 15% drawdown halt · quarter-Kelly · fail-closed balance ·
 price sanity. No extra absolute caps for now; revisit as the account grows.
 
