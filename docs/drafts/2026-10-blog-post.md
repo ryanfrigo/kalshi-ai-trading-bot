@@ -41,7 +41,7 @@ sample large enough to say so.
 We published it. It is on the repo's front page, losses included, and it has been the single
 most useful thing we have shipped, because it changed what we built next.
 
-## Three things we got wrong, and the fix for each
+## Four things we got wrong, and the fix for each
 
 **1. We printed a win out of noise.** Our harness reported *"BEATING THE BOOK by 0.1 pts"* —
 a margin of a tenth of a point over sixty trades. That is not an edge; that is arithmetic
@@ -59,6 +59,16 @@ live book was 0.85. Separately, a ladder that looked like a comfortable 25-point
 midday had repriced from 0.62 to 0.99 by evening. If we had acted on the morning file, we
 would have bought exactly the wrong side. Rule now: price off the live book, at the moment
 you decide.
+
+**4. Our kill switch reported success while doing nothing.** `close-all` is the command you
+reach for when you need to flatten the book in a hurry. It printed *"No open positions on
+Kalshi"* on an account holding thirteen — it filtered on a field the API had renamed, and
+three more renames hid behind that first one. The same class of silent failure had killed
+**51 consecutive** scheduled runs without anyone noticing: two data tools could not find their
+browser under the scheduler's minimal `PATH`, and the scheduler swallowed every step failure.
+A guard that never fires and a guard that is broken look identical from the outside. We now
+compile every module in CI, and scheduled step failures are written to a file the daily report
+reads.
 
 ## Why publish a losing record
 
