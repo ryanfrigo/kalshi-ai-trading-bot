@@ -347,7 +347,7 @@ class AdvancedMarketMaker:
         }
         
         # Limit to top opportunities based on available capital
-        max_markets = getattr(settings.trading, 'max_concurrent_markets', 10)
+        max_markets = settings.trading.max_positions
         top_opportunities = opportunities[:max_markets]
         
         for opportunity in top_opportunities:
