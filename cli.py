@@ -1272,12 +1272,19 @@ def cmd_close_all(args: argparse.Namespace) -> None:
 
     async def _close() -> None:
         from src.clients.kalshi_client import KalshiClient
+        from src.utils.market_prices import orderbook_levels
         client = KalshiClient()
         try:
             positions_resp = await client.get_positions()
+            # v2 returns position_fp (a signed string: + YES, - NO); the v1 'position'
+            # key is gone, so this filter used to select nothing and report an empty book
+            # on an account holding 13 positions.
+            def _size(p):
+                return float(p.get("position_fp") or p.get("position") or 0)
+
             market_positions = [
                 p for p in positions_resp.get("market_positions", [])
-                if p.get("position", 0) != 0
+                if _size(p) != 0
             ]
 
             if not market_positions:
@@ -1291,21 +1298,20 @@ def cmd_close_all(args: argparse.Namespace) -> None:
             failed = 0
             for pos in market_positions:
                 ticker = pos["ticker"]
-                contracts = pos["position"]            # signed: + YES, - NO
+                contracts = _size(pos)                 # signed: + YES, - NO
                 side = "yes" if contracts > 0 else "no"
                 quantity = abs(contracts)
 
                 try:
                     book_resp = await client.get_orderbook(ticker, depth=1)
-                    book = book_resp.get("orderbook", {})
-                    side_bids = book.get(side, [])
+                    # handles both shapes: orderbook_fp.{yes,no}_dollars (dollar strings) and the
+                    # legacy orderbook.{yes,no} (integer cents)
+                    side_bids = orderbook_levels(book_resp, side)
                     if not side_bids:
                         print(f"  ⚠️  {ticker}: no {side.upper()} bids in book — skipping")
                         failed += 1
                         continue
-                    # Kalshi orderbook bid entries are [price_cents, count].
-                    # Best bid is the highest price.
-                    best_bid_cents = max(int(level[0]) for level in side_bids)
+                    best_bid_cents = max(round(price * 100) for price, _count in side_bids)
                 except Exception as exc:
                     print(f"  ❌ {ticker}: orderbook fetch failed — {exc}")
                     failed += 1
