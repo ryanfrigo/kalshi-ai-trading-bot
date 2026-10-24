@@ -259,6 +259,15 @@ python cli.py status
 
 `close-all` queries Kalshi directly (not the local DB), so it works even when local state is stale. Sells are limit-priced, so they may rest unfilled on thin books — check Kalshi or `cli.py status` after a minute.
 
+> **Test it once on a book that isn't empty.** Until 2026-10-23 this command did not work: it
+> filtered positions on `position`, a field the API had already renamed to `position_fp`, so it
+> printed *"No open positions on Kalshi"* on an account holding thirteen — with three more
+> renamed-field bugs behind that first one (a `KeyError` on the row lookup, the wrong orderbook
+> key, and bid levels parsed as integer cents where the API returns dollar strings). It is fixed
+> and verified against a live book, but the lesson is general: **a flatten command that has only
+> ever run on a flat account is untested.** Run the dry-run above while you hold a position and
+> check the count it reports against `cli.py status`.
+
 ---
 
 ## Installation
