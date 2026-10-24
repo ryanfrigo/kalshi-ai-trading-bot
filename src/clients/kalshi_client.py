@@ -28,6 +28,26 @@ class KalshiAPIError(Exception):
     pass
 
 
+def position_cost_dollars(side: str, count: int, *,
+                          yes_price: Optional[int] = None,
+                          no_price: Optional[int] = None) -> Optional[float]:
+    """Capital committed by an order, in dollars — the number the position cap bounds.
+
+    A Kalshi position is fully collateralised: buying NO at ``p`` cents costs ``p`` per
+    contract, exactly as buying YES at ``q`` costs ``q``. The cap must therefore use the
+    price of the side being bought.
+
+    It previously used the YES-leg price (``100 - no_price``) for NO orders, which for a
+    deep-NO fade (say 95c) understated the committed capital by ~19x — so a NO position
+    could pass the "10% of equity" gate at nearly 2x equity. ``toolbelt.cap_count`` gets
+    this right; this function is the same rule expressed once.
+    """
+    price_cents = yes_price if side.lower() == "yes" else no_price
+    if price_cents is None:
+        return None
+    return price_cents / 100.0 * float(count)
+
+
 def build_order_v2_payload(
     ticker: str,
     client_order_id: str,
@@ -446,6 +466,8 @@ class KalshiClient(TradingLoggerMixin):
             from src.risk.risk_governor import RiskGovernor
             drawdown_pct = 20.0
             try:
+                # max_drawdown is module-level in settings.py; reading it off the Settings
+                # object silently yields the fallback instead of the configured value.
                 from src.config import settings as _s
                 drawdown_pct = getattr(_s, "max_drawdown", 0.20) * 100.0
             except Exception:
@@ -457,10 +479,9 @@ class KalshiClient(TradingLoggerMixin):
             if decision.halted:
                 gate_error = f"RISK_HALT: {'; '.join(decision.reasons)}"
             else:
-                yes_leg_cents = (yes_price if side.lower() == "yes"
-                                 else 100 - (no_price or 0)) if (yes_price or no_price) else None
-                if yes_leg_cents is not None and action.lower() == "buy":
-                    cost = yes_leg_cents / 100.0 * float(count)
+                cost = position_cost_dollars(side, count, yes_price=yes_price,
+                                             no_price=no_price)
+                if cost is not None and action.lower() == "buy":
                     equity = decision.current_equity_cents / 100.0
                     cap = equity * settings.trading.max_position_size_pct / 100.0
                     if cost > cap:

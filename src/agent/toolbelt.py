@@ -13,6 +13,18 @@ import uuid
 from typing import Any, Dict, Optional, Tuple
 
 
+def configured_position_pct() -> float:
+    """The per-position equity cap, as a fraction, from settings.
+
+    Callers should use this rather than a literal: the governor drifted exactly this way
+    (a hardcoded 10% daily loss against a configured 5%), and a sizing guardrail that
+    silently disagrees with settings is how you find out the hard way.
+    """
+    from src.config import settings as settings_module
+
+    return settings_module.settings.trading.max_position_size_pct / 100.0
+
+
 def cap_count(
     count: int,
     price_cents: int,
@@ -45,9 +57,9 @@ def cap_count(
 async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
     """Structured situational awareness: governor verdict, equity, positions,
     resting orders. Read-only."""
-    from src.risk.risk_governor import RiskGovernor
+    from src.risk.risk_governor import governor_from_settings
 
-    gov = governor or RiskGovernor(kalshi_client=kalshi_client)
+    gov = governor or governor_from_settings(kalshi_client=kalshi_client)
     decision = await gov.check()
 
     bal = await kalshi_client.get_balance()
@@ -112,7 +124,7 @@ async def place_guarded_order(
     est_prob: Optional[float] = None,
     category: str = "",
     governor=None,
-    max_position_pct: float = 0.10,
+    max_position_pct: float | None = None,
     dry: bool = False,
     journal_path: Optional[str] = None,
     policy_path: Optional[str] = None,
@@ -137,14 +149,14 @@ async def place_guarded_order(
     (``reason="haircut_erased_edge"``) rather than placed as a -EV trade —
     ``override_policy=True`` forces it through anyway.
     """
-    from src.risk.risk_governor import RiskGovernor
+    from src.risk.risk_governor import governor_from_settings
     from src.utils.market_prices import get_market_prices, is_tradeable_market
     from src.agent.journal import make_decision_record, append_decision, DEFAULT_JOURNAL_PATH
     from src.agent.policy import load_policy, apply_policy, DEFAULT_POLICY_PATH
     from src.agent.settle import series_category
 
     side = side.lower()
-    gov = governor or RiskGovernor(kalshi_client=kalshi_client)
+    gov = governor or governor_from_settings(kalshi_client=kalshi_client)
     decision = await gov.check()
     if decision.halted:
         return {"ok": False, "reason": "governor_halted", "governor": decision.to_dict()}
@@ -182,6 +194,8 @@ async def place_guarded_order(
 
     bal = await kalshi_client.get_balance()
     cash = int(bal.get("balance", 0) or 0)
+    if max_position_pct is None:
+        max_position_pct = configured_position_pct()
     n, cap_reason = cap_count(count, price_cents, decision.current_equity_cents,
                               cash, max_position_pct)
     if n < 1:

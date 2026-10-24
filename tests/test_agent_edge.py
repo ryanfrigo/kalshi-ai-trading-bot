@@ -272,6 +272,20 @@ def test_edge_report_claims_edge_when_forward_and_beating_book():
     assert "50.0 pts" in report["verdict"]
 
 
+def test_edge_report_does_not_claim_edge_within_noise():
+    # A sub-point edge over a dozen trades is indistinguishable from noise.
+    # The harness must NOT print "BEATING THE BOOK" for it — that is exactly
+    # the overclaim this repo exists to refuse.
+    recs = [_rec(f"W{i}", price=0.91, est_prob=0.91, won=True) for i in range(11)]
+    recs.append(_rec("L0", price=0.92, est_prob=0.92, won=False))
+    report = edge_report(recs, date="2026-06-25")
+    assert report["n_forward"] == 12
+    assert 0 < report["edge_vs_book"]["overall"]["edge_vs_book"] < 0.01  # positive but tiny
+    assert "BEATING THE BOOK" not in report["verdict"]
+    assert "NO MEASURED EDGE" in report["verdict"]
+    assert "within noise" in report["verdict"]
+
+
 def test_edge_report_no_edge_when_book_wins():
     # 12 forward trades, all paid 0.90 implied but all lost -> edge -0.90.
     recs = [

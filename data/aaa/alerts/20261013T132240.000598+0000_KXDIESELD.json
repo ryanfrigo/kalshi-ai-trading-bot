@@ -1,0 +1,47 @@
+{
+ "ts": "2026-10-13T13:22:40.000598+00:00",
+ "series": "KXDIESELD",
+ "target_date": "2026-10-14",
+ "threshold": 0.1,
+ "rows": [
+  {
+   "ticker": "KXDIESELD-26OCT14-T6.285",
+   "strike": 6.285,
+   "fair_yes": 0.1713,
+   "yes_bid": 0.83,
+   "yes_ask": 0.87,
+   "n_levels": 8,
+   "buy_yes_edge": -0.7087,
+   "buy_no_edge": 0.6487,
+   "buy_yes_cost": 0.88,
+   "buy_no_cost": 0.18,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXDIESELD-26OCT14-T6.275",
+   "strike": 6.275,
+   "fair_yes": 0.3244,
+   "yes_bid": 0.74,
+   "yes_ask": 0.98,
+   "n_levels": 5,
+   "buy_yes_edge": -0.6656,
+   "buy_no_edge": 0.3956,
+   "buy_yes_cost": 0.99,
+   "buy_no_cost": 0.28,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXDIESELD-26OCT14-T6.290",
+   "strike": 6.29,
+   "fair_yes": 0.1298,
+   "yes_bid": 0.52,
+   "yes_ask": 0.55,
+   "n_levels": 9,
+   "buy_yes_edge": -0.4402,
+   "buy_no_edge": 0.3701,
+   "buy_yes_cost": 0.57,
+   "buy_no_cost": 0.5,
+   "last": "0.0000"
+  }
+ ]
+}

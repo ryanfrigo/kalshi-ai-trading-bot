@@ -20,7 +20,13 @@ TS="$(date +%Y%m%d_%H%M%S)"
 LOG="logs/daily_runs/morning_${TS}.log"
 echo "[run_morning] $(date) -> $LOG"
 
-run() { PYTHONPATH="$REPO" "$PYBIN" "$@" >>"$LOG" 2>&1 || true; }
+FAILED=()
+run() {  # never abort the run on one failure, but never hide it either
+  if ! PYTHONPATH="$REPO" "$PYBIN" "$@" >>"$LOG" 2>&1; then
+    FAILED+=("$*")
+    echo "[run_morning] STEP FAILED: $*" >>"$LOG"
+  fi
+}
 
 TARGET="$(date -u -d '+1 day' +%F 2>/dev/null || date -u -v+1d +%F)"          # next print (daily ladders)
 TARGET_WEEK="$(date -u -d '+2 days' +%F 2>/dev/null || date -u -v+2d +%F)"     # weekly resolves on the print after next
@@ -47,6 +53,9 @@ run scripts/scalp_paper.py record || true
 run scripts/scalp_paper.py settle || true
 run scripts/jev_score.py
 
+if [ ${#FAILED[@]} -gt 0 ]; then
+  echo "[run_morning] WARNING: ${#FAILED[@]} step(s) failed: ${FAILED[*]}" >>"$LOG"
+fi
 echo "[run_morning] $(date) done -> $LOG"
 grep -c ALERT "$LOG" || true
 echo "[run_morning] standing verdicts: data/aaa/alerts/ADJUDICATIONS.md"

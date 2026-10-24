@@ -1,0 +1,21 @@
+{
+ "ts": "2026-10-07T17:26:37.313956+00:00",
+ "series": "KXAAAGASDPA",
+ "target_date": "2026-10-08",
+ "threshold": 0.15,
+ "rows": [
+  {
+   "ticker": "KXAAAGASDPA-26OCT08-4.4500",
+   "strike": 4.45,
+   "fair_yes": 0.3355,
+   "yes_bid": 0.1,
+   "yes_ask": 0.13,
+   "n_levels": 10,
+   "buy_yes_edge": 0.1955,
+   "buy_no_edge": -0.2455,
+   "buy_yes_cost": 0.14,
+   "buy_no_cost": 0.91,
+   "last": "0.0000"
+  }
+ ]
+}

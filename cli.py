@@ -164,12 +164,12 @@ def cmd_daily(args: argparse.Namespace) -> None:
     async def _daily() -> None:
         from src.clients.kalshi_client import KalshiClient
         from src.strategies.safe_compounder import SafeCompounder
-        from src.risk.risk_governor import RiskGovernor
+        from src.risk.risk_governor import governor_from_settings
         from src.data.collector import snapshot_account
 
         client = KalshiClient()
         try:
-            gov = RiskGovernor(kalshi_client=client)
+            gov = governor_from_settings(kalshi_client=client)
             decision = await gov.check()
 
             print("=" * 60)
@@ -1272,12 +1272,19 @@ def cmd_close_all(args: argparse.Namespace) -> None:
 
     async def _close() -> None:
         from src.clients.kalshi_client import KalshiClient
+        from src.utils.market_prices import orderbook_levels
         client = KalshiClient()
         try:
             positions_resp = await client.get_positions()
+            # v2 returns position_fp (a signed string: + YES, - NO); the v1 'position'
+            # key is gone, so this filter used to select nothing and report an empty book
+            # on an account holding 13 positions.
+            def _size(p):
+                return float(p.get("position_fp") or p.get("position") or 0)
+
             market_positions = [
                 p for p in positions_resp.get("market_positions", [])
-                if p.get("position", 0) != 0
+                if _size(p) != 0
             ]
 
             if not market_positions:
@@ -1291,21 +1298,20 @@ def cmd_close_all(args: argparse.Namespace) -> None:
             failed = 0
             for pos in market_positions:
                 ticker = pos["ticker"]
-                contracts = pos["position"]            # signed: + YES, - NO
+                contracts = _size(pos)                 # signed: + YES, - NO
                 side = "yes" if contracts > 0 else "no"
                 quantity = abs(contracts)
 
                 try:
                     book_resp = await client.get_orderbook(ticker, depth=1)
-                    book = book_resp.get("orderbook", {})
-                    side_bids = book.get(side, [])
+                    # handles both shapes: orderbook_fp.{yes,no}_dollars (dollar strings) and the
+                    # legacy orderbook.{yes,no} (integer cents)
+                    side_bids = orderbook_levels(book_resp, side)
                     if not side_bids:
                         print(f"  ⚠️  {ticker}: no {side.upper()} bids in book — skipping")
                         failed += 1
                         continue
-                    # Kalshi orderbook bid entries are [price_cents, count].
-                    # Best bid is the highest price.
-                    best_bid_cents = max(int(level[0]) for level in side_bids)
+                    best_bid_cents = max(round(price * 100) for price, _count in side_bids)
                 except Exception as exc:
                     print(f"  ❌ {ticker}: orderbook fetch failed — {exc}")
                     failed += 1
@@ -1365,14 +1371,25 @@ def cmd_close_all(args: argparse.Namespace) -> None:
 def cmd_backtest(args: argparse.Namespace) -> None:
     """Honest status of backtesting — and what to use instead today."""
     print("=" * 64)
-    print("  BACKTESTING — not shipped yet, and here's the honest why")
+    print("  BACKTESTING — the capture exists now; the sample is young")
     print("=" * 64)
     print()
-    print("  A real strategy backtest needs a market-price + settled-outcome")
-    print("  corpus captured over time. This repo does not ship one (the local")
-    print("  market catalog has no price history and no settled outcomes), so a")
-    print("  backtest engine would have nothing real to score. Building that")
-    print("  capture corpus is the next slice; a backtest follows it.")
+    print("  A backtest needs captured entry prices + realized outcomes over time.")
+    print("  Both pieces now exist and the daily job keeps them growing:")
+    print()
+    print("    scripts/capture_corpus.py   full-universe snapshot per UTC day (what")
+    print("                                was open, what resolved). Its *_dollars")
+    print("                                prices are snapshots, NOT entry prices.")
+    print("    scripts/capture_books.py    the LIVE orderbook for each day's candidate")
+    print("                                slice — the entry prices a fade can honestly")
+    print("                                be backtested against.")
+    print("    scripts/backtest_books.py   joins that corpus to settled outcomes and")
+    print("                                scores the longshot-NO fade: fees charged on")
+    print("                                entry, counted by EVENTS not strike rows.")
+    print()
+    print("  Until enough days (and distinct events) accumulate it will tell you the")
+    print("  sample is too young. That refusal is the feature — an edge claim needs")
+    print("  events, not rows.")
     print()
     print("  What works TODAY — the feedback loop that needs no corpus:")
     print("    python cli.py edge       prove/disprove edge on your settled trades")

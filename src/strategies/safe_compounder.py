@@ -777,8 +777,9 @@ class SafeCompounder:
             for f in fill_list:
                 ticker = f.get("ticker", "")
                 side = f.get("side", "")
-                count = f.get("count", 0)
-                price = f.get("yes_price", f.get("no_price", 0))
+                # v2 names: count_fp / *_price_dollars (reading the v1 names printed "$0.00 x0")
+                count = f.get("count_fp", f.get("count", 0)) or 0
+                price = f.get("yes_price_dollars") or f.get("no_price_dollars") or 0
                 created = f.get("created_time", "")[:16]
                 # Convert cents to dollars if needed for display
                 if isinstance(price, (int, float)) and price > 1.0:

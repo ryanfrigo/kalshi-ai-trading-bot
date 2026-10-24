@@ -1,13 +1,22 @@
 #!/usr/bin/env python
 """Capture a daily price snapshot of the full open-market universe.
 
-The one thing a real backtest needs that this repo never had: entry prices
-over time. Each run appends one gzipped JSONL file per UTC day under
-``data/corpus/`` — one row per open market with its snapshot prices, volume,
-open interest and close time. Joined later against Kalshi's authoritative
-settlements, this corpus makes an honest, out-of-sample backtest of the
-longshot-fade strategy possible (see docs: the backtest is data-blocked
-until this corpus exists).
+A universe-and-outcome corpus: one gzipped JSONL file per UTC day under
+``data/corpus/``, one row per open market with its snapshot prices, volume,
+open interest and close time. Joined against Kalshi's authoritative
+settlements it gives an honest, out-of-sample view of *what resolved* and
+*what the universe looked like* on each captured day.
+
+⚠️ **The prices in this corpus come from the events API's ``*_dollars``
+fields, which are NOT reliable entry prices.** The `kalshi-trade` skill
+documents this directly: those fields can lag the live book by tens of
+cents (measured: snapshot 0.68 vs live 0.85), and pricing an edge off them
+manufactures edges that do not exist. So this corpus is *not* sufficient on
+its own for a price/edge backtest — a backtest that enters on these prices
+must re-price each candidate against the **live orderbook** (`orderbook_fp`,
+see ``scripts/hunt_candidates.py``) before claiming anything, or it will
+score a mirage. Capturing live books for the whole ~120k-market universe per
+day is not feasible; capturing them for a chosen candidate slice is.
 
 Idempotent per day: if today's file already exists it exits without touching
 anything (pass --force to re-capture). Run it from any loop tick — a day with

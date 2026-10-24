@@ -8,6 +8,7 @@
 [![GitHub Stars](https://img.shields.io/github/stars/ryanfrigo/kalshi-ai-trading-bot?style=flat&color=yellow)](https://github.com/ryanfrigo/kalshi-ai-trading-bot/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/ryanfrigo/kalshi-ai-trading-bot?style=flat&color=blue)](https://github.com/ryanfrigo/kalshi-ai-trading-bot/network)
 [![GitHub Issues](https://img.shields.io/github/issues/ryanfrigo/kalshi-ai-trading-bot)](https://github.com/ryanfrigo/kalshi-ai-trading-bot/issues)
+[![Listed on Prediction Market Use Cases](https://prediction-market-use-cases.vercel.app/badge-listed.svg)](https://prediction-market-use-cases.vercel.app/use-case/kalshi-ai-trading-toolkit/)
 
 **The honest edge layer for prediction-market trading.**
 
@@ -15,7 +16,7 @@ An agent-native toolkit for [Kalshi](https://kalshi.com) whose flagship isn't "a
 
 Under the hood: a signed Kalshi API client, market-data ingestion, position tracking, SQLite telemetry, a Streamlit dashboard, a pluggable LLM client (any model on OpenRouter), atomic agent CLI tools, a Claude skill, and a first-mover MCP server. Example strategies ship as starting points — fork them, replace them, or write your own.
 
-[**Live Track Record**](docs/TRACK_RECORD.md) · [**Jev on Kalshi: measured**](docs/JEV.md) · [Quick Start](#quick-start) · [Prove Your Edge](#prove-your-edge-the-headline) · [Agent-Native Surface](#agent-native-surface) · [What's Included](#whats-included) · [Example Strategies](#example-strategies) · [Configuration](#configuration) · [Contributing](CONTRIBUTING.md)
+[**Live Track Record**](docs/TRACK_RECORD.md) · [**Operator's Playbook**](docs/OPERATOR_PLAYBOOK.md) · [**Jev on Kalshi: measured**](docs/JEV.md) · [Quick Start](#quick-start) · [Prove Your Edge](#prove-your-edge-the-headline) · [Agent-Native Surface](#agent-native-surface) · [What's Included](#whats-included) · [Example Strategies](#example-strategies) · [Configuration](#configuration) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -117,6 +118,13 @@ python cli.py dashboard
 > - Kalshi key + private key → [kalshi.com/account/settings](https://kalshi.com/account/settings)
 > - OpenRouter key → [openrouter.ai](https://openrouter.ai/)
 
+> **Free reference (no signup):** the [Operator's Playbook](docs/OPERATOR_PLAYBOOK.md)
+> (setup traps: the private-key 401 wall, "it runs but never trades", staying online),
+> the [Kalshi API field map](https://kalshi-community.vercel.app/reference/kalshi-fields)
+> (the `*_dollars` / `*_fp` names, and why snapshot prices lie), and a
+> [fee calculator](https://kalshi-community.vercel.app/tools/kalshi-fee-calculator)
+> that shows the breakeven win rate before you size anything.
+
 ---
 
 ## Data-Fed Families (priced from the resolution source)
@@ -182,10 +190,10 @@ This repo gives you the building blocks. The example strategies use them — you
 | **Edge harness** | Brier / log-loss / edge-vs-book + forward-only honesty verdict (pure, deterministic) | `src/agent/edge.py` |
 | **Edge Policy** | Turns the settled record into a pre-trade gate (block losing categories, warn on losing sides, haircut overconfident bands); closes the self-improvement loop | `src/agent/policy.py` |
 | **Learnings system** | Joins settlements back into the decision journal; calibration table + realized edge → evolving learnings | `src/agent/learnings.py` |
-| **Risk governor** | Daily-loss + drawdown kill switch + manual halt, authoritative for every live order | `src/risk/risk_governor.py` |
+| **Risk governor** | Daily-loss + drawdown kill switch + manual halt, authoritative for every live order that goes **through this client** — an order placed any other way (another tool, the web UI, another agent) bypasses it entirely | `src/risk/risk_governor.py` |
 | **Kalshi client** | Authenticated REST + WebSocket client (RSA signing, retries, rate-limit handling) | `src/clients/kalshi_client.py` |
 | **Market ingestion** | Pulls the full tradeable universe via the Events API, persists to SQLite | `src/jobs/ingest.py` |
-| **Position tracking** | Stop-loss, take-profit, time-based, and resolution-based exits with real Kalshi sell orders | `src/jobs/track.py` |
+| **Position tracking** | Stop-loss, take-profit, time-based and resolution-based exits. ⚠️ **Unreachable today**: `src/jobs/track.py` is not invoked by anything, and the order helpers it alone calls no-op on a v1 price field — net effect, no exit management. Tracked in #97 | `src/jobs/track.py` |
 | **LLM client** | Single OpenRouter API key, swap models with one config line, fallback chain on errors, daily-cost tracker | `src/clients/openrouter_client.py` |
 | **SQLite telemetry** | Every trade, AI decision, and cost metric logged locally | `src/utils/database.py` |
 | **MCP server** | First-mover MCP layer over the governor-gated tools | `src/mcp_server.py` |
@@ -251,6 +259,15 @@ python cli.py status
 
 `close-all` queries Kalshi directly (not the local DB), so it works even when local state is stale. Sells are limit-priced, so they may rest unfilled on thin books — check Kalshi or `cli.py status` after a minute.
 
+> **Test it once on a book that isn't empty.** Until 2026-10-23 this command did not work: it
+> filtered positions on `position`, a field the API had already renamed to `position_fp`, so it
+> printed *"No open positions on Kalshi"* on an account holding thirteen — with three more
+> renamed-field bugs behind that first one (a `KeyError` on the row lookup, the wrong orderbook
+> key, and bid levels parsed as integer cents where the API returns dollar strings). It is fixed
+> and verified against a live book, but the lesson is general: **a flatten command that has only
+> ever run on a flat account is untested.** Run the dry-run above while you hold a position and
+> check the count it reports against `cli.py status`.
+
 ---
 
 ## Installation
@@ -312,13 +329,13 @@ All trading parameters live in `src/config/settings.py`. The most useful knobs:
 
 ```python
 # Position sizing
-max_position_size_pct  = 3.0     # Max 3% of balance per position
+max_position_size_pct  = 10.0    # Max 10% of balance per position
 max_positions          = 10      # Max concurrent positions
 kelly_fraction         = 0.25    # Quarter-Kelly (conservative)
 
 # Market filtering
 min_volume             = 500     # Minimum contract volume
-max_time_to_expiry_days = 14     # How far out to trade
+# max_time_to_expiry_days: REMOVED — trade any timeline
 min_confidence_to_trade = 0.45   # Minimum AI confidence to enter
 
 # LLM (OpenRouter)
@@ -327,8 +344,8 @@ ai_temperature         = 0       # Deterministic
 ai_max_tokens          = 8000
 
 # Risk management
-max_daily_loss_pct     = 10.0    # Daily loss circuit breaker
-max_drawdown           = 0.15    # Portfolio drawdown halt
+max_daily_loss_pct     = 5.0     # Daily loss circuit breaker
+max_drawdown           = 0.20    # Portfolio drawdown halt
 daily_ai_cost_limit    = 10.0    # Max daily LLM spend in USD
 ```
 
@@ -397,8 +414,8 @@ The category scorer evaluates each Kalshi market category on a 0-100 scale based
 | 80–100 | 20% | STRONG |
 | 60–79 | 10% | GOOD |
 | 40–59 | 5% | WEAK |
-| 20–39 | 2% | POOR |
-| 0–19 | 0 | BLOCKED |
+| 30–39 | 2% | POOR |
+| 0–29 | 0 | BLOCKED |
 
 ```bash
 python cli.py scores
@@ -568,11 +585,11 @@ These are observations from running the example strategies with real money on Ka
 
 **2. Kelly fraction matters enormously.** Three-quarter Kelly compounds losses catastrophically on a 45% win-rate strategy. Quarter-Kelly is what the example strategies use.
 
-**3. A 50% drawdown limit isn't a limit.** The default is 15% with the circuit breaker actually halting trades, not just logging.
+**3. A 50% drawdown limit isn't a limit.** The default is 20% with the circuit breaker actually halting trades, not just logging.
 
 **4. Sector concentration creates correlated losses.** When 90% of capital is in economic categories on a Fed day, everything moves together. The default cap is 30% per category.
 
-**5. More trades without edge is faster path to zero.** The default scan interval is 60 seconds, not 30, and trades are gated by both confidence and category score.
+**5. More trades without edge is faster path to zero.** Trades are gated by both confidence and category score. (The scan-interval lesson is now moot: `settings.py` declares *two* scan intervals — `scan_interval_seconds = 60` and `market_scan_interval = 30` — and **neither is read anywhere in the codebase**, so no interval setting is in effect. Filed as #104.)
 
 Your edge is probably somewhere else. Use the toolkit to find it.
 

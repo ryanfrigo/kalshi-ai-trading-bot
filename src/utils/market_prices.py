@@ -67,3 +67,34 @@ def get_market_prices(market_info: Dict[str, Any]) -> Tuple[float, float, float,
         no_ask  = (market_info.get("no_ask",  0) or 0) / 100
 
     return yes_bid, yes_ask, no_bid, no_ask
+
+def orderbook_levels(orderbook_response: Dict[str, Any], side: str) -> list:
+    """Bid levels for one side, as ``[(price_dollars, count), ...]``.
+
+    Handles both orderbook shapes Kalshi has used:
+
+      * v2 — ``{"orderbook_fp": {"yes_dollars": [["0.9500","100.00"], ...], "no_dollars": [...]}}``
+        (prices are dollar *strings*)
+      * legacy — ``{"orderbook": {"yes": [[95, 100], ...], "no": [...]}}`` (prices in cents)
+
+    Returns an empty list when the side has no bids. ``cli.py close-all`` used the v2-named key
+    incorrectly and then assumed integer cents, so it decided every position had no bid.
+    """
+    want = "yes" if side.lower().startswith("y") else "no"
+    fp = orderbook_response.get("orderbook_fp") or {}
+    raw = fp.get(f"{want}_dollars")
+    if raw is None:
+        legacy = orderbook_response.get("orderbook") or {}
+        raw = legacy.get(want, [])
+
+    def _dollars(v) -> float:
+        x = float(v or 0)
+        return x / 100.0 if x > 1.0 else x      # legacy cents come through as > 1
+
+    out = []
+    for level in raw or []:
+        try:
+            out.append((_dollars(level[0]), float(level[1] or 0)))
+        except (IndexError, TypeError, ValueError):
+            continue
+    return out

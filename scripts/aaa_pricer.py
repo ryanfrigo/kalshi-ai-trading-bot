@@ -686,6 +686,43 @@ def cmd_score() -> int:
     return 0
 
 
+def cmd_summary() -> int:
+    """Per-series forward Brier: model vs book, with the EFFECTIVE sample size.
+
+    The rows in scores.jsonl are *not* independent observations: one realized print
+    generates a whole ladder of strikes, so a series showing 85 rows may contain only
+    a few independent events. Quoting the row count alone is exactly the "assert skill
+    from a handful of lucky settlements" failure this toolkit exists to refuse, so this
+    prints the distinct-target count next to every Brier comparison.
+    """
+    import numpy as np
+
+    path = REPO / "data" / "aaa" / "scores.jsonl"
+    if not path.exists():
+        print("no scores yet — run: aaa_pricer.py score")
+        return 0
+    by: dict = {}
+    for line in open(path):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        by.setdefault(r["series"], []).append(r)
+    print(f"{'series':22s} {'obs':>6s} {'events':>7s} {'model':>8s} {'book':>8s} {'winner':>7s}")
+    for s, rs in sorted(by.items(), key=lambda kv: -len(kv[1])):
+        bm = float(np.mean([r["brier_model"] for r in rs]))
+        bb = float(np.mean([r["brier_book"] for r in rs]))
+        events = len({r["target"] for r in rs})
+        print(f"{s:22s} {len(rs):6d} {events:7d} {bm:8.4f} {bb:8.4f} "
+              f"{'model' if bm < bb else 'book':>7s}")
+    print("\n'events' = distinct target prints. An edge claim needs enough EVENTS, "
+          "not enough strikes; correlated strikes inflate the row count.")
+    return 0
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -697,6 +734,7 @@ def main() -> None:
     p.add_argument("--alert-min", type=float, default=None,
                    help="write an alerts JSON for strikes with |edge| >= this (e.g. 0.10)")
     sub.add_parser("score")
+    sub.add_parser("summary")
     pp = sub.add_parser("path")
     pp.add_argument("--series", default="KXDIESELMON")
     pp.add_argument("--target", required=True)
@@ -705,6 +743,8 @@ def main() -> None:
         raise SystemExit(cmd_price(args))
     if args.cmd == "score":
         raise SystemExit(cmd_score())
+    if args.cmd == "summary":
+        raise SystemExit(cmd_summary())
     if args.cmd == "path":
         raise SystemExit(cmd_path(args.series, args.target))
 

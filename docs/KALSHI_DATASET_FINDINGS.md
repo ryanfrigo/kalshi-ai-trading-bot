@@ -1,7 +1,8 @@
 # Kalshi trade-dataset findings (Becker replication, our copy)
 
 _Data: 72.1M trades (2023-03 → 2025-11-25), 7,314,377 settled markets with results.
-Tool: `scripts/kalshi_dataset_analysis.py`; results JSON: `data/external/analysis_results.json`._
+Tool: `scripts/kalshi_dataset_analysis.py` (re-run it to regenerate the tables below).
+Its results are written to `data/external/analysis_results.json`, which is **gitignored and not in this repo** — the raw trade dataset is 72M rows and cannot be committed. The numbers below are the study's output, quoted with their sample sizes so they can be checked against a re-run rather than trusted._
 
 ## 1. The close-out "0.99c scalp" at exchange scale — dead as a taker trade
 

@@ -26,6 +26,9 @@ import argparse
 import datetime as dt
 import json
 import re
+import glob
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -35,7 +38,10 @@ SNAP_DIR = REPO / "data" / "orshare" / "snapshots"
 
 
 def _ab(*args: str) -> str:
-    out = subprocess.run(["agent-browser", *args], capture_output=True, text=True, timeout=120)
+    from src.utils.agent_browser import find as find_agent_browser
+
+    out = subprocess.run([find_agent_browser(), *args], capture_output=True, text=True,
+                         timeout=120)
     return out.stdout
 
 

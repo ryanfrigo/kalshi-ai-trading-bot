@@ -47,7 +47,7 @@ positions), drop the manual halt file:
 mkdir -p data/runtime && echo "manual stop $(date)" > data/runtime/TRADING_HALTED
 ```
 
-Remove it to resume. The governor also auto-halts at -10% day / -15% drawdown.
+Remove it to resume. The governor also auto-halts at -5% day / -20% drawdown (see `settings.py`).
 
 ## Uninstall
 

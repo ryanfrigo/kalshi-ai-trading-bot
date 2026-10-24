@@ -57,8 +57,13 @@ def _account_section(equity: Optional[Dict[str, Any]]) -> List[str]:
     if rebase:
         # The governor's peak was re-baselined, so its drawdown restarts near 0.
         # Publish the all-time figure too — the page must never hide a drawdown.
-        peak = rebase["prior_peak_cents"] / 100
-        all_time = (peak - float(equity.get("equity", 0))) / peak * 100
+        # Ratchet the peak against the live governor peak and current equity: a
+        # deposit (or any new high) lifts it, so a funded account never prints a
+        # negative "drawdown".
+        equity_now = float(equity.get("equity", 0))
+        governor_peak = (gov.get("peak_equity_cents") or 0) / 100
+        peak = max(rebase["prior_peak_cents"] / 100, governor_peak, equity_now)
+        all_time = max(0.0, (peak - equity_now) / peak * 100)
         lines.append(f"| Drawdown from all-time peak (${peak:,.2f}) | {all_time:.1f}% |")
     if gov:
         dd_label = (
@@ -236,7 +241,10 @@ def render_track_record(
         "[Prove Your Edge](../README.md#prove-your-edge-the-headline) and "
         "[Self-Improvement Loop](../README.md#the-self-improvement-loop) "
         "sections for the method, and `src/agent/edge.py` for the scoring "
-        "code (pure, deterministic, forward-only gated).",
+        "code (pure, deterministic, forward-only gated). "
+        "New to the toolkit? The free [Operator's Playbook](OPERATOR_PLAYBOOK.md) covers the "
+        "setup traps, and the [Kalshi API field map](https://kalshi-community.vercel.app/reference/kalshi-fields) "
+        "lists the `*_dollars` / `*_fp` names that break bots when they change.",
         "",
     ]
     return "\n".join(lines)

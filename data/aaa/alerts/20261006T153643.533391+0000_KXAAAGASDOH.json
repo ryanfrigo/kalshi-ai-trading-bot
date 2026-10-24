@@ -1,0 +1,99 @@
+{
+ "ts": "2026-10-06T15:36:43.533391+00:00",
+ "series": "KXAAAGASDOH",
+ "target_date": "2026-10-07",
+ "threshold": 0.15,
+ "rows": [
+  {
+   "ticker": "KXAAAGASDOH-26OCT07-3.7950",
+   "strike": 3.795,
+   "fair_yes": 0.9964,
+   "yes_bid": 0.02,
+   "yes_ask": 0.030000000000000027,
+   "n_levels": 16,
+   "buy_yes_edge": 0.9564,
+   "buy_no_edge": -0.9864,
+   "buy_yes_cost": 0.04,
+   "buy_no_cost": 0.99,
+   "last": "0.0300"
+  },
+  {
+   "ticker": "KXAAAGASDOH-26OCT07-3.8250",
+   "strike": 3.825,
+   "fair_yes": 0.9928,
+   "yes_bid": 0.01,
+   "yes_ask": 0.050000000000000044,
+   "n_levels": 12,
+   "buy_yes_edge": 0.9328,
+   "buy_no_edge": -0.9928,
+   "buy_yes_cost": 0.06,
+   "buy_no_cost": 1.0,
+   "last": "0.0200"
+  },
+  {
+   "ticker": "KXAAAGASDOH-26OCT07-3.8200",
+   "strike": 3.82,
+   "fair_yes": 0.9932,
+   "yes_bid": 0.02,
+   "yes_ask": 0.06000000000000005,
+   "n_levels": 12,
+   "buy_yes_edge": 0.9232,
+   "buy_no_edge": -0.9832,
+   "buy_yes_cost": 0.07,
+   "buy_no_cost": 0.99,
+   "last": "0.0200"
+  },
+  {
+   "ticker": "KXAAAGASDOH-26OCT07-3.8150",
+   "strike": 3.815,
+   "fair_yes": 0.9936,
+   "yes_bid": 0.01,
+   "yes_ask": 0.07999999999999996,
+   "n_levels": 13,
+   "buy_yes_edge": 0.9036,
+   "buy_no_edge": -0.9936,
+   "buy_yes_cost": 0.09,
+   "buy_no_cost": 1.0,
+   "last": "0.0200"
+  },
+  {
+   "ticker": "KXAAAGASDOH-26OCT07-3.8100",
+   "strike": 3.81,
+   "fair_yes": 0.9944,
+   "yes_bid": 0.01,
+   "yes_ask": 0.15000000000000002,
+   "n_levels": 8,
+   "buy_yes_edge": 0.8344,
+   "buy_no_edge": -0.9944,
+   "buy_yes_cost": 0.16,
+   "buy_no_cost": 1.0,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXAAAGASDOH-26OCT07-3.8050",
+   "strike": 3.805,
+   "fair_yes": 0.9951,
+   "yes_bid": 0.01,
+   "yes_ask": 0.18000000000000005,
+   "n_levels": 6,
+   "buy_yes_edge": 0.7951,
+   "buy_no_edge": -0.9951,
+   "buy_yes_cost": 0.2,
+   "buy_no_cost": 1.0,
+   "last": "0.0000"
+  },
+  {
+   "ticker": "KXAAAGASDOH-26OCT07-3.7900",
+   "strike": 3.79,
+   "fair_yes": 0.9971,
+   "yes_bid": 0.02,
+   "yes_ask": 0.8200000000000001,
+   "n_levels": 7,
+   "buy_yes_edge": 0.1571,
+   "buy_no_edge": -0.9871,
+   "buy_yes_cost": 0.84,
+   "buy_no_cost": 0.99,
+   "last": "0.0900"
+  }
+ ]
+}

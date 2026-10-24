@@ -41,6 +41,10 @@ from src.agent.learnings import calibration_table
 # is too small to distinguish skill from variance. Matches the niche's central
 # failure: claiming edge from a handful of lucky settlements.
 _MIN_EDGE_N = 10
+# A positive edge below this many points is indistinguishable from noise at the
+# sample sizes this harness sees. The brand rule is never to claim edge the data
+# cannot support, so a sub-point edge reports as NO MEASURED EDGE, not a win.
+_MIN_EDGE_PTS = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -268,12 +272,18 @@ def forward_only(records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]
 # ---------------------------------------------------------------------------
 
 def _verdict(forward_records: List[Dict[str, Any]]) -> str:
-    """One honest line. Claims edge ONLY on >=10 forward trades that beat book.
+    """One honest line. Claims edge ONLY on >=10 forward trades that beat book
+    by at least the noise floor.
 
     Computed strictly over the FORWARD subset (the only legitimate evidence):
-      - n < 10                         -> "INSUFFICIENT DATA"
-      - n >= 10 and edge_vs_book > 0   -> "BEATING THE BOOK by X.X pts ..."
-      - n >= 10 and edge_vs_book <= 0  -> "NO MEASURED EDGE ..."
+      - n < 10                                  -> "INSUFFICIENT DATA"
+      - n >= 10 and edge_vs_book >= 1.0 pt      -> "BEATING THE BOOK by X.X pts ..."
+      - n >= 10 and 0 < edge_vs_book < 1.0 pt   -> "NO MEASURED EDGE ... within noise"
+      - n >= 10 and edge_vs_book <= 0           -> "NO MEASURED EDGE ..."
+
+    The sub-point case matters: a +0.1 pt edge over a few dozen trades is noise,
+    and printing "BEATING THE BOOK" for it is exactly the overclaim this harness
+    exists to refuse.
     """
     n = len(forward_records)
     if n < _MIN_EDGE_N:
@@ -290,11 +300,18 @@ def _verdict(forward_records: List[Dict[str, Any]]) -> str:
         )
     edge = stats["edge_vs_book"]
     pts = edge * 100.0
-    if edge > 0:
+    if edge >= _MIN_EDGE_PTS / 100.0:
         return (
             f"BEATING THE BOOK by {pts:.1f} pts over {stats['n']} forward trades "
             f"(won {stats['realized_winrate']:.0%} vs. {stats['mean_implied']:.0%} "
             f"implied; ${stats['pnl_per_contract']:+.3f}/contract)"
+        )
+    if edge > 0:
+        # Positive but below the noise floor: never dress it up as a win.
+        return (
+            f"NO MEASURED EDGE — edge {pts:+.1f} pts over {stats['n']} forward "
+            f"trades is within noise (won {stats['realized_winrate']:.0%} vs. "
+            f"{stats['mean_implied']:.0%} implied)"
         )
     return (
         f"NO MEASURED EDGE (n={stats['n']} forward trades; won "

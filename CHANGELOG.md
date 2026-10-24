@@ -7,7 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Track record: the all-time peak now ratchets with deposits** (2026-10-23) —
+  `cli.py report` used the frozen pre-rebaseline peak, so on a funded account the
+  public page printed a nonsensical `Drawdown from all-time peak ($2,975.25) | -393.2%`.
+  The peak now ratchets against the live governor peak and current equity and clamps at
+  0, so a deposit can never show as a negative drawdown. Regression test added.
+- **The risk gate did not enforce the configured limits** (2026-10-23) — `RiskGovernor`
+  defaults to 10% daily / 15% drawdown while `settings` says **5% / 20%**, and three call
+  sites — including the agent's own trade path — built it with no arguments. The agent was
+  therefore halting at **twice the approved daily loss**. Now one `governor_from_settings()`
+  factory, used everywhere, with a test that pins the difference.
+- **`max_drawdown` was read off the wrong object** (2026-10-23) — it lives at *module* level in
+  `settings.py`, so `getattr(settings, "max_drawdown", 0.20)` silently returned the fallback in
+  two places, pinning the drawdown limit forever regardless of configuration.
+- **The position cap priced NO orders off the YES leg** (2026-10-23) — a fully-collateralised
+  NO position at 95c commits 95c per contract, but the gate sized it from `100 - 95` and so
+  understated a deep-NO fade by ~19x, letting one position pass the "10% of equity" rule at
+  nearly 2x equity. Now `position_cost_dollars(...)`, the same rule `toolbelt.cap_count` uses,
+  with tests.
+- **Two tools could not find `agent-browser` under launchd** (2026-10-23) — a bare
+  `subprocess.run(["agent-browser", ...])` fails with a minimal PATH, which silently killed the
+  OpenRouter-share capture on **51 consecutive scheduled runs** and would have broken AAA
+  backfills too. Now one shared resolver (`src/utils/agent_browser.py`) honouring
+  `AGENT_BROWSER_BIN`, PATH, then the usual install locations.
+- **Scheduled data steps failed silently** (2026-10-23) — `run_daily.sh` / `run_morning.sh`
+  wrapped every step in `|| true` with no report, which is how the above survived 51 runs. Steps
+  may still fail without stopping the run, but they now log `STEP FAILED: <name>` and write
+  `logs/daily_runs/LAST_FAILURES.txt` (cleared on a clean run).
+- **Logs could fill the disk** (2026-10-23) — `scripts/rotate_logs.py` gzips logs older than 7
+  days (never deletes; `latest.log` untouched), wired into the daily job. First pass:
+  380 MB → 22 MB.
+- **Edge verdict: a sub-point edge is noise, not a win** (2026-10-23) — `cli.py edge`
+  printed "BEATING THE BOOK by 0.1 pts" for a +0.001/contract edge. A positive edge below
+  the new `_MIN_EDGE_PTS = 1.0` floor now reports **NO MEASURED EDGE … within noise**,
+  matching the repo's rule of never claiming edge the data cannot support. Regression test
+  added.
+
 ### Added
+- **Operator's Playbook** — `docs/OPERATOR_PLAYBOOK.md`, the free field guide for the setup
+  traps (the private-key 401 wall, "it runs but never trades", staying online), linked from
+  the README nav; launch-post drafts live in `docs/drafts/`.
+- **First forward-only edge verdict on the live account (2026-10-02)** — `cli edge` now
+  scores forward-settled trades end to end and the verdict is published in
+  `docs/TRACK_RECORD.md`, losses included: **NO MEASURED EDGE** (n=55 forward trades,
+  won 58% vs 60% implied, edge −1.9 pts; Brier 0.2356). Splits: NO side +7.6 pts vs
+  the book (n=37), YES side −22.7 pts (n=17); the Edge Policy haircuts encode exactly
+  this overconfidence.
+- **Maker closeout program** — `scripts/maker_closeout.py` rests 15-contract bids at the
+  certainty end (95–99c) of liquid near-resolution markets, evidence from 586M–1.16B
+  contracts/cell (98.4–98.9% win, +0.6–1.1% EV/risk); event-level diversification caps,
+  lead-time guards, and a stale-scan re-verify before every order.
+- **Path/convergence pricing** — per-fuel print-path models price the weekly/monthly
+  diesel & gas ladders (`aaa_pricer.py path`), with per-strike fee-aware edges and
+  forward scoring; first live constitution-sized tranche filled 2026-09-29.
+- **State-transfer family** — per-state gas print series across 21 states
+  (200–450 prints each), state→state delta-transfer models, calibration audited
+  (beta 0.80–0.98 per state).
+- **Weather v1 capture** — GEFS-31 daily-max ensembles + NWS observed-max buckets by
+  ET day, banked daily for future calibration (`scripts/weather_data.py`).
 - **Ornn OCPI toolkit** — `scripts/ornn_data.py` (free public daily OCPI series for
   A100/H100/H200/B200/RTX5090; month stats + strike break-even math for the
   KXA100MS monthly compute-price markets), cached under `data/ornn/`, wired into
@@ -32,6 +90,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `data/runtime/governor_audit.jsonl`), so a reset never hides a drawdown publicly.
 
 ### Fixed
+- **Edge measurement was blind in practice** — the settle→journal reconcile dropped
+  `settled_time`, so every settled trade classified as "unknown" and the forward-only
+  verdict could never render. The reconcile now attaches the authoritative resolution
+  timestamp (add-only; `won`/`pnl` remain immutable) and legacy settled trades backfill
+  it on the next `cli improve` pass.
+- **Maker closeout stale-scan** — the pilot ordered already-closed markets (16× HTTP 404
+  on 2026-10-01); each candidate is now re-verified (status + remaining lead time)
+  immediately before the order is placed.
+- **`ornn_stop_check.py`** was hardwired to the resolved September strike and crashed
+  once the month rolled over; it now targets the active month's `KXA100MS-26MMM-1.000`
+  market and exits cleanly on resolved months.
+- **Repo weight** — 4.16 GB of `data/external` parquet backfill dumps removed from
+  branch history and gitignored; clones are normal-sized again.
 - **`KalshiClient.cancel_order`** used the deprecated v1 path (HTTP 410); it now calls
   `DELETE /trade-api/v2/portfolio/events/orders/{id}`.
 
@@ -77,10 +148,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from real outcomes, with the Kalshi series prefix as the category.
 
 ### Changed
-- `cli backtest` no longer claims a fake "coming soon" engine. It honestly
-  explains that a strategy backtest needs a captured price/outcome corpus this
-  repo doesn't ship yet, and points to the feedback loop (`edge`/`policy`/
-  `improve`) that works today without one.
+- `cli backtest` now describes what actually exists rather than claiming none of it does:
+  the full-universe snapshot corpus, the live-book candidate capture
+  (`scripts/capture_books.py`, run by the daily job) that supplies honest *entry prices*, and
+  `scripts/backtest_books.py`, which joins that corpus to settlements, charges fees on entry,
+  and counts **events rather than strike rows**. It still refuses to claim edge before enough
+  events accumulate — and says so.
 
 ## [2.0.1] - 2026-06-12
 

@@ -13,9 +13,24 @@ async def get_positions():
         positions_response = await kalshi_client.get_positions()
         print('=== KALSHI POSITIONS ===')
         market_positions = positions_response.get('market_positions', [])
+
+        # v2 returns position_fp (a signed string: + YES, - NO); the v1 'position'
+        # key is gone, so this used to print every position as "None contracts".
+        def _f(x):
+            try:
+                return float(x)
+            except (TypeError, ValueError):
+                return 0.0
+
+        def _size(p):
+            return _f(p.get('position_fp') or p.get('position') or 0)
+
+        market_positions = [p for p in market_positions if _size(p) != 0]
         print(f'Total positions: {len(market_positions)}')
         for pos in market_positions:
-            print(f'{pos.get("ticker")}: {pos.get("position")} contracts')
+            size = _size(pos)
+            side = 'YES' if size > 0 else 'NO'
+            print(f'{pos.get("ticker")}: {side} {abs(size):g}')
         
         # Get database positions  
         db = DatabaseManager()
