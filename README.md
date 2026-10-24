@@ -320,13 +320,13 @@ All trading parameters live in `src/config/settings.py`. The most useful knobs:
 
 ```python
 # Position sizing
-max_position_size_pct  = 3.0     # Max 3% of balance per position
+max_position_size_pct  = 10.0    # Max 10% of balance per position
 max_positions          = 10      # Max concurrent positions
 kelly_fraction         = 0.25    # Quarter-Kelly (conservative)
 
 # Market filtering
 min_volume             = 500     # Minimum contract volume
-max_time_to_expiry_days = 14     # How far out to trade
+# max_time_to_expiry_days: REMOVED — trade any timeline
 min_confidence_to_trade = 0.45   # Minimum AI confidence to enter
 
 # LLM (OpenRouter)
@@ -335,8 +335,8 @@ ai_temperature         = 0       # Deterministic
 ai_max_tokens          = 8000
 
 # Risk management
-max_daily_loss_pct     = 10.0    # Daily loss circuit breaker
-max_drawdown           = 0.15    # Portfolio drawdown halt
+max_daily_loss_pct     = 5.0     # Daily loss circuit breaker
+max_drawdown           = 0.20    # Portfolio drawdown halt
 daily_ai_cost_limit    = 10.0    # Max daily LLM spend in USD
 ```
 
