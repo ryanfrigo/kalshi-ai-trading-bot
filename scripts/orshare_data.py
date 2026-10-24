@@ -37,44 +37,10 @@ REPO = Path(__file__).resolve().parent.parent
 SNAP_DIR = REPO / "data" / "orshare" / "snapshots"
 
 
-def _agent_browser_candidates() -> list:
-    """Where the agent-browser CLI plausibly lives, most-specific first.
-
-    Pure: returns path patterns only (os.path.expanduser applied).
-    """
-    return [
-        os.path.expanduser("~/.nvm/versions/node/*/bin/agent-browser"),
-        os.path.expanduser("~/.local/bin/agent-browser"),
-        "/opt/homebrew/bin/agent-browser",
-        "/usr/local/bin/agent-browser",
-    ]
-
-
-def _find_agent_browser() -> str:
-    """Resolve the agent-browser binary explicitly.
-
-    A bare ``agent-browser`` lookup fails under launchd/cron, which run with a minimal PATH:
-    the scheduled daily job raised FileNotFoundError on 51 separate runs while the same
-    command worked fine in an interactive shell, so the OpenRouter-share family was silently
-    never captured. Honour AGENT_BROWSER_BIN, then PATH, then the usual install locations.
-    """
-    override = os.environ.get("AGENT_BROWSER_BIN")
-    if override:
-        return override
-    found = shutil.which("agent-browser")
-    if found:
-        return found
-    for pattern in _agent_browser_candidates():
-        hits = sorted(glob.glob(pattern), reverse=True)   # newest node version first
-        if hits:
-            return hits[0]
-    raise RuntimeError(
-        "agent-browser not found: install it, put it on PATH, or set AGENT_BROWSER_BIN"
-    )
-
-
 def _ab(*args: str) -> str:
-    out = subprocess.run([_find_agent_browser(), *args], capture_output=True, text=True,
+    from src.utils.agent_browser import find as find_agent_browser
+
+    out = subprocess.run([find_agent_browser(), *args], capture_output=True, text=True,
                          timeout=120)
     return out.stdout
 

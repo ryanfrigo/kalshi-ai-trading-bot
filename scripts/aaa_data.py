@@ -189,8 +189,13 @@ def fetch_via_browser(url: str = LIVE_URL) -> dict | None:
     averages straight from the DOM table cells.
     """
     import subprocess
+
+    from src.utils.agent_browser import find as find_agent_browser
+
     def ab(*args: str) -> str:
-        return subprocess.run(["agent-browser", *args], capture_output=True,
+        # resolve the binary: a bare "agent-browser" fails under launchd's minimal PATH
+        # (the same bug that silently broke the orshare capture on 51 scheduled runs)
+        return subprocess.run([find_agent_browser(), *args], capture_output=True,
                               text=True, timeout=120).stdout
     ab("open", url)
     ab("wait", "4000")
