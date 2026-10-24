@@ -116,7 +116,7 @@ Numbers moved since these were drafted. Whatever you publish, use the **then-cur
 - Forward-only verdict: **NO MEASURED EDGE — edge +0.1 pts over 60 forward trades is
   within noise** (won 62% vs 62% implied). The 10/02 "−1.9 pts" quote above is historical.
 - Full settlement history: 232 settled, 65% win rate, **net realized +$465.58**.
-- Repo: **631 stars / 198 forks**.
+- Repo: **631 stars / 199 forks** (checked 2026-10-23 — **refresh this number before you post**; it is the one figure here that goes stale on its own).
 
 **A sharper angle than the drafts use** — and a better story than "we lost money":
 > Our own harness used to print **"BEATING THE BOOK"** for a **+0.1-point** edge. We fixed
