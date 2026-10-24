@@ -414,8 +414,8 @@ The category scorer evaluates each Kalshi market category on a 0-100 scale based
 | 80–100 | 20% | STRONG |
 | 60–79 | 10% | GOOD |
 | 40–59 | 5% | WEAK |
-| 20–39 | 2% | POOR |
-| 0–19 | 0 | BLOCKED |
+| 30–39 | 2% | POOR |
+| 0–29 | 0 | BLOCKED |
 
 ```bash
 python cli.py scores
