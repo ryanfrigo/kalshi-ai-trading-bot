@@ -47,3 +47,30 @@ KXAISPIKE −$52, KXNBAPLAYOFF −$52, KXETH15M −$39, …). Derived from 251 s
 * Merge **PR #95**.
 * The 8,000-lot `CONTROLH-2026-D` resting order: intended accumulation, or a cap breach to
   cancel?
+
+## Later the same day — guardrail review (2026-10-23)
+
+A code review of every risk guardrail found **seven defects, all of them silent**. Fixed and tested
+(PR #95):
+
+- the governor enforced **10% daily loss** instead of the configured **5%** on the agent's own trade
+  path, because three call sites built `RiskGovernor` with no arguments (one factory now, used everywhere);
+- `max_drawdown` is module-level in `settings.py`, so `getattr(settings, "max_drawdown", 0.20)` silently
+  returned the fallback in two places;
+- the position cap priced **NO orders off the YES leg** — a 95c fade counted as 5c of exposure (~19x)
+  against a "10% of equity" rule;
+- two tools could not find `agent-browser` under launchd, which killed the OpenRouter-share capture on
+  **51 consecutive scheduled runs** (one shared resolver now);
+- both schedulers swallowed step failures behind `|| true` (they now log `STEP FAILED` and write
+  `logs/daily_runs/LAST_FAILURES.txt`);
+- logs grew without bound (`scripts/rotate_logs.py`; 380 MB → 22 MB).
+
+**Open questions raised by the same review** — filed so they are not lost:
+[#96](https://github.com/ryanfrigo/kalshi-ai-trading-bot/issues/96) `market_making` reads a setting that
+doesn't exist · [#97](https://github.com/ryanfrigo/kalshi-ai-trading-bot/issues/97) `track.py` is uninvoked
+and v2-drifted · [#98](https://github.com/ryanfrigo/kalshi-ai-trading-bot/issues/98) **the risk gate fails
+open** on infrastructure errors · [#99](https://github.com/ryanfrigo/kalshi-ai-trading-bot/issues/99) the
+stale 3% default in `portfolio_enforcer`.
+
+**Worth knowing:** every order path in the repo funnels through `client.place_order`, so those guardrail
+fixes protect *all* of them — and any future order path that bypasses it bypasses the risk gate.
