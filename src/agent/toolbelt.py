@@ -45,9 +45,9 @@ def cap_count(
 async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
     """Structured situational awareness: governor verdict, equity, positions,
     resting orders. Read-only."""
-    from src.risk.risk_governor import RiskGovernor
+    from src.risk.risk_governor import governor_from_settings
 
-    gov = governor or RiskGovernor(kalshi_client=kalshi_client)
+    gov = governor or governor_from_settings(kalshi_client=kalshi_client)
     decision = await gov.check()
 
     bal = await kalshi_client.get_balance()
@@ -137,14 +137,14 @@ async def place_guarded_order(
     (``reason="haircut_erased_edge"``) rather than placed as a -EV trade —
     ``override_policy=True`` forces it through anyway.
     """
-    from src.risk.risk_governor import RiskGovernor
+    from src.risk.risk_governor import governor_from_settings
     from src.utils.market_prices import get_market_prices, is_tradeable_market
     from src.agent.journal import make_decision_record, append_decision, DEFAULT_JOURNAL_PATH
     from src.agent.policy import load_policy, apply_policy, DEFAULT_POLICY_PATH
     from src.agent.settle import series_category
 
     side = side.lower()
-    gov = governor or RiskGovernor(kalshi_client=kalshi_client)
+    gov = governor or governor_from_settings(kalshi_client=kalshi_client)
     decision = await gov.check()
     if decision.halted:
         return {"ok": False, "reason": "governor_halted", "governor": decision.to_dict()}

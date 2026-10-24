@@ -164,12 +164,12 @@ def cmd_daily(args: argparse.Namespace) -> None:
     async def _daily() -> None:
         from src.clients.kalshi_client import KalshiClient
         from src.strategies.safe_compounder import SafeCompounder
-        from src.risk.risk_governor import RiskGovernor
+        from src.risk.risk_governor import governor_from_settings
         from src.data.collector import snapshot_account
 
         client = KalshiClient()
         try:
-            gov = RiskGovernor(kalshi_client=client)
+            gov = governor_from_settings(kalshi_client=client)
             decision = await gov.check()
 
             print("=" * 60)

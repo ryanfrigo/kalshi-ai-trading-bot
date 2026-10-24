@@ -446,6 +446,8 @@ class KalshiClient(TradingLoggerMixin):
             from src.risk.risk_governor import RiskGovernor
             drawdown_pct = 20.0
             try:
+                # max_drawdown is module-level in settings.py; reading it off the Settings
+                # object silently yields the fallback instead of the configured value.
                 from src.config import settings as _s
                 drawdown_pct = getattr(_s, "max_drawdown", 0.20) * 100.0
             except Exception:

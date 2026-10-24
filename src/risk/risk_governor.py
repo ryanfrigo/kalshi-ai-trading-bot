@@ -119,8 +119,36 @@ def roll_state(prev: Optional[Dict], current: int, today: str) -> Dict:
     }
 
 
+def governor_from_settings(kalshi_client=None, **kwargs) -> "RiskGovernor":
+    """Build a governor using the *configured* limits.
+
+    Use this at every call site. Constructing ``RiskGovernor(...)`` directly silently falls
+    back to the class defaults (10% daily / 15% drawdown), which are LOOSER than the
+    configured and Ryan-approved ``max_daily_loss_pct = 5`` — so the agent's own trade path
+    was halting at 10% daily loss instead of 5%, and at 15% drawdown instead of 20%. Two of
+    the three limits were simply not the ones anyone had agreed to.
+    """
+    from src.config import settings as settings_module
+
+    settings = settings_module.settings
+    # NB: max_drawdown lives at MODULE level in settings.py, not on the Settings object —
+    # reading it off `settings` silently returns the fallback and pins the limit forever.
+    drawdown_pct = getattr(settings_module, "max_drawdown", 0.20) * 100.0
+    return RiskGovernor(
+        kalshi_client=kalshi_client,
+        max_daily_loss_pct=settings.trading.max_daily_loss_pct,
+        max_drawdown_pct=drawdown_pct,
+        **kwargs,
+    )
+
+
 class RiskGovernor:
-    """Stateful wrapper: persists baseline/peak, fetches equity, evaluates limits."""
+    """Stateful wrapper: persists baseline/peak, fetches equity, evaluates limits.
+
+    ``max_daily_loss_pct`` / ``max_drawdown_pct`` default to 10 / 15, which is NOT what
+    ``settings`` says (5 / 20). Construct with ``governor_from_settings(...)`` unless you
+    are deliberately choosing your own limits.
+    """
 
     def __init__(
         self,
