@@ -29,6 +29,7 @@ import signal
 from datetime import datetime, timedelta
 from typing import Optional
 
+from src.config.settings import settings
 from src.jobs.trade import run_trading_job
 from src.jobs.ingest import run_ingestion
 from src.jobs.track import run_tracking
@@ -247,8 +248,8 @@ class BeastModeBot:
                 else:
                     self.logger.info(f"📊 Cycle #{cycle_count} Complete - No new positions created")
                 
-                # Wait for next cycle (60 seconds)
-                await asyncio.sleep(60)
+                # Wait for next cycle (settings.scan_interval_seconds)
+                await asyncio.sleep(settings.scan_interval_seconds)
                 
             except Exception as e:
                 self.logger.error(f"Error in trading cycle #{cycle_count}: {e}")
