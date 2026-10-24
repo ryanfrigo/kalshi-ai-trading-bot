@@ -193,7 +193,7 @@ This repo gives you the building blocks. The example strategies use them — you
 | **Risk governor** | Daily-loss + drawdown kill switch + manual halt, authoritative for every live order | `src/risk/risk_governor.py` |
 | **Kalshi client** | Authenticated REST + WebSocket client (RSA signing, retries, rate-limit handling) | `src/clients/kalshi_client.py` |
 | **Market ingestion** | Pulls the full tradeable universe via the Events API, persists to SQLite | `src/jobs/ingest.py` |
-| **Position tracking** | Stop-loss, take-profit, time-based, and resolution-based exits with real Kalshi sell orders | `src/jobs/track.py` |
+| **Position tracking** | Stop-loss, take-profit, time-based and resolution-based exits. ⚠️ **Unreachable today**: `src/jobs/track.py` is not invoked by anything, and the order helpers it alone calls no-op on a v1 price field — net effect, no exit management. Tracked in #97 | `src/jobs/track.py` |
 | **LLM client** | Single OpenRouter API key, swap models with one config line, fallback chain on errors, daily-cost tracker | `src/clients/openrouter_client.py` |
 | **SQLite telemetry** | Every trade, AI decision, and cost metric logged locally | `src/utils/database.py` |
 | **MCP server** | First-mover MCP layer over the governor-gated tools | `src/mcp_server.py` |
@@ -585,11 +585,11 @@ These are observations from running the example strategies with real money on Ka
 
 **2. Kelly fraction matters enormously.** Three-quarter Kelly compounds losses catastrophically on a 45% win-rate strategy. Quarter-Kelly is what the example strategies use.
 
-**3. A 50% drawdown limit isn't a limit.** The default is 15% with the circuit breaker actually halting trades, not just logging.
+**3. A 50% drawdown limit isn't a limit.** The default is 20% with the circuit breaker actually halting trades, not just logging.
 
 **4. Sector concentration creates correlated losses.** When 90% of capital is in economic categories on a Fed day, everything moves together. The default cap is 30% per category.
 
-**5. More trades without edge is faster path to zero.** The default scan interval is 60 seconds, not 30, and trades are gated by both confidence and category score.
+**5. More trades without edge is faster path to zero.** Trades are gated by both confidence and category score. (The scan-interval lesson is now moot: `settings.py` declares *two* scan intervals — `scan_interval_seconds = 60` and `market_scan_interval = 30` — and **neither is read anywhere in the codebase**, so no interval setting is in effect. Filed as #104.)
 
 Your edge is probably somewhere else. Use the toolkit to find it.
 
