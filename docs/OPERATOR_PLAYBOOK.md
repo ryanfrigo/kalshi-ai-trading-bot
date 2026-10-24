@@ -193,7 +193,7 @@ This free playbook covers getting connected, understanding the silence, and stay
 - **Telling a real edge from a mirage** — stored prices vs live books, counting events not rows, and why a big edge on a liquid market is a warning, not a gift.
 - **Pricing markets that resolve on a published number** — the method, what the book knows
   that you don't, and the honest result: no family earned size.
-- **Two appendices** — a get-out checklist, and a 16-row troubleshooting table (401s, missing tables, the silently-paused bot, field drift).
+- **Two appendices** — a get-out checklist, and a 17-row troubleshooting table (401s, missing tables, the silently-paused bot, field drift).
 
 **Get the full guide →** https://kalshi-community.vercel.app/guide
 
