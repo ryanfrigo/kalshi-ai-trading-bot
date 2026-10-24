@@ -92,7 +92,7 @@ class TradingConfig:
         "default": 1.0       # Base multiplier for other categories
     })
     
-    scan_interval_seconds: int = 60      # SANE: 60-second scan interval (was 30)
+    scan_interval_seconds: int = 60      # Trading-cycle cadence in beast_mode_bot._run_trading_cycles
     
     # AI model configuration
     primary_model: str = "anthropic/claude-sonnet-4.5"  # Primary model via OpenRouter
@@ -114,7 +114,6 @@ class TradingConfig:
     paper_trading_mode: bool = field(default_factory=lambda: os.getenv("LIVE_TRADING_ENABLED", "false").lower() != "true")
     
     # Trading frequency - MORE FREQUENT
-    market_scan_interval: int = 30          # DECREASED: Scan every 30 seconds (was 60)
     position_check_interval: int = 15       # DECREASED: Check positions every 15 seconds (was 30)
     max_trades_per_hour: int = 20           # INCREASED: Allow more trades per hour (was 10, now 20)
     run_interval_minutes: int = 10          # DECREASED: Run more frequently (was 15, now 10)
