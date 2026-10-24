@@ -48,6 +48,40 @@ def real_value(name: str):
     return None
 
 
+def doc_settings_claims() -> list[tuple[str, str, str]]:
+    """Every `name = value` for a real setting, anywhere under docs/ or in the README.
+
+    Prose like "Position <= 10%" needs interpretation and is deliberately NOT parsed here -
+    a test keyed to magic phrases is worse than no test. Those still need a human; the values
+    were checked by hand on 2026-10-23 and matched (confidence 45%, position 10%, sector 30%,
+    drawdown 20%).
+    """
+    import src.config.settings as mod
+
+    known = set(dir(mod))
+    cfg = getattr(mod, "settings", None)
+    for holder in (getattr(cfg, "trading", None), cfg):
+        if holder is not None:
+            known |= set(dir(holder))
+    out = []
+    for path in sorted(REPO.glob("docs/*.md")) + [README]:
+        for m in re.finditer(r"^\s*([a-z_][a-z0-9_]{4,})\s*=\s*([\d.]+)\s*$", path.read_text(), re.M):
+            if m.group(1) in known:
+                out.append((path.name, m.group(1), m.group(2)))
+    return out
+
+
+@pytest.mark.parametrize("source,name,quoted", doc_settings_claims(),
+                         ids=lambda v: str(v)[:40])
+def test_doc_setting_matches_code(source, name, quoted):
+    actual = real_value(name)
+    if actual is None or isinstance(actual, bool):
+        pytest.skip("not a numeric setting")
+    assert float(actual) == float(quoted), (
+        f"{source} says {name} = {quoted}, the code uses {actual}"
+    )
+
+
 @pytest.mark.parametrize("name,quoted", sorted(readme_settings_block().items()))
 def test_readme_setting_matches_code(name, quoted):
     actual = real_value(name)
