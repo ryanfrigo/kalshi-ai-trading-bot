@@ -13,6 +13,18 @@ import uuid
 from typing import Any, Dict, Optional, Tuple
 
 
+def configured_position_pct() -> float:
+    """The per-position equity cap, as a fraction, from settings.
+
+    Callers should use this rather than a literal: the governor drifted exactly this way
+    (a hardcoded 10% daily loss against a configured 5%), and a sizing guardrail that
+    silently disagrees with settings is how you find out the hard way.
+    """
+    from src.config import settings as settings_module
+
+    return settings_module.settings.trading.max_position_size_pct / 100.0
+
+
 def cap_count(
     count: int,
     price_cents: int,
@@ -112,7 +124,7 @@ async def place_guarded_order(
     est_prob: Optional[float] = None,
     category: str = "",
     governor=None,
-    max_position_pct: float = 0.10,
+    max_position_pct: float | None = None,
     dry: bool = False,
     journal_path: Optional[str] = None,
     policy_path: Optional[str] = None,
@@ -182,6 +194,8 @@ async def place_guarded_order(
 
     bal = await kalshi_client.get_balance()
     cash = int(bal.get("balance", 0) or 0)
+    if max_position_pct is None:
+        max_position_pct = configured_position_pct()
     n, cap_reason = cap_count(count, price_cents, decision.current_equity_cents,
                               cash, max_position_pct)
     if n < 1:

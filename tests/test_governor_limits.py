@@ -20,3 +20,12 @@ def test_factory_differs_from_the_bare_defaults_it_replaced():
     # the trap this fix closes: the defaults were looser on daily loss and tighter on drawdown
     assert bare.max_daily_loss_pct == 10.0 and bare.max_drawdown_pct == 15.0
     assert bare.max_daily_loss_pct != settings.trading.max_daily_loss_pct
+
+
+def test_position_cap_comes_from_settings_not_a_literal():
+    """cap_count's own default agrees with settings today; the tool must not depend on that."""
+    from src.agent.toolbelt import configured_position_pct, cap_count
+    assert configured_position_pct() == settings.trading.max_position_size_pct / 100.0
+    # 10% of a $10,000 equity at 50c is 2,000 contracts
+    n, reason = cap_count(9999, 50, 1_000_000, 10_000_000, configured_position_pct())
+    assert n == 2000 and "position cap" in reason
