@@ -13,6 +13,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public page printed a nonsensical `Drawdown from all-time peak ($2,975.25) | -393.2%`.
   The peak now ratchets against the live governor peak and current equity and clamps at
   0, so a deposit can never show as a negative drawdown. Regression test added.
+- **The risk gate did not enforce the configured limits** (2026-10-23) — `RiskGovernor`
+  defaults to 10% daily / 15% drawdown while `settings` says **5% / 20%**, and three call
+  sites — including the agent's own trade path — built it with no arguments. The agent was
+  therefore halting at **twice the approved daily loss**. Now one `governor_from_settings()`
+  factory, used everywhere, with a test that pins the difference.
+- **`max_drawdown` was read off the wrong object** (2026-10-23) — it lives at *module* level in
+  `settings.py`, so `getattr(settings, "max_drawdown", 0.20)` silently returned the fallback in
+  two places, pinning the drawdown limit forever regardless of configuration.
+- **The position cap priced NO orders off the YES leg** (2026-10-23) — a fully-collateralised
+  NO position at 95c commits 95c per contract, but the gate sized it from `100 - 95` and so
+  understated a deep-NO fade by ~19x, letting one position pass the "10% of equity" rule at
+  nearly 2x equity. Now `position_cost_dollars(...)`, the same rule `toolbelt.cap_count` uses,
+  with tests.
+- **Two tools could not find `agent-browser` under launchd** (2026-10-23) — a bare
+  `subprocess.run(["agent-browser", ...])` fails with a minimal PATH, which silently killed the
+  OpenRouter-share capture on **51 consecutive scheduled runs** and would have broken AAA
+  backfills too. Now one shared resolver (`src/utils/agent_browser.py`) honouring
+  `AGENT_BROWSER_BIN`, PATH, then the usual install locations.
+- **Scheduled data steps failed silently** (2026-10-23) — `run_daily.sh` / `run_morning.sh`
+  wrapped every step in `|| true` with no report, which is how the above survived 51 runs. Steps
+  may still fail without stopping the run, but they now log `STEP FAILED: <name>` and write
+  `logs/daily_runs/LAST_FAILURES.txt` (cleared on a clean run).
+- **Logs could fill the disk** (2026-10-23) — `scripts/rotate_logs.py` gzips logs older than 7
+  days (never deletes; `latest.log` untouched), wired into the daily job. First pass:
+  380 MB → 22 MB.
 - **Edge verdict: a sub-point edge is noise, not a win** (2026-10-23) — `cli.py edge`
   printed "BEATING THE BOOK by 0.1 pts" for a +0.001/contract edge. A positive edge below
   the new `_MIN_EDGE_PTS = 1.0` floor now reports **NO MEASURED EDGE … within noise**,
@@ -123,10 +148,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from real outcomes, with the Kalshi series prefix as the category.
 
 ### Changed
-- `cli backtest` no longer claims a fake "coming soon" engine. It honestly
-  explains that a strategy backtest needs a captured price/outcome corpus this
-  repo doesn't ship yet, and points to the feedback loop (`edge`/`policy`/
-  `improve`) that works today without one.
+- `cli backtest` now describes what actually exists rather than claiming none of it does:
+  the full-universe snapshot corpus, the live-book candidate capture
+  (`scripts/capture_books.py`, run by the daily job) that supplies honest *entry prices*, and
+  `scripts/backtest_books.py`, which joins that corpus to settlements, charges fees on entry,
+  and counts **events rather than strike rows**. It still refuses to claim edge before enough
+  events accumulate — and says so.
 
 ## [2.0.1] - 2026-06-12
 
