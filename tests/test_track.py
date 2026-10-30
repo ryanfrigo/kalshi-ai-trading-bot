@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import patch, AsyncMock
 from datetime import datetime
 
-from src.jobs.track import run_tracking
+from src.jobs.track import run_tracking, should_exit_position
 from src.utils.database import DatabaseManager, Position
 import aiosqlite
 
@@ -134,8 +134,8 @@ async def test_non_resolution_exit_requires_successful_sell(
         "market": {
             "status": "active",
             "result": None,
-            "yes_price": 65,   # cents
-            "no_price": 35,
+            "yes_bid_dollars": 0.65,
+            "no_bid_dollars": 0.35,
         }
     })
     mock_api.close = AsyncMock()
@@ -203,8 +203,8 @@ async def test_non_resolution_exit_closes_after_successful_sell(
         "market": {
             "status": "active",
             "result": None,
-            "yes_price": 65,
-            "no_price": 35,
+            "yes_bid_dollars": 0.65,
+            "no_bid_dollars": 0.35,
         }
     })
     mock_api.close = AsyncMock()
@@ -221,6 +221,94 @@ async def test_non_resolution_exit_closes_after_successful_sell(
         trade_logs = await db_manager.get_all_trade_logs()
         assert len(trade_logs) == 1
         assert trade_logs[0].market_id == "TRACK-NO-RES-2"
+    finally:
+        if os.path.exists(db_path):
+            os.remove(db_path)
+
+
+def _resolved_position(side: str) -> Position:
+    return Position(
+        market_id="TRACK-RESOLVED-1",
+        side=side,
+        entry_price=0.40,
+        quantity=5,
+        timestamp=datetime.now(),
+        rationale="resolved market",
+        confidence=0.75,
+        live=True,
+        status="open",
+    )
+
+
+async def test_resolution_result_yes_pays_yes_position_in_full():
+    """Kalshi returns result 'yes' (lowercase); a YES position settles at 1.0."""
+    should_exit, reason, exit_price = await should_exit_position(
+        _resolved_position("YES"), 0.0, 0.0, "closed", "yes"
+    )
+    assert should_exit is True
+    assert reason == "market_resolution"
+    assert exit_price == 1.0
+
+
+async def test_resolution_result_yes_settles_no_position_at_zero():
+    """Kalshi returns result 'yes'; a NO position settles at 0.0."""
+    should_exit, reason, exit_price = await should_exit_position(
+        _resolved_position("NO"), 0.0, 0.0, "closed", "yes"
+    )
+    assert should_exit is True
+    assert reason == "market_resolution"
+    assert exit_price == 0.0
+
+
+@patch('src.jobs.execute.place_sell_limit_order', new_callable=AsyncMock)
+@patch('src.jobs.track.KalshiClient')
+async def test_v2_dollar_bid_drives_take_profit_price(mock_kalshi_client, mock_place_sell):
+    """
+    v2 market payloads carry dollar bids (yes_bid_dollars). The take-profit check
+    must see the dollar price, not 0, so the sell is placed at the bid (0.65).
+    """
+    db_path = "track_test_v2_prices.db"
+    if os.path.exists(db_path):
+        os.remove(db_path)
+
+    db_manager = DatabaseManager(db_path=db_path)
+    await db_manager.initialize()
+
+    test_position = Position(
+        market_id="TRACK-V2-PRICE-1",
+        side="YES",
+        entry_price=0.40,
+        quantity=5,
+        timestamp=datetime.now(),
+        rationale="v2 dollar price take-profit",
+        confidence=0.75,
+        live=True,
+        status="open",
+        take_profit_price=0.60,
+        stop_loss_price=0.30,
+    )
+    position_id = await db_manager.add_position(test_position)
+    test_position.id = position_id
+
+    mock_api = mock_kalshi_client.return_value
+    mock_api.get_market = AsyncMock(return_value={
+        "market": {
+            "status": "active",
+            "result": None,
+            "yes_bid_dollars": 0.65,
+            "yes_ask_dollars": 0.66,
+            "no_bid_dollars": 0.34,
+            "no_ask_dollars": 0.35,
+        }
+    })
+    mock_api.close = AsyncMock()
+    mock_place_sell.return_value = True
+
+    try:
+        await run_tracking(db_manager=db_manager)
+
+        mock_place_sell.assert_awaited_once()
+        assert mock_place_sell.call_args.kwargs["limit_price"] == 0.65
     finally:
         if os.path.exists(db_path):
             os.remove(db_path)
