@@ -5,12 +5,15 @@ import sys
 sys.path.append('.')
 
 from src.clients.xai_client import XAIClient
+from src.utils.database import DatabaseManager
 from xai_sdk.chat import user as xai_user
 
 async def extract_analysis():
     """Extract the raw Grok4 analysis without JSON parsing."""
-    
-    xai_client = XAIClient()
+
+    db_manager = DatabaseManager()
+    await db_manager.initialize()
+    xai_client = XAIClient(db_manager=db_manager)
     
     analysis_prompt = """
 You are an expert quantitative trading analyst. Based on our Kalshi trading system state:
