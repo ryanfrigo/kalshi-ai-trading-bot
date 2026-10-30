@@ -211,7 +211,7 @@ python cli.py run --paper          # paper trading
 python cli.py run --live           # live trading (real money)
 ```
 
-Defaults: 15% max drawdown, 45% min confidence, 3% max position size, 30% max sector concentration, quarter-Kelly. All configurable in `src/config/settings.py`.
+Defaults: 20% max drawdown, 45% min confidence, 10% max position size, 30% max sector concentration, quarter-Kelly. All configurable in `src/config/settings.py`.
 
 ### 2. Safe Compounder — `python cli.py run --safe-compounder`
 
@@ -314,7 +314,7 @@ All trading parameters live in `src/config/settings.py`. The most useful knobs:
 
 ```python
 # Position sizing
-max_position_size_pct  = 3.0     # Max 3% of balance per position
+max_position_size_pct  = 10.0    # Max 10% of balance per position
 max_positions          = 10      # Max concurrent positions
 kelly_fraction         = 0.25    # Quarter-Kelly (conservative)
 
@@ -570,7 +570,7 @@ These are observations from running the example strategies with real money on Ka
 
 **2. Kelly fraction matters enormously.** For example, at a 45% win rate, three-quarter Kelly compounds losses catastrophically. Quarter-Kelly is what the example strategies use.
 
-**3. A 50% drawdown limit isn't a limit.** The default is 15% with the circuit breaker actually halting trades, not just logging.
+**3. A 50% drawdown limit isn't a limit.** The default is 20% with the circuit breaker actually halting trades, not just logging.
 
 **4. Sector concentration creates correlated losses.** When 90% of capital is in economic categories on a Fed day, everything moves together. The default cap is 30% per category.
 
