@@ -80,3 +80,13 @@ def test_performance_analysis_v2_reads():
 def test_sync_positions_v2_reads():
     _assert_fixture_semantics()
     _assert_v2_read("scripts/sync_positions.py")
+
+
+def test_performance_analyzer_v2_reads():
+    _assert_fixture_semantics()
+    _assert_v2_read("src/jobs/performance_analyzer.py")
+
+
+def test_get_positions_script_v2_reads():
+    _assert_fixture_semantics()
+    _assert_v2_read("scripts/get_positions.py")
