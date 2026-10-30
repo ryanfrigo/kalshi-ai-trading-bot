@@ -438,8 +438,10 @@ class KalshiClient(TradingLoggerMixin):
         )
         # --- risk constitution gate (Ryan-approved 2026-09-28) ----------------
         # Every order passes the risk governor: daily-loss / drawdown halts and
-        # the single-position cap. Fail-open on governor *infrastructure*
-        # errors (loud warning) — a limit breach itself always blocks.
+        # the single-position cap. A limit breach always blocks. Governor
+        # *infrastructure* errors fail CLOSED for buys (issue #98): an unguarded
+        # buy is the failure we cannot afford. Sells/exits reduce risk, so they
+        # proceed with a loud warning.
         gate_error: Optional[str] = None
         try:
             import asyncio as _asyncio
@@ -467,9 +469,16 @@ class KalshiClient(TradingLoggerMixin):
                         gate_error = (f"POSITION_CAP: order cost ${cost:.2f} exceeds "
                                       f"{settings.trading.max_position_size_pct:.0f}% of "
                                       f"equity ${equity:.2f}")
-        except Exception as gate_exc:  # governor infra failure: log, proceed
+        except Exception as gate_exc:  # governor infra failure
+            if action.lower() == "buy":
+                gate_error = f"RISK_GATE_UNAVAILABLE: {gate_exc}"
             try:
-                self.logger.warning("risk governor unavailable, failing open: %s", gate_exc)
+                self.logger.warning(
+                    "risk governor unavailable, %s: %s",
+                    "failing closed (buy blocked)" if action.lower() == "buy"
+                    else "proceeding (exit reduces risk)",
+                    gate_exc,
+                )
             except Exception:
                 pass
         if gate_error:
