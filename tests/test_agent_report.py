@@ -194,5 +194,13 @@ def test_empty_history_renders_without_error():
 # Determinism
 # ---------------------------------------------------------------------------
 
+def test_header_keeps_reproducibility_note():
+    md = _render()
+    assert (
+        "These figures are the owner's live account, computed from local "
+        "settlements. Other people cannot reproduce them without the account."
+    ) in md
+
+
 def test_render_is_deterministic():
     assert _render() == _render()
