@@ -53,6 +53,8 @@ def build_order_v2_payload(
     """
     side_l = side.lower()
     action_l = action.lower()
+    if action_l not in ("buy", "sell"):
+        raise ValueError(f"action must be 'buy' or 'sell', got {action!r}")
 
     if side_l == "yes":
         yes_leg_cents = yes_price
@@ -438,10 +440,10 @@ class KalshiClient(TradingLoggerMixin):
         )
         # --- risk constitution gate (Ryan-approved 2026-09-28) ----------------
         # Every order passes the risk governor: daily-loss / drawdown halts and
-        # the single-position cap. A limit breach always blocks. Governor
-        # *infrastructure* errors fail CLOSED for buys (issue #98): an unguarded
-        # buy is the failure we cannot afford. Sells/exits reduce risk, so they
-        # proceed with a loud warning.
+        # the single-position cap. A limit breach always blocks, and so does a
+        # governor *infrastructure* error (issue #98): with no check, an order
+        # is unguarded whether it opens or closes exposure. Sells are gated too,
+        # since a sell can open a short; there is no reduce_only flag here.
         gate_error: Optional[str] = None
         try:
             import asyncio as _asyncio
@@ -450,8 +452,12 @@ class KalshiClient(TradingLoggerMixin):
             try:
                 from src.config import settings as _s
                 drawdown_pct = getattr(_s, "max_drawdown", 0.20) * 100.0
-            except Exception:
-                pass
+            except Exception as cfg_exc:
+                try:
+                    self.logger.warning("drawdown setting unreadable, using 20%% default: %s",
+                                        cfg_exc)
+                except Exception:
+                    pass
             gov = RiskGovernor(kalshi_client=self,
                                max_daily_loss_pct=settings.trading.max_daily_loss_pct,
                                max_drawdown_pct=drawdown_pct)
@@ -459,26 +465,21 @@ class KalshiClient(TradingLoggerMixin):
             if decision.halted:
                 gate_error = f"RISK_HALT: {'; '.join(decision.reasons)}"
             else:
-                yes_leg_cents = (yes_price if side.lower() == "yes"
-                                 else 100 - (no_price or 0)) if (yes_price or no_price) else None
-                if yes_leg_cents is not None and action.lower() == "buy":
-                    cost = yes_leg_cents / 100.0 * float(count)
+                # Cost of the leg being bought: the explicit price for that side.
+                # (A buy NO costs the NO price, not the YES leg.)
+                side_price = yes_price if side.lower() == "yes" else no_price
+                if side_price is not None and action.lower() == "buy":
+                    cost = side_price / 100.0 * float(count)
                     equity = decision.current_equity_cents / 100.0
                     cap = equity * settings.trading.max_position_size_pct / 100.0
                     if cost > cap:
                         gate_error = (f"POSITION_CAP: order cost ${cost:.2f} exceeds "
                                       f"{settings.trading.max_position_size_pct:.0f}% of "
                                       f"equity ${equity:.2f}")
-        except Exception as gate_exc:  # governor infra failure
-            if action.lower() == "buy":
-                gate_error = f"RISK_GATE_UNAVAILABLE: {gate_exc}"
+        except Exception as gate_exc:  # governor infra failure: fail closed
+            gate_error = f"RISK_GATE_UNAVAILABLE: {gate_exc}"
             try:
-                self.logger.warning(
-                    "risk governor unavailable, %s: %s",
-                    "failing closed (buy blocked)" if action.lower() == "buy"
-                    else "proceeding (exit reduces risk)",
-                    gate_exc,
-                )
+                self.logger.warning("risk governor unavailable, order refused: %s", gate_exc)
             except Exception:
                 pass
         if gate_error:
