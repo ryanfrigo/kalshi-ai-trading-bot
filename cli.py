@@ -882,7 +882,8 @@ def cmd_verify(args: argparse.Namespace) -> None:
     (``src.agent.verify.run_verify``) with the OpenRouter client injected as the
     LLM. The verdict gate is deterministic — it recomputes the edge in points and
     only says BUY_NO when the fade survives the skeptic AND clears every discipline
-    rule. READ-ONLY: never places an order, never writes the journal. Pass --json
+    rule. READ-ONLY: never places an order, never writes the journal (its only
+    write is the AI-spend mirror into daily_cost). Pass --json
     for machine output.
     """
     import json
@@ -938,9 +939,12 @@ def cmd_verify(args: argparse.Namespace) -> None:
                 llm_call = make_operator_llm(payload)
             else:
                 from src.clients.openrouter_client import OpenRouterClient
+                from src.utils.database import DatabaseManager
                 from json_repair import repair_json
 
-                or_client = OpenRouterClient()
+                db_manager = DatabaseManager()
+                await db_manager.initialize()
+                or_client = OpenRouterClient(db_manager=db_manager)
 
                 async def llm_call(prompt: str, schema: dict) -> dict:
                     schema_keys = ", ".join(schema.get("required", []))

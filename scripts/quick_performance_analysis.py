@@ -20,10 +20,10 @@ async def run_quick_analysis():
     
     # Initialize clients
     kalshi_client = KalshiClient()
-    xai_client = XAIClient()
     db = DatabaseManager()
     await db.initialize()
-    
+    xai_client = XAIClient(db_manager=db)
+
     try:
         # 1. Gather current portfolio data
         print("\n📊 Gathering portfolio data...")
