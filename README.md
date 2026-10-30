@@ -58,6 +58,8 @@ forward-settled trades):
 > categories are blocked before the next trade, and the overconfidence haircuts shrink the
 > estimates that produced them.
 
+This verdict is from the operator's live account. The underlying settlements are not committed.
+
 We ship the "no edge" verdict on our own account because a measurement harness that only ever
 prints flattering numbers is marketing, not measurement. See [docs/TRACK_RECORD.md](docs/TRACK_RECORD.md)
 — losses included.
