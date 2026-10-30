@@ -14,6 +14,7 @@ import aiosqlite
 from src.clients.kalshi_client import KalshiClient
 from src.clients.xai_client import XAIClient
 from src.utils.database import DatabaseManager, Position, TradeLog
+from src.utils.market_prices import signed_position
 from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
 
@@ -75,7 +76,7 @@ class TradingPerformanceAnalyzer:
             # Kalshi positions
             positions_response = await self.kalshi_client.get_positions()
             kalshi_positions = positions_response.get('market_positions', [])
-            active_positions = [p for p in kalshi_positions if p.get('position', 0) != 0]
+            active_positions = [p for p in kalshi_positions if signed_position(p) != 0]
             
             # Portfolio value
             balance_response = await self.kalshi_client.get_balance()
@@ -83,7 +84,7 @@ class TradingPerformanceAnalyzer:
             
             data['portfolio'] = {
                 'active_positions': len(active_positions),
-                'total_contracts': sum(abs(p.get('position', 0)) for p in active_positions),
+                'total_contracts': sum(abs(signed_position(p)) for p in active_positions),
                 'available_cash': available_cash,
                 'positions_detail': active_positions[:10]  # Top 10 for analysis
             }
