@@ -20,8 +20,8 @@ from src.utils.market_prices import get_market_prices
 
 async def should_exit_position(
     position: Position, 
-    current_yes_price: float, 
-    current_no_price: float, 
+    current_yes_price: Optional[float], 
+    current_no_price: Optional[float], 
     market_status: str,
     market_result: str = None
 ) -> tuple[bool, str, float]:
@@ -43,6 +43,15 @@ async def should_exit_position(
             exit_price = current_price
         return True, "market_resolution", exit_price
     
+    # No usable price (empty book reads as 0 / None): every price-based exit
+    # below would act on a false price, so do nothing and retry next cycle.
+    if current_price is None or current_price <= 0:
+        get_trading_logger("track_positions").warning(
+            f"No bid for {position.side} side of {position.market_id} "
+            f"(price={current_price}); skipping exit checks, will not sell."
+        )
+        return False, "", 0.0
+
     # 2. ENHANCED Stop-loss exit using proper logic for YES/NO positions
     if position.stop_loss_price:
         from src.utils.stop_loss_calculator import StopLossCalculator
