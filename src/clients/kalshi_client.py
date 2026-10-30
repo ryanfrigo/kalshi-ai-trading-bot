@@ -8,8 +8,10 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import os
 import time
+from decimal import ROUND_DOWN, Decimal
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union
@@ -38,6 +40,7 @@ def build_order_v2_payload(
     yes_price: Optional[int] = None,
     no_price: Optional[int] = None,
     expiration_ts: Optional[int] = None,
+    reduce_only: bool = False,
 ) -> Dict[str, Any]:
     """Translate the legacy order spec into Kalshi's current events/orders payload.
 
@@ -50,6 +53,8 @@ def build_order_v2_payload(
 
     ``price`` is always the YES-leg price in dollars; a NO price of ``p`` cents is
     a YES price of ``100 - p`` cents. ``count`` is a string with two decimals.
+    ``reduce_only`` adds Kalshi's reduce_only flag and forces immediate_or_cancel
+    (the exchange rejects reduce_only on anything else); expiration_time is GTC-only.
     """
     side_l = side.lower()
     action_l = action.lower()
@@ -72,7 +77,10 @@ def build_order_v2_payload(
     is_bid = (action_l == "buy" and side_l == "yes") or (action_l == "sell" and side_l == "no")
     new_side = "bid" if is_bid else "ask"
 
-    tif = "immediate_or_cancel" if type_ == "market" else "good_till_canceled"
+    # reduce_only: IOC at the limit price, any unfilled remainder cancels, so the
+    # caller must re-check the position.
+    tif = ("immediate_or_cancel" if type_ == "market" or reduce_only
+           else "good_till_canceled")
 
     payload: Dict[str, Any] = {
         "ticker": ticker,
@@ -86,6 +94,8 @@ def build_order_v2_payload(
         payload["client_order_id"] = client_order_id
     if expiration_ts and tif == "good_till_canceled":
         payload["expiration_time"] = int(expiration_ts)
+    if reduce_only:
+        payload["reduce_only"] = True
     return payload
 
 
@@ -438,12 +448,17 @@ class KalshiClient(TradingLoggerMixin):
             ticker, client_order_id, side, action, count, type_,
             yes_price, no_price, expiration_ts,
         )
+        reduce_only = False
         # --- risk constitution gate (Ryan-approved 2026-09-28) ----------------
         # Every order passes the risk governor: daily-loss / drawdown halts and
         # the single-position cap. A limit breach always blocks, and so does a
         # governor *infrastructure* error (issue #98): with no check, an order
         # is unguarded whether it opens or closes exposure. Sells are gated too,
-        # since a sell can open a short; there is no reduce_only flag here.
+        # since a sell can open a short. One exception: when every halt reason is
+        # a trading limit (DAILY_LOSS / DRAWDOWN), a sell no larger than the
+        # position held on that same side passes, so a halt can still de-risk.
+        # Buys, other halt reasons (MANUAL_HALT, STATE_CORRUPT) and any held
+        # position we cannot confirm stay blocked.
         gate_error: Optional[str] = None
         try:
             import asyncio as _asyncio
@@ -464,6 +479,16 @@ class KalshiClient(TradingLoggerMixin):
             decision = await gov.check()
             if decision.halted:
                 gate_error = f"RISK_HALT: {'; '.join(decision.reasons)}"
+                limit_only = bool(decision.reasons) and all(
+                    r.startswith(("DAILY_LOSS:", "DRAWDOWN:")) for r in decision.reasons)
+                if limit_only and action.lower() == "sell":
+                    held = await self._held_on_side(ticker, side)
+                    # Compare what is actually sent (count at 2dp, as the payload
+                    # serializes it) to held rounded DOWN to 2dp, never up.
+                    if self._within_held(count, held):
+                        # held is not net of resting orders; reduce_only is the backstop.
+                        gate_error = None
+                        reduce_only = True
             else:
                 # Cost of the leg being bought: the explicit price for that side.
                 # (A buy NO costs the NO price, not the YES leg.)
@@ -484,6 +509,11 @@ class KalshiClient(TradingLoggerMixin):
                 pass
         if gate_error:
             raise KalshiAPIError(gate_error)
+        if reduce_only:
+            payload = build_order_v2_payload(
+                ticker, client_order_id, side, action, count, type_,
+                yes_price, no_price, expiration_ts, reduce_only=True,
+            )
         # ----------------------------------------------------------------------
 
         resp = await self._make_authenticated_request(
@@ -495,6 +525,32 @@ class KalshiClient(TradingLoggerMixin):
             return {"order": resp, **resp}
         return resp
     
+    @staticmethod
+    def _within_held(count: Any, held: Optional[float]) -> bool:
+        """True iff the serialized count is positive and <= held floored to 2dp."""
+        if held is None or isinstance(count, bool) or not isinstance(count, (int, float)):
+            return False
+        if not (math.isfinite(count) and math.isfinite(held)):
+            return False
+        sent = Decimal(f"{count:.2f}")
+        held_floor = Decimal(str(held)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        return 0 < sent <= held_floor
+
+    async def _held_on_side(self, ticker: str, side: str) -> Optional[float]:
+        """Contracts currently held on ``side`` of ``ticker``; None if unconfirmable."""
+        try:
+            from src.utils.market_prices import signed_position
+            resp = await self.get_positions(ticker=ticker)
+            rows = [r for r in resp.get("market_positions", []) if r.get("ticker") == ticker]
+            if len(rows) != 1:
+                return None
+            pos = signed_position(rows[0])
+            if not math.isfinite(pos):
+                return None
+            return max(pos, 0.0) if side.lower() == "yes" else max(-pos, 0.0)
+        except Exception:
+            return None
+
     async def cancel_order(self, order_id: str) -> Dict[str, Any]:
         """Cancel an order (v2; the v1 /portfolio/orders/{id} path returns HTTP 410)."""
         return await self._make_authenticated_request(
