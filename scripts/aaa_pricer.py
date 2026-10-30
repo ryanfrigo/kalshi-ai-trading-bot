@@ -64,7 +64,17 @@ def taker_fee_order(count: float, price: float) -> float:
     """Total taker fee for an order of `count` contracts at `price`, in dollars.
 
     Kalshi rounds up once per order. The 1e-9 guards float noise on exact cents.
+    Raises ValueError outside count >= 0 and 0 <= price <= 1, so a bad input
+    cannot produce a negative fee.
     """
+    if math.isnan(count) or math.isnan(price):
+        raise ValueError(f"taker_fee_order: NaN input (count={count}, price={price})")
+    if count < 0:
+        raise ValueError(f"taker_fee_order: count must be >= 0, got {count}")
+    if price < 0 or price > 1:
+        raise ValueError(f"taker_fee_order: price must be in [0, 1], got {price}")
+    if count == 0 or price == 0 or price == 1:
+        return 0.0
     return math.ceil(0.07 * count * price * (1 - price) * 100 - 1e-9) / 100
 
 
