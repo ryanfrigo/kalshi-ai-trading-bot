@@ -136,7 +136,7 @@ async def _fallback_legacy_trading() -> Optional[TradingSystemResults]:
         # Initialize components
         db_manager = DatabaseManager()
         kalshi_client = KalshiClient()
-        xai_client = XAIClient()
+        xai_client = XAIClient(db_manager=db_manager)
         
         # Get eligible markets
         markets = await db_manager.get_eligible_markets(
