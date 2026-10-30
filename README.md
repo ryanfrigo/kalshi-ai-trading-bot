@@ -330,7 +330,7 @@ ai_max_tokens          = 8000
 
 # Risk management
 max_daily_loss_pct     = 10.0    # Daily loss circuit breaker
-max_drawdown           = 0.15    # Portfolio drawdown halt
+max_drawdown           = 0.20    # Portfolio drawdown halt
 daily_ai_cost_limit    = 10.0    # Max daily LLM spend in USD
 ```
 
