@@ -123,3 +123,19 @@ async def test_corrupt_refuses_across_instances_until_file_removed(cls, tmp_path
     os.remove(second.usage_file)
     third = _make(cls, tmp_path)
     assert await third._check_daily_limits() is True  # missing = fresh day
+
+
+def test_update_daily_cost_without_event_loop_logs_and_keeps_pickle(tmp_path):
+    db = MagicMock()
+    db.upsert_daily_cost = AsyncMock()
+    c = _make(OpenRouterClient, tmp_path, db_manager=db)
+    c.logger = MagicMock()
+
+    c._update_daily_cost(0.75)  # sync caller, no running loop
+
+    assert c.daily_tracker.total_cost == 0.75
+    with open(c.usage_file, "rb") as fh:
+        assert pickle.load(fh).total_cost == 0.75
+    c.logger.error.assert_called_once()
+    assert "DB cost update" in c.logger.error.call_args[0][0]
+    db.upsert_daily_cost.assert_not_called()
