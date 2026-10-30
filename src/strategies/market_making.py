@@ -27,6 +27,10 @@ from src.utils.database import DatabaseManager, Market
 from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
 
+# Capital base for market-making sizing (USD). Fixed because no equity value
+# reaches the sizing function. Do not raise without a portfolio-based source.
+MARKET_MAKING_CAPITAL_CAP = 1000
+
 
 @dataclass
 class LimitOrder:
@@ -300,8 +304,10 @@ class AdvancedMarketMaker:
         formula here in place.
         """
         try:
-            # Available capital for market making
-            available_capital = getattr(settings.trading, 'max_position_size', 1000)
+            # Available capital for market making. No equity/portfolio value is
+            # in scope here, so use the fixed cap. settings.trading has no
+            # `max_position_size`; the getattr fallback was always taken.
+            available_capital = MARKET_MAKING_CAPITAL_CAP
             
             # Kelly fraction calculation
             # f* = (bp - q) / b where b=odds, p=win_prob, q=lose_prob
