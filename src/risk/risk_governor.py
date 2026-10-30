@@ -30,6 +30,10 @@ DEFAULT_STATE_PATH = "data/runtime/risk_governor_state.json"
 DEFAULT_HALT_FLAG_PATH = "data/runtime/TRADING_HALTED"
 
 
+class RiskStateCorrupt(Exception):
+    """The persisted governor state exists but cannot be trusted."""
+
+
 @dataclass
 class GovernorDecision:
     """Outcome of a governor check. ``halted`` gates new buys, not exits."""
@@ -143,9 +147,16 @@ class RiskGovernor:
 
     def load_state(self) -> Dict:
         try:
-            return json.loads(self.state_path.read_text())
-        except (FileNotFoundError, ValueError):
-            return {}
+            raw = self.state_path.read_text()
+        except FileNotFoundError:
+            return {}  # first run: no baseline yet
+        try:
+            state = json.loads(raw)
+        except ValueError as exc:
+            raise RiskStateCorrupt(str(self.state_path)) from exc
+        if not isinstance(state, dict):
+            raise RiskStateCorrupt(str(self.state_path))
+        return state
 
     def save_state(self, state: Dict) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -179,7 +190,21 @@ class RiskGovernor:
         if current_equity_cents is None:
             current_equity_cents = await self.current_equity_cents()
 
-        state = roll_state(self.load_state(), current_equity_cents, self._today())
+        try:
+            prev = self.load_state()
+        except RiskStateCorrupt:
+            # Baselines are unknowable, so treat as halted and leave the file
+            # as-is for the operator. Writing a fresh baseline here would
+            # silently reset peak/day-start and fail open.
+            return GovernorDecision(
+                halted=True,
+                reasons=[f"STATE_CORRUPT: {self.state_path}"],
+                current_equity_cents=current_equity_cents,
+                sod_equity_cents=0,
+                peak_equity_cents=0,
+            )
+
+        state = roll_state(prev, current_equity_cents, self._today())
         self.save_state(state)
 
         decision = evaluate_risk(

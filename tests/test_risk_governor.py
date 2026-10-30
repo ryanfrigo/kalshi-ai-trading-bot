@@ -138,3 +138,34 @@ def test_state_persists_across_governor_instances(tmp_path):
     g2 = _gov(tmp_path)
     d = asyncio.run(g2.check(current_equity_cents=90_000))
     assert d.halted is True  # down 10% from the persisted SOD
+
+
+# --- corrupt state fails closed (must not reset the baselines) --------------
+
+def test_missing_state_file_still_works_first_run(tmp_path):
+    gov = _gov(tmp_path)
+    assert not gov.state_path.exists()
+    d = asyncio.run(gov.check(current_equity_cents=100_000))
+    assert d.halted is False
+    assert d.sod_equity_cents == 100_000
+    assert gov.state_path.exists()  # first run persists the baseline
+
+
+def test_corrupt_json_halts_and_leaves_file_untouched(tmp_path):
+    gov = _gov(tmp_path)
+    gov.state_path.parent.mkdir(parents=True, exist_ok=True)
+    gov.state_path.write_text("{not json")
+    d = asyncio.run(gov.check(current_equity_cents=100_000))
+    assert d.halted is True
+    assert d.reasons == [f"STATE_CORRUPT: {gov.state_path}"]
+    assert gov.state_path.read_text() == "{not json"  # operator's evidence, not rewritten
+
+
+def test_non_dict_json_halts_and_leaves_file_untouched(tmp_path):
+    gov = _gov(tmp_path)
+    gov.state_path.parent.mkdir(parents=True, exist_ok=True)
+    gov.state_path.write_text("[]")
+    d = asyncio.run(gov.check(current_equity_cents=100_000))
+    assert d.halted is True
+    assert d.reasons == [f"STATE_CORRUPT: {gov.state_path}"]
+    assert gov.state_path.read_text() == "[]"
