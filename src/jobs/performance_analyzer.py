@@ -140,29 +140,29 @@ class TradingPerformanceAnalyzer:
                      FROM positions 
                      WHERE status = 'open'
                  """)
-                 open_position_stats = await cursor.fetchone()
-                 
-                 data['performance'] = {
-                     'overall_stats': {
-                         'total_trades': trade_stats[0] if trade_stats else 0,
-                         'winning_trades': trade_stats[1] if trade_stats else 0,
-                         'win_rate': (trade_stats[1] / trade_stats[0]) if trade_stats and trade_stats[0] > 0 else 0,
-                         'avg_pnl': trade_stats[2] if trade_stats else 0,
-                         'total_pnl': trade_stats[3] if trade_stats else 0,
-                         'worst_loss': trade_stats[4] if trade_stats else 0,
-                         'best_win': trade_stats[5] if trade_stats else 0
-                     },
-                     'position_distribution': dict(position_stats) if position_stats else {},
-                     'open_positions': {
-                         'count': open_position_stats[0] if open_position_stats else 0,
-                         'total_exposure': open_position_stats[1] if open_position_stats else 0
-                     },
-                     'recent_performance': {
-                         'trades_last_7d': recent_stats[0] if recent_stats else 0,
-                         'avg_pnl_last_7d': recent_stats[1] if recent_stats else 0,
-                         'wins_last_7d': recent_stats[2] if recent_stats else 0
-                     }
-                 }
+                open_position_stats = await cursor.fetchone()
+                
+                data['performance'] = {
+                    'overall_stats': {
+                        'total_trades': trade_stats[0] if trade_stats else 0,
+                        'winning_trades': trade_stats[1] if trade_stats else 0,
+                        'win_rate': (trade_stats[1] / trade_stats[0]) if trade_stats and trade_stats[0] > 0 else 0,
+                        'avg_pnl': trade_stats[2] if trade_stats else 0,
+                        'total_pnl': trade_stats[3] if trade_stats else 0,
+                        'worst_loss': trade_stats[4] if trade_stats else 0,
+                        'best_win': trade_stats[5] if trade_stats else 0
+                    },
+                    'position_distribution': dict(position_stats) if position_stats else {},
+                    'open_positions': {
+                        'count': open_position_stats[0] if open_position_stats else 0,
+                        'total_exposure': open_position_stats[1] if open_position_stats else 0
+                    },
+                    'recent_performance': {
+                        'trades_last_7d': recent_stats[0] if recent_stats else 0,
+                        'avg_pnl_last_7d': recent_stats[1] if recent_stats else 0,
+                        'wins_last_7d': recent_stats[2] if recent_stats else 0
+                    }
+                }
                 
         except Exception as e:
             self.logger.warning(f"Error gathering performance data: {e}")
