@@ -154,6 +154,10 @@ class TradingConfig:
         # REMOVED weather and entertainment - trade all categories
     ])
 
+    # Skip the news search for low-volume markets (read in src/jobs/decide.py)
+    skip_news_for_low_volume: bool = True   # Skip expensive searches for low volume
+    news_search_volume_threshold: float = 1000.0  # News threshold
+
 
 @dataclass
 class LoggingConfig:
@@ -232,8 +236,6 @@ daily_ai_budget: float = 15.0           # INCREASED: Higher budget for more oppo
 max_ai_cost_per_decision: float = 0.12  # INCREASED: Higher per-decision limit (was 0.08, now 0.12)
 analysis_cooldown_hours: int = 2        # DECREASED: Much shorter cooldown (was 4, now 2)
 max_analyses_per_market_per_day: int = 6  # INCREASED: More analyses per day (was 3, now 6)
-skip_news_for_low_volume: bool = True   # Skip expensive searches for low volume
-news_search_volume_threshold: float = 1000.0  # News threshold
 
 # === SYSTEM BEHAVIOR ===
 # Overall system behavior settings
