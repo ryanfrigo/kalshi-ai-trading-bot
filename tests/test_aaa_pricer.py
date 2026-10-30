@@ -15,6 +15,7 @@ from aaa_pricer import (  # noqa: E402
     forecast_cdf,
     parse_strike,
     streak_runs,
+    taker_fee_order,
     taker_fee_per_contract,
 )
 from aaa_futures import convergence  # noqa: E402
@@ -105,6 +106,13 @@ def test_taker_fee_matches_kalshi_formula():
     assert taker_fee_per_contract(0.05) == pytest.approx(0.01)  # 0.33c -> ceil 1c
     assert taker_fee_per_contract(0.50) == pytest.approx(0.02)  # 1.75c -> ceil 2c
     assert taker_fee_per_contract(0.99) == pytest.approx(0.01)
+
+
+def test_taker_fee_order_rounds_once_per_order():
+    assert taker_fee_order(388.19, 0.76) == pytest.approx(4.96)  # 495.7c -> ceil 496c
+    assert taker_fee_order(500, 0.50) == pytest.approx(8.75)  # exact 875c, no round-up
+    assert taker_fee_order(1, 0.50) == pytest.approx(0.02)  # 1.75c -> ceil 2c
+    assert taker_fee_order(1, 0.05) == pytest.approx(0.01)  # 0.33c -> ceil 1c
 
 
 def test_fee_aware_edges():

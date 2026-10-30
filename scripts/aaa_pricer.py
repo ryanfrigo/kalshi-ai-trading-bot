@@ -48,12 +48,24 @@ PRICINGS_DIR = REPO / "data" / "aaa" / "pricings"
 SCORES_PATH = REPO / "data" / "aaa" / "scores.jsonl"
 
 # Kalshi taker fee (general markets): fee_cents = ceil(0.07 * C * P * (1-P)).
-# Maker orders pay no fee. We size per-contract with the ceiling as a
-# conservative approximation for small orders.
+# Maker orders pay no fee.
 def taker_fee_per_contract(price: float) -> float:
+    """Per-contract taker fee, rounded up to the cent for a single contract.
+
+    Over-states fees for multi-contract orders: Kalshi rounds up once per
+    order, not once per contract. Use taker_fee_order when count is known.
+    """
     if price <= 0 or price >= 1:
         return 0.0
     return math.ceil(7.0 * price * (1.0 - price)) / 100.0
+
+
+def taker_fee_order(count: float, price: float) -> float:
+    """Total taker fee for an order of `count` contracts at `price`, in dollars.
+
+    Kalshi rounds up once per order. The 1e-9 guards float noise on exact cents.
+    """
+    return math.ceil(0.07 * count * price * (1 - price) * 100 - 1e-9) / 100
 
 
 def streak_runs(deltas: list[float], thresh: float = -0.4) -> list[tuple[int, int]]:
