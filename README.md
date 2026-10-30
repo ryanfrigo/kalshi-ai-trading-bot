@@ -153,7 +153,7 @@ The toolkit is built to be driven by an agent (Claude, or anything else) through
 | Tool | Kind | What it does |
 |---|---|---|
 | `brief` | read-only | One-shot situational awareness: governor verdict, equity, positions, resting orders (JSON) |
-| `verify` | read-only | The **adversarial-verify gate** before any live buy: research the catalyst → a SKEPTIC tries to refute the fade → a deterministic gate recomputes the edge off the live book and rules `BUY_NO`/`PASS`. Works with no API key via `--research-file` |
+| `verify` | no orders | The **adversarial-verify gate** before any live buy: research the catalyst → a SKEPTIC tries to refute the fade → a deterministic gate recomputes the edge off the live book and rules `BUY_NO`/`PASS`. Works with no API key via `--research-file` It never places an order or writes the journal; it does log AI spend to the local DB. |
 | `trade` | mutating | Place ONE guarded, journaled order through the full risk stack. Dry-run unless `--live` |
 | `close` | mutating | Sell ONE held position at the current bid (allowed even when halted — selling cuts risk). Dry-run unless `--live` |
 | `fills` | writes | Reconcile the journal against actual order fills — void records whose orders never filled, shrink partial fills — so calibration and the policy only learn from trades that executed. `--dry` for read-only |
