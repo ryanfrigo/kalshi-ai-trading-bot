@@ -186,7 +186,7 @@ This repo gives you the building blocks. The example strategies use them — you
 | **Edge harness** | Brier / log-loss / edge-vs-book + forward-only honesty verdict (pure, deterministic) | `src/agent/edge.py` |
 | **Edge Policy** | Turns the settled record into a pre-trade gate (block losing categories, warn on losing sides, haircut overconfident bands); closes the self-improvement loop | `src/agent/policy.py` |
 | **Learnings system** | Joins settlements back into the decision journal; calibration table + realized edge → evolving learnings | `src/agent/learnings.py` |
-| **Risk governor** | Daily-loss + drawdown kill switch + manual halt, authoritative for every live order | `src/risk/risk_governor.py` |
+| **Risk governor** | Daily-loss + drawdown kill switch + manual halt, authoritative for every live order; under a daily-loss/drawdown halt only a held-size reduce-only sell passes, as IOC + `reduce_only` (it will not rest) | `src/risk/risk_governor.py` |
 | **Kalshi client** | Authenticated REST + WebSocket client (RSA signing, retries, rate-limit handling) | `src/clients/kalshi_client.py` |
 | **Market ingestion** | Pulls the full tradeable universe via the Events API, persists to SQLite | `src/jobs/ingest.py` |
 | **Position tracking** | Stop-loss, take-profit, time-based, and resolution-based exits with real Kalshi sell orders | `src/jobs/track.py` |

@@ -2,7 +2,8 @@
 
 If the risk governor raises (infrastructure failure, not a limit breach), the
 order is refused before anything is posted to Kalshi, whether it buys or sells:
-a sell can open a short, and there is no reduce_only flag. The position cap is
+a sell can open a short (a limit-only halt passes a reduce-only sell; see
+test_reduce_only_exit.py). The position cap is
 checked against the price of the leg being bought.
 """
 import asyncio
