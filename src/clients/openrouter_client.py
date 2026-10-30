@@ -149,6 +149,7 @@ class OpenRouterClient(TradingLoggerMixin):
 
         # Daily usage tracker (same pattern as XAIClient)
         self.usage_file = "logs/daily_openrouter_usage.pkl"
+        self._db_cost_tasks: set = set()
         self.daily_tracker: DailyUsageTracker = self._load_daily_tracker()
 
         self.logger.info(
@@ -170,27 +171,44 @@ class OpenRouterClient(TradingLoggerMixin):
         daily_limit = getattr(settings.trading, "daily_ai_cost_limit", 50.0)
         os.makedirs("logs", exist_ok=True)
 
-        try:
-            if os.path.exists(self.usage_file):
-                with open(self.usage_file, "rb") as fh:
-                    tracker: DailyUsageTracker = pickle.load(fh)
-                if tracker.date != today:
-                    tracker = DailyUsageTracker(
-                        date=today,
-                        daily_limit=daily_limit,
-                    )
-                else:
-                    # Always sync daily_limit from settings (user may have changed it)
-                    if tracker.daily_limit != daily_limit:
-                        tracker.daily_limit = daily_limit
-                        # Un-exhaust if new limit is higher than current cost
-                        if tracker.is_exhausted and tracker.total_cost < daily_limit:
-                            tracker.is_exhausted = False
-                return tracker
-        except Exception as exc:
-            self.logger.warning(f"Failed to load daily tracker: {exc}")
+        if not os.path.exists(self.usage_file):
+            return DailyUsageTracker(date=today, daily_limit=daily_limit)
 
-        return DailyUsageTracker(date=today, daily_limit=daily_limit)
+        try:
+            with open(self.usage_file, "rb") as fh:
+                tracker = pickle.load(fh)
+            if not isinstance(tracker, DailyUsageTracker):
+                raise TypeError(f"unexpected type {type(tracker).__name__}")
+        except Exception as exc:
+            # Fail closed: a reset to $0 here would silently void the daily cap.
+            self.logger.error(
+                f"Failed to load daily tracker ({exc}); treating today's AI budget as exhausted"
+            )
+            tracker = DailyUsageTracker(
+                date=today,
+                daily_limit=daily_limit,
+                # cost at the limit so the un-exhaust sync can't clear this later
+                total_cost=daily_limit,
+                is_exhausted=True,
+                last_exhausted_time=datetime.now(),
+            )
+            # Persist so any other process/client instance also refuses.
+            try:
+                with open(self.usage_file, "wb") as fh:
+                    pickle.dump(tracker, fh)
+            except Exception as save_exc:
+                self.logger.error(f"Failed to persist exhausted tracker: {save_exc}")
+            return tracker
+
+        if tracker.date != today:
+            return DailyUsageTracker(date=today, daily_limit=daily_limit)
+        # Always sync daily_limit from settings (user may have changed it)
+        if tracker.daily_limit != daily_limit:
+            tracker.daily_limit = daily_limit
+            # Un-exhaust if new limit is higher than current cost
+            if tracker.is_exhausted and tracker.total_cost < daily_limit:
+                tracker.is_exhausted = False
+        return tracker
 
     def _save_daily_tracker(self) -> None:
         """Persist the daily tracker to disk."""
@@ -217,6 +235,27 @@ class OpenRouterClient(TradingLoggerMixin):
                 daily_limit=self.daily_tracker.daily_limit,
                 requests_today=self.daily_tracker.request_count,
             )
+
+        self._record_db_cost(cost)
+
+    def _record_db_cost(self, cost: float) -> None:
+        """Best-effort mirror of *cost* into the DB so decide.py's budget check binds."""
+        if not self.db_manager:
+            return
+        try:
+            task = asyncio.get_running_loop().create_task(
+                self._upsert_db_cost(cost)
+            )
+            self._db_cost_tasks.add(task)
+            task.add_done_callback(self._db_cost_tasks.discard)
+        except Exception as exc:
+            self.logger.error(f"Failed to schedule DB cost update: {exc}")
+
+    async def _upsert_db_cost(self, cost: float) -> None:
+        try:
+            await self.db_manager.upsert_daily_cost(cost)
+        except Exception as exc:
+            self.logger.error(f"Failed to record daily cost in DB: {exc}")
 
     async def _check_daily_limits(self) -> bool:
         """Return True if we are within the daily spending limit."""

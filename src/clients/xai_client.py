@@ -86,21 +86,41 @@ class XAIClient(TradingLoggerMixin):
         daily_limit = getattr(settings.trading, "daily_ai_cost_limit", 10.0)
         os.makedirs("logs", exist_ok=True)
 
-        try:
-            if os.path.exists(self.usage_file):
-                with open(self.usage_file, "rb") as f:
-                    tracker = pickle.load(f)
-                if tracker.date != today:
-                    tracker = DailyUsageTracker(date=today, daily_limit=daily_limit)
-                else:
-                    tracker.daily_limit = daily_limit
-                    if tracker.is_exhausted and tracker.total_cost < daily_limit:
-                        tracker.is_exhausted = False
-                return tracker
-        except Exception as e:
-            self.logger.warning(f"Failed to load daily tracker: {e}")
+        if not os.path.exists(self.usage_file):
+            return DailyUsageTracker(date=today, daily_limit=daily_limit)
 
-        return DailyUsageTracker(date=today, daily_limit=daily_limit)
+        try:
+            with open(self.usage_file, "rb") as f:
+                tracker = pickle.load(f)
+            if not isinstance(tracker, DailyUsageTracker):
+                raise TypeError(f"unexpected type {type(tracker).__name__}")
+        except Exception as e:
+            # Fail closed: a reset to $0 here would silently void the daily cap.
+            self.logger.error(
+                f"Failed to load daily tracker ({e}); treating today's AI budget as exhausted"
+            )
+            tracker = DailyUsageTracker(
+                date=today,
+                daily_limit=daily_limit,
+                # cost at the limit so the un-exhaust sync can't clear this later
+                total_cost=daily_limit,
+                is_exhausted=True,
+                last_exhausted_time=datetime.now(),
+            )
+            # Persist so any other process/client instance also refuses.
+            try:
+                with open(self.usage_file, "wb") as f:
+                    pickle.dump(tracker, f)
+            except Exception as save_exc:
+                self.logger.error(f"Failed to persist exhausted tracker: {save_exc}")
+            return tracker
+
+        if tracker.date != today:
+            return DailyUsageTracker(date=today, daily_limit=daily_limit)
+        tracker.daily_limit = daily_limit
+        if tracker.is_exhausted and tracker.total_cost < daily_limit:
+            tracker.is_exhausted = False
+        return tracker
 
     def _save_daily_tracker(self):
         """Save daily usage tracker to disk."""
