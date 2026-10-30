@@ -882,8 +882,8 @@ def cmd_verify(args: argparse.Namespace) -> None:
     (``src.agent.verify.run_verify``) with the OpenRouter client injected as the
     LLM. The verdict gate is deterministic — it recomputes the edge in points and
     only says BUY_NO when the fade survives the skeptic AND clears every discipline
-    rule. READ-ONLY: never places an order, never writes the journal (its only
-    write is the AI-spend mirror into daily_cost). Pass --json
+    rule. Never places orders or writes the journal; records AI spend in the local DB.
+    Pass --json
     for machine output.
     """
     import json
@@ -1813,14 +1813,14 @@ def build_parser() -> argparse.ArgumentParser:
     # --- verify ---
     p_verify = subparsers.add_parser(
         "verify",
-        help="Adversarial-verify a single ticker (research -> skeptic -> verdict). Read-only.",
+        help="Adversarial-verify a single ticker (research -> skeptic -> verdict). Never places orders or writes the journal; records AI spend in the local DB.",
         description=(
             "Run the research/adversarial-verify pipeline on one market: read the "
             "LIVE orderbook for the executable NO ask we'd fade, research the "
             "catalyst and true-YES, then a SKEPTIC tries to REFUTE the fade, and "
             "a deterministic gate recomputes the edge and rules BUY_NO / PASS "
             "(BUY_NO only when the fade survives AND clears every discipline rule). "
-            "Read-only: never places an order or writes the journal. Pass --json "
+            "Never places orders or writes the journal; records AI spend in the local DB. Pass --json "
             "for machine output."
         ),
     )
