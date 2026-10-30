@@ -34,20 +34,26 @@ class PortfolioEnforcer:
     It raises `BlockedTradeError` if the trade violates rules.
 
     Usage:
-        enforcer = PortfolioEnforcer(db_path, portfolio_value=1000.0)
+        enforcer = PortfolioEnforcer(max_position_pct=0.10,
+                                     db_path=db_path, portfolio_value=1000.0)
         await enforcer.initialize()
         try:
             await enforcer.check_trade(ticker="KXNCAAB-...", side="no", amount=50.0)
         except BlockedTradeError as e:
             logger.warning(f"Trade blocked: {e}")
+
+    max_position_pct is REQUIRED (no default): it is a money-safety cap, so
+    callers must choose it explicitly, e.g. from
+    settings.trading.max_position_size_pct / 100.0 (settings is a percent,
+    this class stores a fraction).
     """
 
     def __init__(
         self,
+        max_position_pct: float,
         db_path: str = "trading_system.db",
         portfolio_value: float = 0.0,
         max_drawdown_pct: float = 0.15,
-        max_position_pct: float = 0.03,
         max_sector_pct: float = 0.30,
     ):
         self.db_path = db_path
