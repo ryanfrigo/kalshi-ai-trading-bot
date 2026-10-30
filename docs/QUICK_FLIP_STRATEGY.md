@@ -119,7 +119,7 @@ results = await run_quick_flip_strategy(
 ## Strategy Advantages
 
 ### High Return Potential
-- **100%+ returns** on successful trades (1¢ → 2¢)
+- A 1¢ contract that moves to 2¢ is a 100% gross return before fees. This strategy has no committed backtest.
 - **Quick turnover** - capital not tied up long-term
 - **Many opportunities** - low-priced contracts are common
 

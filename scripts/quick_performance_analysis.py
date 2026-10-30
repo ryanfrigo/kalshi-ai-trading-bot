@@ -8,6 +8,7 @@ sys.path.append('.')
 from src.clients.kalshi_client import KalshiClient
 from src.clients.xai_client import XAIClient
 from src.utils.database import DatabaseManager
+from src.utils.market_prices import signed_position
 import aiosqlite
 from datetime import datetime, timedelta
 
@@ -19,10 +20,10 @@ async def run_quick_analysis():
     
     # Initialize clients
     kalshi_client = KalshiClient()
-    xai_client = XAIClient()
     db = DatabaseManager()
     await db.initialize()
-    
+    xai_client = XAIClient(db_manager=db)
+
     try:
         # 1. Gather current portfolio data
         print("\n📊 Gathering portfolio data...")
@@ -30,7 +31,7 @@ async def run_quick_analysis():
         # Kalshi positions
         positions_response = await kalshi_client.get_positions()
         kalshi_positions = positions_response.get('market_positions', [])
-        active_positions = [p for p in kalshi_positions if p.get('position', 0) != 0]
+        active_positions = [p for p in kalshi_positions if signed_position(p) != 0]
         
         # Balance
         balance_response = await kalshi_client.get_balance()
@@ -79,9 +80,9 @@ You are an expert quantitative trading analyst reviewing a Kalshi prediction mar
 
 CURRENT PORTFOLIO STATE:
 - Active Positions: {len(active_positions)} markets
-- Total Contracts: {sum(abs(p.get('position', 0)) for p in active_positions)}
+- Total Contracts: {sum(abs(signed_position(p)) for p in active_positions)}
 - Available Cash: ${available_cash:.2f}
-- Capital Utilization: {((sum(abs(p.get('position', 0)) for p in active_positions) * 0.50) / (available_cash + sum(abs(p.get('position', 0)) for p in active_positions) * 0.50)) * 100:.1f}%
+- Capital Utilization: {((sum(abs(signed_position(p)) for p in active_positions) * 0.50) / (available_cash + sum(abs(signed_position(p)) for p in active_positions) * 0.50)) * 100:.1f}%
 
 HISTORICAL PERFORMANCE:
 - Total Completed Trades: {trade_stats[0] if trade_stats else 0}

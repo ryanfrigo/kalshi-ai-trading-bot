@@ -16,11 +16,12 @@ from src.utils.database import DatabaseManager, Position, TradeLog
 from src.config.settings import settings
 from src.utils.logging_setup import setup_logging, get_trading_logger
 from src.clients.kalshi_client import KalshiClient
+from src.utils.market_prices import get_market_prices
 
 async def should_exit_position(
     position: Position, 
-    current_yes_price: float, 
-    current_no_price: float, 
+    current_yes_price: Optional[float], 
+    current_no_price: Optional[float], 
     market_status: str,
     market_result: str = None
 ) -> tuple[bool, str, float]:
@@ -36,12 +37,21 @@ async def should_exit_position(
     if market_status == 'closed':
         # If market resolved, use the result to determine exit price
         if market_result:
-            exit_price = 1.0 if market_result == position.side else 0.0
+            exit_price = 1.0 if str(market_result).upper() == str(position.side).upper() else 0.0
         else:
             # Fallback to current price if no result available
             exit_price = current_price
         return True, "market_resolution", exit_price
     
+    # No usable price (empty book reads as 0 / None): every price-based exit
+    # below would act on a false price, so do nothing and retry next cycle.
+    if current_price is None or current_price <= 0:
+        get_trading_logger("track_positions").warning(
+            f"No bid for {position.side} side of {position.market_id} "
+            f"(price={current_price}); skipping exit checks, will not sell."
+        )
+        return False, "", 0.0
+
     # 2. ENHANCED Stop-loss exit using proper logic for YES/NO positions
     if position.stop_loss_price:
         from src.utils.stop_loss_calculator import StopLossCalculator
@@ -186,9 +196,10 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
                     logger.warning(f"Could not retrieve market data for {position.market_id}. Skipping.")
                     continue
 
-                # Get current prices
-                current_yes_price = market_data.get('yes_price', 0) / 100  # Convert cents to dollars
-                current_no_price = market_data.get('no_price', 0) / 100
+                # Current prices in dollars: the bid, since that is what a sell fills at
+                yes_bid, _, no_bid, _ = get_market_prices(market_data)
+                current_yes_price = yes_bid
+                current_no_price = no_bid
                 market_status = market_data.get('status', 'unknown')
                 market_result = market_data.get('result')  # Market resolution result
                 

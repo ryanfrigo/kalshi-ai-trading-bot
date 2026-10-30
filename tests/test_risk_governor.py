@@ -6,6 +6,7 @@ loss limit or the drawdown-from-peak limit, while always allowing exits, and it
 must honor a manual kill-switch file the owner can drop at any time.
 """
 import asyncio
+import os
 
 import pytest
 
@@ -138,3 +139,93 @@ def test_state_persists_across_governor_instances(tmp_path):
     g2 = _gov(tmp_path)
     d = asyncio.run(g2.check(current_equity_cents=90_000))
     assert d.halted is True  # down 10% from the persisted SOD
+
+
+# --- corrupt state fails closed (must not reset the baselines) --------------
+
+def test_missing_state_file_still_works_first_run(tmp_path):
+    gov = _gov(tmp_path)
+    assert not gov.state_path.exists()
+    d = asyncio.run(gov.check(current_equity_cents=100_000))
+    assert d.halted is False
+    assert d.sod_equity_cents == 100_000
+    assert gov.state_path.exists()  # first run persists the baseline
+
+
+def test_corrupt_json_halts_and_leaves_file_untouched(tmp_path):
+    gov = _gov(tmp_path)
+    gov.state_path.parent.mkdir(parents=True, exist_ok=True)
+    gov.state_path.write_text("{not json")
+    d = asyncio.run(gov.check(current_equity_cents=100_000))
+    assert d.halted is True
+    assert d.reasons == [f"STATE_CORRUPT: {gov.state_path}"]
+    assert gov.state_path.read_text() == "{not json"  # operator's evidence, not rewritten
+
+
+def test_non_dict_json_halts_and_leaves_file_untouched(tmp_path):
+    gov = _gov(tmp_path)
+    gov.state_path.parent.mkdir(parents=True, exist_ok=True)
+    gov.state_path.write_text("[]")
+    d = asyncio.run(gov.check(current_equity_cents=100_000))
+    assert d.halted is True
+    assert d.reasons == [f"STATE_CORRUPT: {gov.state_path}"]
+    assert gov.state_path.read_text() == "[]"
+
+
+# --- atomic save ------------------------------------------------------------
+
+def test_failed_replace_leaves_previous_state_byte_identical(tmp_path, monkeypatch):
+    gov = _gov(tmp_path)
+    asyncio.run(gov.check(current_equity_cents=100_000))
+    before = gov.state_path.read_bytes()
+
+    def boom(*args, **kwargs):
+        raise OSError("simulated crash before rename")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(OSError):
+        gov.save_state({"date": "2026-06-18", "sod_equity_cents": 1, "peak_equity_cents": 1})
+    monkeypatch.undo()
+
+    assert gov.state_path.read_bytes() == before
+    assert [p.name for p in tmp_path.iterdir()] == ["state.json"]  # tmp cleaned up
+
+
+def test_unserializable_state_leaves_previous_state_byte_identical(tmp_path):
+    gov = _gov(tmp_path)
+    asyncio.run(gov.check(current_equity_cents=100_000))
+    before = gov.state_path.read_bytes()
+
+    with pytest.raises(TypeError):
+        gov.save_state({"date": "2026-06-18", "sod_equity_cents": object(), "peak_equity_cents": 1})
+
+    assert gov.state_path.read_bytes() == before
+    assert [p.name for p in tmp_path.iterdir()] == ["state.json"]
+
+
+# --- schema validation ------------------------------------------------------
+
+def test_valid_written_state_loads(tmp_path):
+    gov = _gov(tmp_path)
+    asyncio.run(gov.check(current_equity_cents=100_000))
+    assert gov.load_state() == {"date": "2026-06-18", "sod_equity_cents": 100_000,
+                                "peak_equity_cents": 100_000}
+
+
+@pytest.mark.parametrize("payload", [
+    '{"foo": 1}',
+    '{}',
+    '{"date": "2026-06-18", "sod_equity_cents": 1}',
+    '{"date": 20260618, "sod_equity_cents": 1, "peak_equity_cents": 1}',
+    '{"date": "2026-06-18", "sod_equity_cents": "abc", "peak_equity_cents": 1}',
+    '{"date": "2026-06-18", "sod_equity_cents": -5, "peak_equity_cents": 1}',
+    '{"date": "2026-06-18", "sod_equity_cents": 1, "peak_equity_cents": true}',
+])
+def test_schema_invalid_state_halts_and_leaves_file_untouched(tmp_path, payload):
+    gov = _gov(tmp_path)
+    gov.state_path.parent.mkdir(parents=True, exist_ok=True)
+    gov.state_path.write_text(payload)
+    d = asyncio.run(gov.check(current_equity_cents=100_000))
+    assert d.halted is True
+    assert d.reasons == [f"STATE_CORRUPT: {gov.state_path}"]
+    assert gov.state_path.read_text() == payload

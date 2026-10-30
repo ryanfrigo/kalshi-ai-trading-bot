@@ -29,6 +29,8 @@ Under the hood: a signed Kalshi API client, market-data ingestion, position trac
 
 The thing this repo does that the rest of the niche doesn't: it lets you **prove — or disprove — that you beat the price the sharp book charged you.**
 
+There is no offline backtest command yet. `cli backtest` is a placeholder. The only committed measured result is the live track record in [docs/TRACK_RECORD.md](docs/TRACK_RECORD.md), and it comes from one account, not a backtest.
+
 ```bash
 python cli.py edge          # the honest verdict
 ```
@@ -55,6 +57,8 @@ forward-settled trades):
 > −22.7 pts (n=17). The Edge Policy auto-derives from exactly this record — the losing
 > categories are blocked before the next trade, and the overconfidence haircuts shrink the
 > estimates that produced them.
+
+This verdict is from the operator's live account. The underlying settlements are not committed.
 
 We ship the "no edge" verdict on our own account because a measurement harness that only ever
 prints flattering numbers is marketing, not measurement. See [docs/TRACK_RECORD.md](docs/TRACK_RECORD.md)
@@ -151,7 +155,7 @@ The toolkit is built to be driven by an agent (Claude, or anything else) through
 | Tool | Kind | What it does |
 |---|---|---|
 | `brief` | read-only | One-shot situational awareness: governor verdict, equity, positions, resting orders (JSON) |
-| `verify` | read-only | The **adversarial-verify gate** before any live buy: research the catalyst → a SKEPTIC tries to refute the fade → a deterministic gate recomputes the edge off the live book and rules `BUY_NO`/`PASS`. Works with no API key via `--research-file` |
+| `verify` | no orders | The **adversarial-verify gate** before any live buy: research the catalyst → a SKEPTIC tries to refute the fade → a deterministic gate recomputes the edge off the live book and rules `BUY_NO`/`PASS`. Works with no API key via `--research-file`. It never places an order or writes the journal; it does log AI spend to the local DB. |
 | `trade` | mutating | Place ONE guarded, journaled order through the full risk stack. Dry-run unless `--live` |
 | `close` | mutating | Sell ONE held position at the current bid (allowed even when halted — selling cuts risk). Dry-run unless `--live` |
 | `fills` | writes | Reconcile the journal against actual order fills — void records whose orders never filled, shrink partial fills — so calibration and the policy only learn from trades that executed. `--dry` for read-only |
@@ -182,7 +186,7 @@ This repo gives you the building blocks. The example strategies use them — you
 | **Edge harness** | Brier / log-loss / edge-vs-book + forward-only honesty verdict (pure, deterministic) | `src/agent/edge.py` |
 | **Edge Policy** | Turns the settled record into a pre-trade gate (block losing categories, warn on losing sides, haircut overconfident bands); closes the self-improvement loop | `src/agent/policy.py` |
 | **Learnings system** | Joins settlements back into the decision journal; calibration table + realized edge → evolving learnings | `src/agent/learnings.py` |
-| **Risk governor** | Daily-loss + drawdown kill switch + manual halt, authoritative for every live order | `src/risk/risk_governor.py` |
+| **Risk governor** | Daily-loss + drawdown kill switch + manual halt, authoritative for every live order; under a daily-loss/drawdown halt only a held-size reduce-only sell passes, as IOC + `reduce_only` (it will not rest) | `src/risk/risk_governor.py` |
 | **Kalshi client** | Authenticated REST + WebSocket client (RSA signing, retries, rate-limit handling) | `src/clients/kalshi_client.py` |
 | **Market ingestion** | Pulls the full tradeable universe via the Events API, persists to SQLite | `src/jobs/ingest.py` |
 | **Position tracking** | Stop-loss, take-profit, time-based, and resolution-based exits with real Kalshi sell orders | `src/jobs/track.py` |
@@ -209,7 +213,7 @@ python cli.py run --paper          # paper trading
 python cli.py run --live           # live trading (real money)
 ```
 
-Defaults: 15% max drawdown, 45% min confidence, 3% max position size, 30% max sector concentration, quarter-Kelly. All configurable in `src/config/settings.py`.
+Defaults: 20% max drawdown, 45% min confidence, 10% max position size, 30% max sector concentration, quarter-Kelly. All configurable in `src/config/settings.py`.
 
 ### 2. Safe Compounder — `python cli.py run --safe-compounder`
 
@@ -312,7 +316,7 @@ All trading parameters live in `src/config/settings.py`. The most useful knobs:
 
 ```python
 # Position sizing
-max_position_size_pct  = 3.0     # Max 3% of balance per position
+max_position_size_pct  = 10.0    # Max 10% of balance per position
 max_positions          = 10      # Max concurrent positions
 kelly_fraction         = 0.25    # Quarter-Kelly (conservative)
 
@@ -328,7 +332,7 @@ ai_max_tokens          = 8000
 
 # Risk management
 max_daily_loss_pct     = 10.0    # Daily loss circuit breaker
-max_drawdown           = 0.15    # Portfolio drawdown halt
+max_drawdown           = 0.20    # Portfolio drawdown halt
 daily_ai_cost_limit    = 10.0    # Max daily LLM spend in USD
 ```
 
@@ -397,8 +401,8 @@ The category scorer evaluates each Kalshi market category on a 0-100 scale based
 | 80–100 | 20% | STRONG |
 | 60–79 | 10% | GOOD |
 | 40–59 | 5% | WEAK |
-| 20–39 | 2% | POOR |
-| 0–19 | 0 | BLOCKED |
+| 30–39 | 2% | POOR |
+| 0–29 | 0 | BLOCKED |
 
 ```bash
 python cli.py scores
@@ -566,9 +570,9 @@ These are observations from running the example strategies with real money on Ka
 
 **1. Category discipline mattered more than AI confidence.** The LLM could be 80% confident on a CPI trade and still be wrong. Market-implied probabilities on highly-watched economic releases are already efficient.
 
-**2. Kelly fraction matters enormously.** Three-quarter Kelly compounds losses catastrophically on a 45% win-rate strategy. Quarter-Kelly is what the example strategies use.
+**2. Kelly fraction matters enormously.** For example, at a 45% win rate, three-quarter Kelly compounds losses catastrophically. Quarter-Kelly is what the example strategies use.
 
-**3. A 50% drawdown limit isn't a limit.** The default is 15% with the circuit breaker actually halting trades, not just logging.
+**3. A 50% drawdown limit isn't a limit.** The default is 20% with the circuit breaker actually halting trades, not just logging.
 
 **4. Sector concentration creates correlated losses.** When 90% of capital is in economic categories on a Fed day, everything moves together. The default cap is 30% per category.
 

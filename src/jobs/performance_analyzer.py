@@ -14,6 +14,7 @@ import aiosqlite
 from src.clients.kalshi_client import KalshiClient
 from src.clients.xai_client import XAIClient
 from src.utils.database import DatabaseManager, Position, TradeLog
+from src.utils.market_prices import signed_position
 from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
 
@@ -75,7 +76,7 @@ class TradingPerformanceAnalyzer:
             # Kalshi positions
             positions_response = await self.kalshi_client.get_positions()
             kalshi_positions = positions_response.get('market_positions', [])
-            active_positions = [p for p in kalshi_positions if p.get('position', 0) != 0]
+            active_positions = [p for p in kalshi_positions if signed_position(p) != 0]
             
             # Portfolio value
             balance_response = await self.kalshi_client.get_balance()
@@ -83,7 +84,7 @@ class TradingPerformanceAnalyzer:
             
             data['portfolio'] = {
                 'active_positions': len(active_positions),
-                'total_contracts': sum(abs(p.get('position', 0)) for p in active_positions),
+                'total_contracts': sum(abs(signed_position(p)) for p in active_positions),
                 'available_cash': available_cash,
                 'positions_detail': active_positions[:10]  # Top 10 for analysis
             }
@@ -140,29 +141,29 @@ class TradingPerformanceAnalyzer:
                      FROM positions 
                      WHERE status = 'open'
                  """)
-                 open_position_stats = await cursor.fetchone()
-                 
-                 data['performance'] = {
-                     'overall_stats': {
-                         'total_trades': trade_stats[0] if trade_stats else 0,
-                         'winning_trades': trade_stats[1] if trade_stats else 0,
-                         'win_rate': (trade_stats[1] / trade_stats[0]) if trade_stats and trade_stats[0] > 0 else 0,
-                         'avg_pnl': trade_stats[2] if trade_stats else 0,
-                         'total_pnl': trade_stats[3] if trade_stats else 0,
-                         'worst_loss': trade_stats[4] if trade_stats else 0,
-                         'best_win': trade_stats[5] if trade_stats else 0
-                     },
-                     'position_distribution': dict(position_stats) if position_stats else {},
-                     'open_positions': {
-                         'count': open_position_stats[0] if open_position_stats else 0,
-                         'total_exposure': open_position_stats[1] if open_position_stats else 0
-                     },
-                     'recent_performance': {
-                         'trades_last_7d': recent_stats[0] if recent_stats else 0,
-                         'avg_pnl_last_7d': recent_stats[1] if recent_stats else 0,
-                         'wins_last_7d': recent_stats[2] if recent_stats else 0
-                     }
-                 }
+                open_position_stats = await cursor.fetchone()
+                
+                data['performance'] = {
+                    'overall_stats': {
+                        'total_trades': trade_stats[0] if trade_stats else 0,
+                        'winning_trades': trade_stats[1] if trade_stats else 0,
+                        'win_rate': (trade_stats[1] / trade_stats[0]) if trade_stats and trade_stats[0] > 0 else 0,
+                        'avg_pnl': trade_stats[2] if trade_stats else 0,
+                        'total_pnl': trade_stats[3] if trade_stats else 0,
+                        'worst_loss': trade_stats[4] if trade_stats else 0,
+                        'best_win': trade_stats[5] if trade_stats else 0
+                    },
+                    'position_distribution': dict(position_stats) if position_stats else {},
+                    'open_positions': {
+                        'count': open_position_stats[0] if open_position_stats else 0,
+                        'total_exposure': open_position_stats[1] if open_position_stats else 0
+                    },
+                    'recent_performance': {
+                        'trades_last_7d': recent_stats[0] if recent_stats else 0,
+                        'avg_pnl_last_7d': recent_stats[1] if recent_stats else 0,
+                        'wins_last_7d': recent_stats[2] if recent_stats else 0
+                    }
+                }
                 
         except Exception as e:
             self.logger.warning(f"Error gathering performance data: {e}")
@@ -374,7 +375,7 @@ async def run_performance_analysis(
         kalshi_client = KalshiClient()
     
     if xai_client is None:
-        xai_client = XAIClient()
+        xai_client = XAIClient(db_manager=db_manager)
     
     try:
         analyzer = TradingPerformanceAnalyzer(db_manager, kalshi_client, xai_client)

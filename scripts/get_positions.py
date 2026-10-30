@@ -5,6 +5,7 @@ import sys
 sys.path.append('.')
 from src.clients.kalshi_client import KalshiClient
 from src.utils.database import DatabaseManager
+from src.utils.market_prices import signed_position
 
 async def get_positions():
     # Get Kalshi positions
@@ -15,7 +16,7 @@ async def get_positions():
         market_positions = positions_response.get('market_positions', [])
         print(f'Total positions: {len(market_positions)}')
         for pos in market_positions:
-            print(f'{pos.get("ticker")}: {pos.get("position")} contracts')
+            print(f'{pos.get("ticker")}: {signed_position(pos)} contracts')
         
         # Get database positions  
         db = DatabaseManager()

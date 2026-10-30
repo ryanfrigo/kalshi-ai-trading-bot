@@ -15,6 +15,7 @@ from aaa_pricer import (  # noqa: E402
     forecast_cdf,
     parse_strike,
     streak_runs,
+    taker_fee_order,
     taker_fee_per_contract,
 )
 from aaa_futures import convergence  # noqa: E402
@@ -105,6 +106,45 @@ def test_taker_fee_matches_kalshi_formula():
     assert taker_fee_per_contract(0.05) == pytest.approx(0.01)  # 0.33c -> ceil 1c
     assert taker_fee_per_contract(0.50) == pytest.approx(0.02)  # 1.75c -> ceil 2c
     assert taker_fee_per_contract(0.99) == pytest.approx(0.01)
+
+
+def test_taker_fee_order_rounds_once_per_order():
+    assert taker_fee_order(388.19, 0.76) == pytest.approx(4.96)  # 495.7c -> ceil 496c
+    assert taker_fee_order(500, 0.50) == pytest.approx(8.75)  # exact 875c, no round-up
+    assert taker_fee_order(1, 0.50) == pytest.approx(0.02)  # 1.75c -> ceil 2c
+    assert taker_fee_order(1, 0.05) == pytest.approx(0.01)  # 0.33c -> ceil 1c
+
+
+def test_taker_fee_order_rejects_out_of_range_price():
+    with pytest.raises(ValueError, match="price"):
+        taker_fee_order(10, 1.2)
+    with pytest.raises(ValueError, match="price"):
+        taker_fee_order(10, -0.1)
+    with pytest.raises(ValueError, match="NaN"):
+        taker_fee_order(10, float("nan"))
+
+
+def test_taker_fee_order_rejects_negative_count():
+    with pytest.raises(ValueError, match="count"):
+        taker_fee_order(-5, 0.5)
+    with pytest.raises(ValueError, match="NaN"):
+        taker_fee_order(float("nan"), 0.5)
+
+
+def test_taker_fee_order_zero_at_boundaries():
+    assert taker_fee_order(10, 0) == 0.0
+    assert taker_fee_order(10, 1) == 0.0
+    assert taker_fee_order(0, 0.5) == 0.0
+
+
+def test_taker_fee_order_never_negative_over_sweep():
+    counts = [0, 1, 2, 3, 7, 50, 388.19, 1000, 10_000]
+    prices = [0.0, 0.01, 0.05, 0.25, 0.5, 0.76, 0.95, 0.99, 1.0]
+    for c in counts:
+        for p in prices:
+            fee = taker_fee_order(c, p)
+            assert fee >= 0.0, (c, p, fee)
+            assert fee == fee  # not NaN
 
 
 def test_fee_aware_edges():

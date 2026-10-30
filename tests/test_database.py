@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List
 
 from src.utils.database import DatabaseManager, Market
@@ -25,7 +25,7 @@ def load_and_prepare_markets(fixture_path: str) -> List[Market]:
         # Handle dynamic expiration timestamps like "NOW+5D"
         if isinstance(m["expiration_ts"], str) and "NOW+" in m["expiration_ts"]:
             days_to_add = int(m["expiration_ts"].split('+')[1].replace('D', ''))
-            m["expiration_ts"] = int((now + timedelta(days=days_to_add)).timestamp())
+            m["expiration_ts"] = int(now.timestamp()) + days_to_add * 86400
         
         m["last_updated"] = datetime.now()
         processed_markets.append(Market(**m))

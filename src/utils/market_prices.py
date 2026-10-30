@@ -67,3 +67,26 @@ def get_market_prices(market_info: Dict[str, Any]) -> Tuple[float, float, float,
         no_ask  = (market_info.get("no_ask",  0) or 0) / 100
 
     return yes_bid, yes_ask, no_bid, no_ask
+
+
+def signed_position(row: Dict[str, Any]) -> float:
+    """
+    Signed contract count from a Kalshi position row.
+
+    API v2 rows carry a signed string ``position_fp`` ("-40.00" = 40 NO,
+    "+" = YES) and no ``position`` key. Returns 0.0 when the field is absent.
+    """
+    return float(row.get("position_fp", 0) or 0)
+
+
+def held_side_mid(market_info: Dict[str, Any], signed: float) -> float:
+    """
+    Mid price in dollars of the side a signed position holds.
+
+    ``signed > 0`` is YES, otherwise NO. ``market_info`` is the unwrapped
+    market object (the ``"market"`` value of ``get_market``).
+    """
+    yes_bid, yes_ask, no_bid, no_ask = get_market_prices(market_info)
+    if signed > 0:
+        return (yes_bid + yes_ask) / 2
+    return (no_bid + no_ask) / 2

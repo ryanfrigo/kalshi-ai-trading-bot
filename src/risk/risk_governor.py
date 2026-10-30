@@ -15,12 +15,15 @@ owner-operated manual halt:
   * DRAWDOWN    — equity down >= ``max_drawdown_pct`` from the rolling peak.
   * MANUAL_HALT — a flag file the owner can drop to stop all new buys at once.
 
-When halted, the caller must block *new buys* but is still free to place exits
-(sells), which is how you reduce risk rather than add to it.
+When halted, ``KalshiClient.place_order`` blocks every buy and every sell, since
+a sell can open a short. The one exception is a reduce-only sell (no larger than
+the position held on that side) under a halt caused only by DAILY_LOSS/DRAWDOWN.
 """
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,9 +33,17 @@ DEFAULT_STATE_PATH = "data/runtime/risk_governor_state.json"
 DEFAULT_HALT_FLAG_PATH = "data/runtime/TRADING_HALTED"
 
 
+class RiskStateCorrupt(Exception):
+    """The persisted governor state exists but cannot be trusted."""
+
+
 @dataclass
 class GovernorDecision:
-    """Outcome of a governor check. ``halted`` gates new buys, not exits."""
+    """Outcome of a governor check.
+
+    ``halted`` blocks every buy, and every sell except a reduce-only exit under a
+    limit-only halt (``place_order`` enforces this). A STATE_CORRUPT halt is reported here too, with zeroed baselines.
+    """
 
     halted: bool
     reasons: List[str]
@@ -119,6 +130,22 @@ def roll_state(prev: Optional[Dict], current: int, today: str) -> Dict:
     }
 
 
+def _valid_state(state: object) -> bool:
+    """True only for the shape ``roll_state`` relies on."""
+    if not isinstance(state, dict) or not isinstance(state.get("date"), str):
+        return False
+    for key in ("sod_equity_cents", "peak_equity_cents"):
+        value = state.get(key)
+        if isinstance(value, bool):
+            return False
+        try:
+            if int(value) < 0:
+                return False
+        except (TypeError, ValueError, OverflowError):
+            return False
+    return True
+
+
 class RiskGovernor:
     """Stateful wrapper: persists baseline/peak, fetches equity, evaluates limits."""
 
@@ -143,13 +170,36 @@ class RiskGovernor:
 
     def load_state(self) -> Dict:
         try:
-            return json.loads(self.state_path.read_text())
-        except (FileNotFoundError, ValueError):
-            return {}
+            raw = self.state_path.read_text()
+        except FileNotFoundError:
+            return {}  # first run: no baseline yet
+        try:
+            state = json.loads(raw)
+        except ValueError as exc:
+            raise RiskStateCorrupt(str(self.state_path)) from exc
+        if not _valid_state(state):
+            raise RiskStateCorrupt(str(self.state_path))
+        return state
 
     def save_state(self, state: Dict) -> None:
+        """Write via temp file + fsync + rename, so a crash never leaves a torn file."""
+        payload = json.dumps(state, indent=2)
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        self.state_path.write_text(json.dumps(state, indent=2))
+        fd, tmp = tempfile.mkstemp(
+            dir=self.state_path.parent, prefix=f".{self.state_path.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.state_path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+            raise
 
     # --- manual kill switch -------------------------------------------------
     def is_manually_halted(self) -> bool:
@@ -179,7 +229,21 @@ class RiskGovernor:
         if current_equity_cents is None:
             current_equity_cents = await self.current_equity_cents()
 
-        state = roll_state(self.load_state(), current_equity_cents, self._today())
+        try:
+            prev = self.load_state()
+        except RiskStateCorrupt:
+            # Baselines are unknowable, so treat as halted and leave the file
+            # as-is for the operator. Writing a fresh baseline here would
+            # silently reset peak/day-start and fail open.
+            return GovernorDecision(
+                halted=True,
+                reasons=[f"STATE_CORRUPT: {self.state_path}"],
+                current_equity_cents=current_equity_cents,
+                sod_equity_cents=0,
+                peak_equity_cents=0,
+            )
+
+        state = roll_state(prev, current_equity_cents, self._today())
         self.save_state(state)
 
         decision = evaluate_risk(

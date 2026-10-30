@@ -882,7 +882,8 @@ def cmd_verify(args: argparse.Namespace) -> None:
     (``src.agent.verify.run_verify``) with the OpenRouter client injected as the
     LLM. The verdict gate is deterministic — it recomputes the edge in points and
     only says BUY_NO when the fade survives the skeptic AND clears every discipline
-    rule. READ-ONLY: never places an order, never writes the journal. Pass --json
+    rule. Never places orders or writes the journal; records AI spend in the local DB.
+    Pass --json
     for machine output.
     """
     import json
@@ -938,9 +939,12 @@ def cmd_verify(args: argparse.Namespace) -> None:
                 llm_call = make_operator_llm(payload)
             else:
                 from src.clients.openrouter_client import OpenRouterClient
+                from src.utils.database import DatabaseManager
                 from json_repair import repair_json
 
-                or_client = OpenRouterClient()
+                db_manager = DatabaseManager()
+                await db_manager.initialize()
+                or_client = OpenRouterClient(db_manager=db_manager)
 
                 async def llm_call(prompt: str, schema: dict) -> dict:
                     schema_keys = ", ".join(schema.get("required", []))
@@ -1240,6 +1244,20 @@ def cmd_history(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def open_positions_from_v2(rows: list[dict]) -> list[tuple[str, float]]:
+    """Return (ticker, signed_position) for every non-zero Kalshi position row.
+
+    v2 rows carry a signed string ``position_fp`` ("-40.00" = 40 NO, + = YES).
+    Legacy rows carry a numeric ``position``. Zero rows are dropped.
+    """
+    positions = []
+    for row in rows:
+        signed = float(row.get("position_fp", row.get("position", 0)) or 0)
+        if abs(signed) > 0:
+            positions.append((row["ticker"], signed))
+    return positions
+
+
 def cmd_close_all(args: argparse.Namespace) -> None:
     """Place sell orders to close every open position on Kalshi.
 
@@ -1275,10 +1293,9 @@ def cmd_close_all(args: argparse.Namespace) -> None:
         client = KalshiClient()
         try:
             positions_resp = await client.get_positions()
-            market_positions = [
-                p for p in positions_resp.get("market_positions", [])
-                if p.get("position", 0) != 0
-            ]
+            market_positions = open_positions_from_v2(
+                positions_resp.get("market_positions", [])
+            )
 
             if not market_positions:
                 print("  No open positions on Kalshi.")
@@ -1289,11 +1306,13 @@ def cmd_close_all(args: argparse.Namespace) -> None:
 
             placed = 0
             failed = 0
-            for pos in market_positions:
-                ticker = pos["ticker"]
-                contracts = pos["position"]            # signed: + YES, - NO
+            for ticker, contracts in market_positions:   # contracts signed: + YES, - NO
                 side = "yes" if contracts > 0 else "no"
-                quantity = abs(contracts)
+                quantity = round(abs(contracts), 2)    # v2 counts are 2-dp decimals; never truncate
+                if quantity <= 0:
+                    print(f"  ⚠️  {ticker}: position {contracts} rounds to 0 contracts — skipping")
+                    failed += 1
+                    continue
 
                 try:
                     book_resp = await client.get_orderbook(ticker, depth=1)
@@ -1794,14 +1813,14 @@ def build_parser() -> argparse.ArgumentParser:
     # --- verify ---
     p_verify = subparsers.add_parser(
         "verify",
-        help="Adversarial-verify a single ticker (research -> skeptic -> verdict). Read-only.",
+        help="Adversarial-verify a single ticker (research -> skeptic -> verdict). Never places orders or writes the journal; records AI spend in the local DB.",
         description=(
             "Run the research/adversarial-verify pipeline on one market: read the "
             "LIVE orderbook for the executable NO ask we'd fade, research the "
             "catalyst and true-YES, then a SKEPTIC tries to REFUTE the fade, and "
             "a deterministic gate recomputes the edge and rules BUY_NO / PASS "
             "(BUY_NO only when the fade survives AND clears every discipline rule). "
-            "Read-only: never places an order or writes the journal. Pass --json "
+            "Never places orders or writes the journal; records AI spend in the local DB. Pass --json "
             "for machine output."
         ),
     )
