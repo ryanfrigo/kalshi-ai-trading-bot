@@ -29,6 +29,8 @@ Under the hood: a signed Kalshi API client, market-data ingestion, position trac
 
 The thing this repo does that the rest of the niche doesn't: it lets you **prove — or disprove — that you beat the price the sharp book charged you.**
 
+There is no offline backtest command yet. `cli backtest` is a placeholder. The only committed measured result is the live track record in [docs/TRACK_RECORD.md](docs/TRACK_RECORD.md), and it comes from one account, not a backtest.
+
 ```bash
 python cli.py edge          # the honest verdict
 ```
@@ -566,7 +568,7 @@ These are observations from running the example strategies with real money on Ka
 
 **1. Category discipline mattered more than AI confidence.** The LLM could be 80% confident on a CPI trade and still be wrong. Market-implied probabilities on highly-watched economic releases are already efficient.
 
-**2. Kelly fraction matters enormously.** Three-quarter Kelly compounds losses catastrophically on a 45% win-rate strategy. Quarter-Kelly is what the example strategies use.
+**2. Kelly fraction matters enormously.** For example, at a 45% win rate, three-quarter Kelly compounds losses catastrophically. Quarter-Kelly is what the example strategies use.
 
 **3. A 50% drawdown limit isn't a limit.** The default is 15% with the circuit breaker actually halting trades, not just logging.
 

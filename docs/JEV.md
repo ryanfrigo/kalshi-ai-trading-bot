@@ -26,6 +26,8 @@ ALL     n=601  Brier book 0.1568  jev 0.2090  blend 0.1707
   disagreement > 0.30:  91 trades, P&L $-4.66
 ```
 
+The raw results file is not committed. `scripts/jev_backtest.py` needs live Kalshi and OpenRouter calls to run.
+
 Jev compresses everything toward 50% — all 601 forecasts landed between 0.2 and 0.7, so it never once called a market nearly settled in either direction, and averaging it with the book made the book's own score worse. The sample was 98% sports (that's what settles in a random week on Kalshi), so non-sports is barely tested — but nothing here suggests a reason to keep going.
 
 ## Feeding it data didn't fix it
