@@ -6,7 +6,7 @@ sys.path.append('.')
 from src.clients.kalshi_client import KalshiClient
 from src.utils.database import DatabaseManager
 from src.clients.xai_client import XAIClient
-from src.utils.market_prices import get_market_prices
+from src.utils.market_prices import held_side_mid, signed_position
 import aiosqlite
 from datetime import datetime, timedelta
 
@@ -29,18 +29,18 @@ async def comprehensive_analysis():
         positions_response = await kalshi_client.get_positions()
         kalshi_positions = positions_response.get('market_positions', [])
         
-        non_zero_positions = [p for p in kalshi_positions if p.get('position', 0) != 0]
-        total_contracts = sum(abs(p.get('position', 0)) for p in non_zero_positions)
+        non_zero_positions = [p for p in kalshi_positions if signed_position(p) != 0]
+        total_contracts = sum(abs(signed_position(p)) for p in non_zero_positions)
         
         print(f"✅ Active Kalshi Positions: {len(non_zero_positions)} markets")
         print(f"📈 Total Contracts Held: {total_contracts}")
         
         if non_zero_positions:
             print("\nTop Positions:")
-            sorted_positions = sorted(non_zero_positions, key=lambda x: abs(x.get('position', 0)), reverse=True)
+            sorted_positions = sorted(non_zero_positions, key=lambda x: abs(signed_position(x)), reverse=True)
             for i, pos in enumerate(sorted_positions[:5]):
                 ticker = pos.get('ticker', 'Unknown')
-                position = pos.get('position', 0)
+                position = signed_position(pos)
                 direction = "LONG" if position > 0 else "SHORT"
                 print(f"  {i+1}. {ticker[:25]}: {direction} {abs(position)} contracts")
         
@@ -84,17 +84,13 @@ async def comprehensive_analysis():
         # Calculate total position value from Kalshi
         total_position_value = 0
         for pos in kalshi_positions:
-            quantity = pos.get('position', 0)
+            quantity = signed_position(pos)
             if quantity != 0:
                 ticker = pos.get('ticker')
                 try:
                     market_data = await kalshi_client.get_market(ticker)
                     market_info = market_data.get('market', {})
-                    yes_bid, yes_ask, no_bid, no_ask = get_market_prices(market_info)
-                    if quantity > 0:  # Long position
-                        current_price = (yes_bid + yes_ask) / 2
-                    else:  # Short position
-                        current_price = (no_bid + no_ask) / 2
+                    current_price = held_side_mid(market_info, quantity)
                     position_value = abs(quantity) * current_price
                     total_position_value += position_value
                 except:
@@ -144,7 +140,7 @@ async def comprehensive_analysis():
             kalshi_pos = next((p for p in kalshi_positions if p.get('ticker') == market_id), None)
             
             if kalshi_pos:
-                kalshi_quantity = kalshi_pos.get('position', 0)
+                kalshi_quantity = signed_position(kalshi_pos)
                 expected_quantity = quantity if side == "YES" else -quantity
                 
                 if kalshi_quantity != expected_quantity:

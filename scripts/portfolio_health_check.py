@@ -20,6 +20,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.clients.kalshi_client import KalshiClient
 from src.utils.database import DatabaseManager
+from src.utils.market_prices import held_side_mid, signed_position
 
 
 async def get_portfolio_health() -> Dict:
@@ -42,20 +43,16 @@ async def get_portfolio_health() -> Dict:
         # Calculate value of each position
         for position in market_positions:
             ticker = position.get('ticker')
-            position_count = position.get('position', 0)
-            
+            position_count = signed_position(position)
+
             if ticker and position_count != 0:
                 try:
                     market_data = await kalshi_client.get_market(ticker)
                     if market_data and 'market' in market_data:
                         market_info = market_data['market']
-                        
-                        if position_count > 0:  # YES position
-                            current_price = (market_info.get('yes_bid', 0) + market_info.get('yes_ask', 100)) / 2 / 100
-                            side = 'YES'
-                        else:  # NO position  
-                            current_price = (market_info.get('no_bid', 0) + market_info.get('no_ask', 100)) / 2 / 100
-                            side = 'NO'
+
+                        current_price = held_side_mid(market_info, position_count)
+                        side = 'YES' if position_count > 0 else 'NO'
                         
                         position_value = abs(position_count) * current_price
                         total_position_value += position_value
