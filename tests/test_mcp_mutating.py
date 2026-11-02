@@ -661,3 +661,23 @@ async def test_override_policy_lifts_the_block_but_not_the_cap_or_halt(ex):
     out = await server.trade(ticker="T-A", side="yes", count=1, category="sports",
                              override_policy=True, confirm=True)
     assert out["reason"] == "governor_halted" and len(ex.posts) == 1
+
+
+# ---------------------------------------------------------------------------
+# toolbelt defaults: a caller that forgets `dry` must not send an order
+# ---------------------------------------------------------------------------
+
+async def test_place_guarded_order_with_no_dry_argument_sends_zero_posts(ex):
+    from src.agent.toolbelt import place_guarded_order
+    out = await server._with_client(lambda c: place_guarded_order(
+        c, ticker="T-A", side="yes", count=10))
+    assert out["ok"] is True and out["dry"] is True and out["journaled"] is False
+    assert ex.posts == [] and ex.gets_only() and ex.bypass == []
+
+
+async def test_close_position_with_no_dry_argument_sends_zero_posts(ex):
+    from src.agent.toolbelt import close_position
+    ex.positions["T-A"] = "10.00"
+    out = await server._with_client(lambda c: close_position(c, ticker="T-A"))
+    assert out["ok"] is True and out["dry"] is True and out["journaled"] is False
+    assert ex.posts == [] and ex.gets_only() and ex.bypass == []

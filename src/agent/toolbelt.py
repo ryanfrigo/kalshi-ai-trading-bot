@@ -144,7 +144,7 @@ async def place_guarded_order(
     category: str = "",
     governor=None,
     max_position_pct: float = 0.10,
-    dry: bool = False,
+    dry: bool = True,
     journal_path: Optional[str] = None,
     policy_path: Optional[str] = None,
     override_policy: bool = False,
@@ -301,7 +301,7 @@ async def close_position(
     count: Optional[int] = None,
     price: Optional[float] = None,
     rationale: str = "close position",
-    dry: bool = False,
+    dry: bool = True,
     journal_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Sell (close) an existing position with a marketable limit at the bid.
