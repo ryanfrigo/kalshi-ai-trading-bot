@@ -43,30 +43,45 @@ def _opp(ticker="KXA", price=0.89, true_no=0.99):
             "days_to_expiry": 1.0, "yes_last": 0.05}
 
 
+def _page(pages, key, cursor):
+    """Serve pages[i] for cursor "p<i>" (None = first); last page carries no cursor."""
+    i = int(cursor[1:]) if cursor else 0
+    return {key: pages[i], "cursor": f"p{i + 1}" if i + 1 < len(pages) else ""}
+
+
 class FakeClient:
     """Compounder-facing client double. Records every order it is asked to place."""
 
     def __init__(self, cash=100_000, pv=100_000, positions=None, orders=None,
                  orders_error=None, positions_error=None, yes_bid="0.10",
-                 orders_cursor=None, positions_cursor=None):
+                 orders_cursor=None, positions_cursor=None,
+                 orders_pages=None, positions_pages=None):
         self.cash, self.pv = cash, pv
         self.positions, self.orders = positions or [], orders or []
         self.orders_error, self.positions_error = orders_error, positions_error
         self.yes_bid = yes_bid
         self.orders_cursor, self.positions_cursor = orders_cursor, positions_cursor
+        self.orders_pages, self.positions_pages = orders_pages, positions_pages
+        self.calls = []
         self.placed = []
 
     async def get_balance(self):
         return {"balance": self.cash, "portfolio_value": self.pv}
 
     async def get_positions(self, **kw):
+        self.calls.append(("positions", kw))
         if self.positions_error:
             raise self.positions_error
+        if self.positions_pages is not None:
+            return _page(self.positions_pages, "market_positions", kw.get("cursor"))
         return {"market_positions": self.positions, "cursor": self.positions_cursor}
 
     async def get_orders(self, **kw):
+        self.calls.append(("orders", kw))
         if self.orders_error:
             raise self.orders_error
+        if self.orders_pages is not None:
+            return _page(self.orders_pages, "orders", kw.get("cursor"))
         return {"orders": self.orders, "cursor": self.orders_cursor}
 
     async def get_orderbook(self, ticker, depth=10):
@@ -250,12 +265,66 @@ def test_failed_dedupe_lookup_fails_closed(which):
     assert client.placed == []
 
 
+def _full_page(prefix, n=200):
+    return [{"ticker": f"{prefix}{i}", "position_fp": "1", "order_id": str(i)} for i in range(n)]
+
+
+def test_dedupe_sees_every_page_of_orders_and_positions():
+    # two full pages then a short final page; the matches sit on pages 2 and 3
+    orders = [_full_page("OA"), _full_page("OB") + [{"ticker": "KXB"}], [{"ticker": "KXA"}]]
+    positions = [_full_page("PA"), [{"ticker": "KXC", "position_fp": "3"}]]
+    client = FakeClient(orders_pages=orders, positions_pages=positions)
+    stats = _place(client, [_opp("KXA"), _opp("KXB"), _opp("KXC"), _opp("KXD")])
+    assert [o["ticker"] for o in client.placed] == ["KXD"]
+    assert stats["skipped_existing"] == 3 and stats["errors"] == 0
+    order_calls = [kw for name, kw in client.calls if name == "orders"]
+    assert [kw["cursor"] for kw in order_calls] == [None, "p1", "p2"]
+    assert all(kw["limit"] == 200 and kw["status"] == "resting" for kw in order_calls)
+
+
 @pytest.mark.parametrize("which", ["orders_cursor", "positions_cursor"])
-def test_paged_dedupe_lookup_fails_closed(which):
-    # a cursor means page 1 is not the whole book: KXA may be on page 2
-    client = FakeClient(**{which: "next-page-token"})
+def test_repeated_cursor_fails_closed(which):
+    client = FakeClient(**{which: "same-token"})     # every page points at itself
     stats = _place(client, [_opp("KXA")])
     assert client.placed == [] and stats["errors"] == 1
+
+
+@pytest.mark.parametrize("which,page", [
+    ("orders_pages", ["not a list"]), ("orders_pages", [{"a": 1}]),
+    ("positions_pages", [{"x": 1}]), ("positions_pages", ["oops"])])
+def test_malformed_page_fails_closed(which, page):
+    client = FakeClient(**{which: page})
+    stats = _place(client, [_opp("KXA")])
+    assert client.placed == [] and stats["errors"] == 1
+
+
+def test_more_than_fifty_pages_fails_closed():
+    client = FakeClient(orders_pages=[[{"ticker": f"X{i}"}] for i in range(51)])
+    stats = _place(client, [_opp("KXA")])
+    assert client.placed == [] and stats["errors"] == 1
+    assert len([1 for n, _ in client.calls if n == "orders"]) == 50
+
+
+def test_null_rows_in_a_complete_lookup_count_as_empty():
+    client = FakeClient(orders_pages=[None], positions_pages=[None])   # {"orders": null}
+    _place(client, [_opp("KXA")])
+    assert len(client.placed) == 1
+
+
+def test_kalshi_client_passes_limit_and_cursor_through():
+    seen = []
+    c = KalshiClient.__new__(KalshiClient)
+
+    async def fake(method, path, params=None, **kw):
+        seen.append((path, params))
+        return {}
+    c._make_authenticated_request = fake
+    asyncio.run(c.get_orders(status="resting", limit=200, cursor="p1"))
+    asyncio.run(c.get_positions(limit=200, cursor="p1"))
+    asyncio.run(c.get_orders(status="resting"))
+    assert seen[0][1] == {"status": "resting", "limit": 200, "cursor": "p1"}
+    assert seen[1][1] == {"limit": 200, "cursor": "p1"}
+    assert seen[2][1] == {"status": "resting"}                # unchanged default
 
 
 def test_empty_cursor_is_a_complete_lookup():

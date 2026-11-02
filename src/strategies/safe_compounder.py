@@ -225,6 +225,32 @@ def market_confidence_score(ticker: str, orderbook: dict, market: dict) -> Tuple
 # SafeCompounder class
 # -----------------------------------------------------------------------
 
+LOOKUP_PAGE_LIMIT = 200
+LOOKUP_MAX_PAGES = 50
+
+
+async def _fetch_all_pages(fetch, key: str, **kw) -> List[Dict]:
+    """Collect every row of a cursor-paginated Kalshi list. Raises (so callers can
+    fail closed) on a malformed page, a repeated cursor, or more than
+    LOOKUP_MAX_PAGES pages."""
+    rows: List[Dict] = []
+    seen = set()
+    cursor = None
+    for _ in range(LOOKUP_MAX_PAGES):
+        resp = await fetch(limit=LOOKUP_PAGE_LIMIT, cursor=cursor, **kw)
+        if not isinstance(resp, dict) or key not in resp or \
+                not isinstance(resp[key] or [], list):
+            raise RuntimeError(f"malformed {key} page")
+        rows.extend(resp[key] or [])
+        cursor = resp.get("cursor")
+        if not cursor:
+            return rows
+        if cursor in seen:
+            raise RuntimeError(f"repeated cursor while paging {key}")
+        seen.add(cursor)
+    raise RuntimeError(f"more than {LOOKUP_MAX_PAGES} pages of {key}")
+
+
 def _has_last_price(m: Dict) -> bool:
     """True iff the market carries a last price > 0 (missing, "", 0 and "0.0000" all fail)."""
     for k in ("last_price_dollars", "last_price"):
@@ -635,10 +661,7 @@ class SafeCompounder:
         # Get existing positions and orders. If either lookup fails the dedupe set
         # is unknowable: place nothing this run rather than risk doubling exposure.
         try:
-            positions_resp = await self.client.get_positions()
-            if positions_resp.get("cursor"):
-                raise RuntimeError("positions span more than one page")
-            positions = positions_resp.get("market_positions", [])
+            positions = await _fetch_all_pages(self.client.get_positions, "market_positions")
             pos_tickers = {
                 p["ticker"] for p in positions
                 if abs(float(p.get("position_fp", 0) or 0)) > 0  # Kalshi uses position_fp, not position
@@ -649,10 +672,8 @@ class SafeCompounder:
             return stats
 
         try:
-            orders_resp = await self.client.get_orders(status="resting")
-            if orders_resp.get("cursor"):
-                raise RuntimeError("resting orders span more than one page")
-            existing_orders = orders_resp.get("orders", [])
+            existing_orders = await _fetch_all_pages(
+                self.client.get_orders, "orders", status="resting")
             ord_tickers = {o["ticker"] for o in existing_orders}
         except Exception as e:
             logger.error("Resting-orders lookup failed (%s); placing no orders this run", e)
