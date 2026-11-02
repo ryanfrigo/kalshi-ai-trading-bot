@@ -1,4 +1,5 @@
 """AAA data + pricer: parsing, stitching, streak model, fees, strike parsing."""
+import datetime as dt
 import sys
 from pathlib import Path
 
@@ -182,3 +183,91 @@ def test_convergence_excess_gap(tmp_path):
         assert out["excess_gap_cents"] == pytest.approx(20.0, abs=1.0)
     finally:
         F.FUT_DIR = orig
+
+
+# --- state backfill must fetch the STATE page, not the national one ---------
+
+def test_backfill_state_fetches_state_url(monkeypatch, tmp_path):
+    monkeypatch.setattr(aaa_data, "AAA_DIR", tmp_path)
+    monkeypatch.setattr(aaa_data, "RAW_DIR", tmp_path / "raw")
+    fetched: list[str] = []
+
+    class Resp:
+        def __init__(self, url):
+            self.status_code = 200
+            self.text = PAGE
+            self._url = url
+
+        def json(self):
+            return [["timestamp", "statuscode"], ["20250105120000", "200"]]
+
+    def fake_get(url, *a, **kw):
+        fetched.append(url)
+        return Resp(url)
+
+    monkeypatch.setattr(aaa_data.httpx, "get", fake_get)
+    aaa_data.backfill_state("AZ", from_date="20250101", to_date="20250110",
+                            max_workers=1, sleep_s=0)
+    snap_urls = [u for u in fetched if "/web/" in u]
+    assert snap_urls, "no snapshot fetched"
+    assert all("?state=AZ" in u for u in snap_urls), snap_urls
+    assert all(u.endswith("?state=AZ") for u in snap_urls)
+
+
+# --- pricer must ignore src=wayback state rows (national prints, issue draft) -
+
+def _state_rows(n_wayback, n_live):
+    rows = {}
+    for i in range(n_wayback):
+        d = f"2025-01-{i + 1:02d}"
+        rows[d] = {"date": d, "regular": "3.000", "regular_yes": "3.010",
+                   "diesel": "3.500", "diesel_yes": "3.510",
+                   "src": "wayback", "snapshot_ts": ""}
+    for i in range(n_live):
+        d = f"2025-02-{i + 1:02d}"
+        rows[d] = {"date": d, "regular": "3.000", "regular_yes": "3.010",
+                   "diesel": "3.500", "diesel_yes": "3.510",
+                   "src": "live", "snapshot_ts": ""}
+    return rows
+
+
+def test_live_state_rows_drops_wayback():
+    from aaa_pricer import live_state_rows
+    rows = _state_rows(5, 3)
+    kept = live_state_rows(rows)
+    assert len(kept) == 3
+    assert all(r["src"] == "live" for r in kept.values())
+
+
+def test_fit_state_transfer_ignores_wayback_rows():
+    from aaa_pricer import fit_state_transfer
+    # 70 wayback state rows mirroring the national rows would fit happily
+    # (n >= min_common) if they were read; they must be ignored -> None.
+    state = {}
+    nat = {}
+    for i in range(70):
+        d = (dt.date(2025, 1, 1) + dt.timedelta(days=i)).isoformat()
+        cur = 3.0 + 0.001 * i
+        row = {"date": d, "regular": f"{cur:.3f}", "regular_yes": f"{cur + 0.004:.3f}",
+               "diesel": "3.5", "diesel_yes": "3.5", "snapshot_ts": ""}
+        nat[d] = dict(row, src="live")
+        state[d] = dict(row, src="wayback")
+    assert fit_state_transfer(state, nat, "regular") is None
+    live = {d: dict(r, src="live") for d, r in state.items()}
+    assert fit_state_transfer(live, nat, "regular") is not None
+
+
+def test_load_live_state_excludes_wayback(monkeypatch, tmp_path):
+    monkeypatch.setattr(aaa_data, "AAA_DIR", tmp_path)
+    aaa_data.write_csv_to(aaa_data.states_csv_path("AZ"), _state_rows(5, 3))
+    assert len(aaa_data.load_state("AZ")) == 8
+    live = aaa_data.load_live_state("AZ")
+    assert len(live) == 3 and all(r["src"] == "live" for r in live.values())
+
+
+def test_settlement_paths_do_not_read_wayback_state_rows():
+    # cmd_score (aaa_pricer) and scalp_paper settle against state prints; both
+    # must go through load_live_state, never raw load_state.
+    for name in ("aaa_pricer.py", "scalp_paper.py"):
+        src = (REPO / "scripts" / name).read_text()
+        assert "aaa_data.load_state(" not in src, name

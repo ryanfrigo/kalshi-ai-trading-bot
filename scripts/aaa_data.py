@@ -48,6 +48,7 @@ CSV_PATH = AAA_DIR / "aaa_daily.csv"
 
 CDX_URL = "http://web.archive.org/cdx/search/cdx"
 SNAP_URL = "http://web.archive.org/web/{ts}id_/https://gasprices.aaa.com/"
+STATE_SNAP_URL = "http://web.archive.org/web/{ts}id_/https://gasprices.aaa.com/?state={state}"
 LIVE_URL = "https://gasprices.aaa.com/"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -350,6 +351,21 @@ def load_state(state: str) -> dict[str, dict]:
     return load_csv_from(states_csv_path(state))
 
 
+def live_state_rows(rows: dict) -> dict:
+    """Drop src=wayback state rows.
+
+    Known bug: backfill_state fetched the NATIONAL page for every snapshot, so
+    ~91% of src=wayback rows in data/aaa/states/*.csv are national prints filed
+    as state rows (see docs/AAA.md, State transfer calibration). Ignore them until re-fetched.
+    """
+    return {d: r for d, r in rows.items() if r.get("src") != "wayback"}
+
+
+def load_live_state(state: str) -> dict[str, dict]:
+    """load_state minus src=wayback rows (see live_state_rows)."""
+    return live_state_rows(load_state(state))
+
+
 def build_print_series(rows: dict[str, dict], value_col: str = "diesel") -> list[dict]:
     """Stitch page pairs (cur, yes) into an ordered sequence of consecutive prints.
 
@@ -377,7 +393,9 @@ def backfill_state(state: str, from_date: str = "20250101", to_date: str = "",
 
     Same mechanics as backfill_wayback but for gasprices.aaa.com/?state=<ST>.
     Merges into data/aaa/states/<st>.csv; never overwrites a live-captured row.
-    Resumable: raw pages cached under data/aaa/raw/states/<ST>/.
+    Resumable: raw pages cached under data/aaa/raw/state_pages/<ST>/. (Not
+    raw/states/: that path may hold national pages fetched by the old
+    SNAP_URL bug, which would be reused as state pages.)
     """
     params = {
         "url": f"gasprices.aaa.com/?state={state}",
@@ -402,7 +420,7 @@ def backfill_state(state: str, from_date: str = "20250101", to_date: str = "",
     if snaps is None:
         print(f"{state}: CDX unavailable after retries; run again later", file=sys.stderr)
         return 0
-    raw_dir = RAW_DIR / "states" / state.upper()
+    raw_dir = RAW_DIR / "state_pages" / state.upper()
     raw_dir.mkdir(parents=True, exist_ok=True)
     print(f"{state}: CDX returned {len(snaps)} snapshots")
 
@@ -411,7 +429,7 @@ def backfill_state(state: str, from_date: str = "20250101", to_date: str = "",
         if path.exists() and path.stat().st_size > 20000:
             return ts, True
         try:
-            resp = httpx.get(SNAP_URL.format(ts=ts), timeout=45, headers=HEADERS,
+            resp = httpx.get(STATE_SNAP_URL.format(ts=ts, state=state.upper()), timeout=45, headers=HEADERS,
                              follow_redirects=True)
             if resp.status_code == 200 and "Current Avg" in resp.text:
                 path.write_text(resp.text)
