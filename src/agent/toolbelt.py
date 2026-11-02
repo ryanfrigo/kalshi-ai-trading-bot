@@ -19,8 +19,12 @@ def cap_count(
     equity_cents: int,
     cash_cents: int,
     max_position_pct: float = 0.10,
+    committed_cents: int = 0,
 ) -> Tuple[int, str]:
     """Cap an intended contract count to the per-position equity limit and cash.
+
+    ``committed_cents`` (held + resting cost already on this ticker) counts against
+    the position limit.
 
     Returns (allowed_count, reason). reason is "" when nothing was capped.
     """
@@ -29,7 +33,7 @@ def cap_count(
     if price_cents <= 0:
         return 0, "invalid price"
 
-    max_by_pos = int(equity_cents * max_position_pct) // price_cents
+    max_by_pos = max(0, int(equity_cents * max_position_pct) - committed_cents) // price_cents
     if n > max_by_pos:
         n = max_by_pos
         reasons.append(f"position cap {max_position_pct:.0%}")
@@ -40,6 +44,18 @@ def cap_count(
         reasons.append("cash")
 
     return max(0, n), "; ".join(reasons)
+
+
+async def _committed_cents(kalshi_client, ticker: str, price_cents: int) -> int:
+    """Cost already tied up in ``ticker`` (held + resting), valued at ``price_cents``.
+    Raises if either read fails, so the caller can fail closed."""
+    pos = await kalshi_client.get_positions(ticker=ticker)
+    held = sum(abs(float(p.get("position_fp", 0) or 0))
+               for p in pos.get("market_positions", []) if p.get("ticker") == ticker)
+    orders = (await kalshi_client.get_orders(ticker=ticker, status="resting")).get("orders", [])
+    resting = sum(abs(float(o.get("remaining_count_fp", 0) or 0))
+                  for o in orders if o.get("ticker") == ticker)
+    return int(round((held + resting) * price_cents))
 
 
 async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
@@ -182,8 +198,12 @@ async def place_guarded_order(
 
     bal = await kalshi_client.get_balance()
     cash = int(bal.get("balance", 0) or 0)
+    try:
+        committed = await _committed_cents(kalshi_client, ticker, price_cents)
+    except Exception as e:
+        return {"ok": False, "reason": f"exposure_unreadable ({e})"}
     n, cap_reason = cap_count(count, price_cents, decision.current_equity_cents,
-                              cash, max_position_pct)
+                              cash, max_position_pct, committed)
     if n < 1:
         return {"ok": False, "reason": f"size capped to 0 ({cap_reason or 'insufficient cash'})"}
 

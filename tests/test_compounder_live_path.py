@@ -196,9 +196,8 @@ def test_floor_of_one_contract_does_not_break_the_ten_percent_cap():
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "_calculate_position_size ignores its `cash` argument and _place_resting_orders never "
-    "tracks it. Cash $50, portfolio $1000: one order of 112 contracts = $99.68 is posted, "
-    "twice the cash on hand. Fix: min(position_value, remaining_cash) and decrement per order."))
+    "OWNER DECISION: bid nets may exceed cash by design (resting buys do not reserve cash). "
+    "Cash $50, one 112-contract order = $99.68 is posted."))
 def test_single_order_is_limited_by_cash_on_hand():
     client = FakeClient(cash=5_000, pv=100_000)
     asyncio.run(_compounder(client)._place_resting_orders([_opp("KXA")], portfolio=100_000, cash=5_000))
@@ -206,9 +205,8 @@ def test_single_order_is_limited_by_cash_on_hand():
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "Resting buys do not reserve cash, and the loop never subtracts what it already committed. "
-    "Cash $100, portfolio $1000, five opportunities: five resting bids of $99.68 = $498 posted "
-    "against $100, so which orders can fill is left to chance. Fix: carry a running cash balance."))
+    "OWNER DECISION: bid nets may exceed cash by design (resting buys do not reserve cash). "
+    "Cash $100, five $99.68 bids = $498 posted."))
 def test_resting_bids_in_one_run_do_not_commit_more_than_cash():
     client = FakeClient(cash=10_000, pv=100_000)
     opps = [_opp(f"KX{i}") for i in range(5)]
@@ -409,8 +407,9 @@ class _Gov:
 
 
 class TClient:
-    def __init__(self, status="active", cash=100_000, positions=None):
+    def __init__(self, status="active", cash=100_000, positions=None, resting=None, read_error=None):
         self.status, self.cash, self.positions = status, cash, positions or []
+        self.resting, self.read_error = resting or [], read_error
         self.placed, self.market_calls = [], 0
 
     async def get_market(self, ticker):
@@ -422,7 +421,14 @@ class TClient:
         return {"balance": self.cash, "portfolio_value": 0}
 
     async def get_positions(self, ticker=None):
+        if self.read_error == "positions":
+            raise RuntimeError("429")
         return {"market_positions": self.positions}
+
+    async def get_orders(self, ticker=None, status=None):
+        if self.read_error == "orders":
+            raise RuntimeError("429")
+        return {"orders": self.resting}
 
     async def place_order(self, **kw):
         self.placed.append(kw)
@@ -498,13 +504,34 @@ def test_live_yes_buy_uses_yes_price(tmp_path):
     assert o["yes_price"] == 10 and "no_price" not in o
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "toolbelt.py:185 caps each order against 10% of equity but never looks at what is already "
-    "held or resting, and place_order's POSITION_CAP is also per order. Equity $800 (cap $80), "
-    "already holding 88 NO at 90c ($79.20): a second 88-contract order is accepted, taking the "
-    "position to $158 = 20% of equity. Repeated agent calls stack without limit. Fix: subtract "
-    "held + resting cost from the cap before sizing."))
 def test_existing_position_counts_against_the_ten_percent_cap(tmp_path):
     c = TClient(positions=[{"ticker": "KXT", "position_fp": "-88.00"}])
     _guarded(tmp_path, c, count=88)
+    assert c.placed == []
+
+
+def test_resting_order_counts_against_the_cap_too(tmp_path):
+    # cap $80 = 88 x 90c; 50 already resting leaves room for 38
+    c = TClient(resting=[{"ticker": "KXT", "remaining_count_fp": "50.00"}])
+    r = _guarded(tmp_path, c, count=88)
+    assert r["count"] == 38 and c.placed[0]["count"] == 38
+
+
+def test_position_at_the_cap_leaves_no_room(tmp_path):
+    c = TClient(positions=[{"ticker": "KXT", "position_fp": "-88.00"}])
+    r = _guarded(tmp_path, c, count=1)
+    assert r["ok"] is False and r["reason"].startswith("size capped to 0")
+
+
+def test_other_tickers_and_flat_positions_do_not_count(tmp_path):
+    c = TClient(positions=[{"ticker": "KXOTHER", "position_fp": "500"},
+                           {"ticker": "KXT", "position_fp": "0.00"}])
+    assert _guarded(tmp_path, c, count=88)["count"] == 88
+
+
+@pytest.mark.parametrize("which", ["positions", "orders"])
+def test_unreadable_exposure_fails_closed(tmp_path, which):
+    c = TClient(read_error=which)
+    r = _guarded(tmp_path, c)
+    assert r["ok"] is False and r["reason"].startswith("exposure_unreadable")
     assert c.placed == []
