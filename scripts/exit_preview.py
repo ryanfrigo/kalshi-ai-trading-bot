@@ -17,7 +17,9 @@ It then calls GET /portfolio/orders?status=resting once and reports the fields
 the sellable guard reads on each resting order. Last, it lists every order
 (GET /portfolio/orders, no status filter, all pages) and checks whether order
 ids the bot placed through POST /portfolio/events/orders (from the decision
-journal) appear there, whatever their status.
+journal) appear there, whatever their status. Finally it reads one order from
+that listing by id (GET /portfolio/orders/{order_id}) and reports which fields
+the late-fill reconcile reads are present.
 
 Usage:  python scripts/exit_preview.py [--db trading_system.db]
 """
@@ -91,6 +93,10 @@ class ReadOnlyClient:
         if extra and isinstance(resp, dict) and isinstance(resp.get("orders"), list):
             resp = {**resp, "orders": resp["orders"] + extra}
         return resp
+
+    async def get_order(self, order_id: str) -> Dict:
+        """GET /portfolio/orders/{order_id}, through the GET-only wrapper."""
+        return await self._inner.get_order(order_id)
 
     async def place_order(self, **params) -> Dict:
         """Record the order run_tracking would send. Never forwarded."""
@@ -354,6 +360,40 @@ def events_endpoint_verdict(all_orders: Optional[List[Dict]], error: Optional[st
             f"not listed there or the listing no longer reaches back to them.")
 
 
+PROBE_FIELDS = ("status", "ticker", "fill_count_fp", "yes_price_dollars", "no_price_dollars")
+
+
+async def get_order_probe(client: ReadOnlyClient, all_orders: Optional[List[Dict]]) -> str:
+    """Does GET /portfolio/orders/{order_id} carry what reconcile_resting_exit reads?
+
+    Reads one order id from the full listing (an outcome_side "no" one if any) and
+    prints present/missing per field; no values are printed except the status.
+    """
+    q = "Does GET /portfolio/orders/{order_id} carry the fields the late-fill reconcile reads?"
+    if all_orders is None:
+        return f"{q}\nANSWER: CANNOT TELL. The full order listing failed."
+    listed = [o for o in all_orders if o.get("order_id")]
+    if not listed:
+        return f"{q}\nANSWER: CANNOT TELL. The full order listing has no orders."
+    pick = next((o for o in listed if o.get("outcome_side") == "no"), listed[0])
+    try:
+        resp = await client.get_order(pick["order_id"])
+    except Exception as e:
+        return f"{q}\nANSWER: CANNOT TELL. get_order failed ({type(e).__name__})."
+    order = resp.get("order") if isinstance(resp, dict) else None
+    if not isinstance(order, dict):
+        return f"{q}\nANSWER: NO. The response has no 'order' object."
+    present = {f: order.get(f) not in (None, "") for f in PROBE_FIELDS}
+    lines = [f"  order.{f}: {'present' if ok else 'MISSING'}"
+             + (f" ({order['status']})" if f == "status" and ok else "")
+             for f, ok in present.items()]
+    missing = [f for f, ok in present.items() if not ok]
+    verdict = ("ANSWER: YES. All fields present." if not missing else
+               f"ANSWER: NO. Missing: {', '.join(missing)}; the reconcile would count a "
+               f"failed read.")
+    return "\n".join([q, *lines, verdict])
+
+
 def _quiet_logs() -> None:
     structlog.configure(
         wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING),
@@ -376,6 +416,7 @@ async def run(db_path: str, journal_path: str, client_factory=None) -> int:
         all_orders, list_error = await client.list_all_orders(), None
     except Exception as e:  # fail closed: no verdict from a partial listing
         all_orders, list_error = None, str(e)
+    probe = await get_order_probe(client, all_orders)  # before run_tracking closes the client
     print(f"EXIT PREVIEW: next run_tracking pass, nothing sent. {len(positions)} open live position(s).")
     print("Sells are as sent before the risk governor; under a DAILY_LOSS/DRAWDOWN halt "
           "a sell goes out IOC reduce-only.\n")
@@ -390,6 +431,8 @@ async def run(db_path: str, journal_path: str, client_factory=None) -> int:
     print(resting_report(resting))
     print()
     print(events_endpoint_verdict(all_orders, list_error, load_journal(journal_path)))
+    print()
+    print(probe)
     violations = client.violations
     if violations:
         print(f"\nREAD-ONLY VIOLATION, refused and not sent: {violations}", file=sys.stderr)

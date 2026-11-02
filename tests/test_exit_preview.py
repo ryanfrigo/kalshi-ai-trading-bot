@@ -35,9 +35,14 @@ MARKETS = {
 }
 HELD = {"T-NO": "-5.00", "T-HOLD": "3.00", "T-RES": "2.00", "T-PT": "4.00"}
 ALL_ORDERS_PAGES = {  # cursor -> (orders, next cursor); the unscoped, any-status listing
-    None: ([{"order_id": "J-1", "ticker": "T-OTHER", "status": "resting"},
+    None: ([{"order_id": "J-1", "ticker": "T-OTHER", "status": "resting", "outcome_side": "yes"},
             {"order_id": "Z-0", "ticker": "T-Z", "status": "canceled"}], "c2"),
-    "c2": ([{"order_id": "F-7", "ticker": "T-F", "status": "executed"}], ""),
+    "c2": ([{"order_id": "F-7", "ticker": "T-F", "status": "executed", "outcome_side": "no"}], ""),
+}
+BY_ID = {  # GET /portfolio/orders/{order_id}, as documented
+    "F-7": {"order_id": "F-7", "ticker": "T-F", "status": "executed",
+            "fill_count_fp": "3.00", "yes_price_dollars": "0.6100", "no_price_dollars": "0.3900"},
+    "J-1": {"order_id": "J-1", "ticker": "T-OTHER", "status": "resting"},
 }
 RESTING = [
     {"order_id": "J-1", "ticker": "T-OTHER", "outcome_side": "yes", "book_side": "bid",
@@ -57,6 +62,10 @@ def _handler(log):
             t = q["ticker"][0]
             return httpx.Response(200, json={"market_positions": [
                 {"ticker": t, "position_fp": HELD[t]}]})
+        if path.startswith("/trade-api/v2/portfolio/orders/"):
+            oid = path.rsplit("/", 1)[-1]
+            return (httpx.Response(200, json={"order": BY_ID[oid]}) if oid in BY_ID
+                    else httpx.Response(404, json={"error": "not_found"}))
         if path == "/trade-api/v2/portfolio/orders" and "status" not in q:
             orders, nxt = ALL_ORDERS_PAGES[q.get("cursor", [None])[0]]
             return httpx.Response(200, json={"orders": orders, "cursor": nxt})
@@ -233,3 +242,79 @@ async def test_missing_db_is_refused_without_creating_it(tmp_path, wire):
     path = tmp_path / "nope.db"
     assert await ep.run(str(path), str(tmp_path / "j"), client_factory=factory) == 2
     assert not path.exists()
+
+
+# --- get_order: passthrough on the proxy, and the field probe ---
+
+def _probe_section(out):
+    return out[out.index("Does GET /portfolio/orders/{order_id}"):]
+
+
+async def test_get_order_probe_prefers_a_no_order_and_prints_only_status(tmp_path, wire, capsys):
+    log, factory = wire
+    assert await ep.run(await _db(tmp_path), _journal(tmp_path, []), client_factory=factory) == 0
+    probe = _probe_section(capsys.readouterr().out)
+    assert ("GET", "/trade-api/v2/portfolio/orders/F-7") in log  # the outcome_side "no" one
+    for f in ep.PROBE_FIELDS:
+        assert f"order.{f}: present" in probe
+    assert "order.status: present (executed)" in probe and "ANSWER: YES" in probe
+    for value in ("F-7", "T-F", "3.00", "0.6100", "0.3900"):
+        assert value not in probe
+
+
+async def test_get_order_probe_reports_missing_fields(tmp_path, wire, capsys):
+    _, factory = wire
+    with patch.dict(ALL_ORDERS_PAGES, {None: ([{"order_id": "J-1"}], "")}, clear=True):
+        await ep.run(await _db(tmp_path), _journal(tmp_path, []), client_factory=factory)
+    probe = _probe_section(capsys.readouterr().out)
+    assert "order.status: present (resting)" in probe and "order.ticker: present" in probe
+    for f in ("fill_count_fp", "yes_price_dollars", "no_price_dollars"):
+        assert f"order.{f}: MISSING" in probe
+    assert "ANSWER: NO. Missing: fill_count_fp, yes_price_dollars, no_price_dollars" in probe
+
+
+@pytest.mark.parametrize("pages, expected", [
+    ({None: ("not a list", "")}, "CANNOT TELL. The full order listing failed"),
+    ({None: ([], "")}, "CANNOT TELL. The full order listing has no orders"),
+    ({None: ([{"order_id": "GONE"}], "")}, "CANNOT TELL. get_order failed (KalshiAPIError)"),
+])
+async def test_get_order_probe_fails_closed(tmp_path, wire, capsys, pages, expected):
+    log, factory = wire
+    with patch.dict(ALL_ORDERS_PAGES, pages, clear=True):
+        await ep.run(await _db(tmp_path), _journal(tmp_path, []), client_factory=factory)
+    assert expected in _probe_section(capsys.readouterr().out)
+    assert all(m == "GET" for m, _ in log)
+
+
+async def test_get_order_under_the_preview_never_sends_a_non_get(wire):
+    log, factory = wire
+    client = ep.ReadOnlyClient(factory())
+    assert (await client.get_order("F-7"))["order"]["status"] == "executed"
+    assert log == [("GET", "/trade-api/v2/portfolio/orders/F-7")]
+
+    async def mutating_get_order(self, order_id):  # a get_order that tried to write
+        return await self._make_authenticated_request(
+            "DELETE", f"/trade-api/v2/portfolio/events/orders/{order_id}")
+    with patch.object(KalshiClient, "get_order", mutating_get_order), \
+         pytest.raises(ep.ReadOnlyViolation):
+        await client.get_order("F-7")
+    assert log == [("GET", "/trade-api/v2/portfolio/orders/F-7")]
+    assert client.violations == ["DELETE /trade-api/v2/portfolio/events/orders/F-7"]
+    await client.close()
+
+
+async def test_stored_exit_order_is_read_through_the_proxy(tmp_path, wire, capsys):
+    """run_tracking step 0 reads a stored exit id: a GET, and its DB writes are dropped."""
+    log, factory = wire
+    db_path = await _db(tmp_path)
+    con = sqlite3.connect(db_path)
+    con.execute("UPDATE positions SET exit_order_id = 'F-7', exit_order_filled = 0 "
+                "WHERE market_id = 'T-HOLD'")
+    con.commit()
+    before = con.execute("SELECT * FROM positions ORDER BY id").fetchall()
+    assert await ep.run(db_path, _journal(tmp_path, []), client_factory=factory) == 0
+    assert all(m == "GET" for m, _ in log)
+    assert log.count(("GET", "/trade-api/v2/portfolio/orders/F-7")) == 2  # step 0 + probe
+    assert sqlite3.connect(db_path).execute(
+        "SELECT * FROM positions ORDER BY id").fetchall() == before
+
