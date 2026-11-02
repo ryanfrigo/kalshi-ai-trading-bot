@@ -609,24 +609,6 @@ class SafeCompounder:
         self, opportunities: List[Dict], portfolio: int, cash: int
     ) -> Dict:
         """Place NO-side resting orders at lowest_ask - 1¢."""
-        # Get existing positions and orders
-        try:
-            positions_resp = await self.client.get_positions()
-            positions = positions_resp.get("market_positions", [])
-            pos_tickers = {
-                p["ticker"] for p in positions
-                if abs(float(p.get("position_fp", 0) or 0)) > 0  # Kalshi uses position_fp, not position
-            }
-        except Exception:
-            pos_tickers = set()
-
-        try:
-            orders_resp = await self.client.get_orders(status="resting")
-            existing_orders = orders_resp.get("orders", [])
-            ord_tickers = {o["ticker"] for o in existing_orders}
-        except Exception:
-            ord_tickers = set()
-
         stats = {
             "placed": 0,
             "skipped_existing": 0,
@@ -636,6 +618,33 @@ class SafeCompounder:
             "total_potential_profit": 0,
             "total_deployed": 0,
         }
+
+        # Get existing positions and orders. If either lookup fails the dedupe set
+        # is unknowable: place nothing this run rather than risk doubling exposure.
+        try:
+            positions_resp = await self.client.get_positions()
+            if positions_resp.get("cursor"):
+                raise RuntimeError("positions span more than one page")
+            positions = positions_resp.get("market_positions", [])
+            pos_tickers = {
+                p["ticker"] for p in positions
+                if abs(float(p.get("position_fp", 0) or 0)) > 0  # Kalshi uses position_fp, not position
+            }
+        except Exception as e:
+            logger.error("Positions lookup failed (%s); placing no orders this run", e)
+            stats["errors"] += 1
+            return stats
+
+        try:
+            orders_resp = await self.client.get_orders(status="resting")
+            if orders_resp.get("cursor"):
+                raise RuntimeError("resting orders span more than one page")
+            existing_orders = orders_resp.get("orders", [])
+            ord_tickers = {o["ticker"] for o in existing_orders}
+        except Exception as e:
+            logger.error("Resting-orders lookup failed (%s); placing no orders this run", e)
+            stats["errors"] += 1
+            return stats
 
         print(
             f"\n{'='*70}\nPLACING MAKER ORDERS — Portfolio: ${portfolio/100:.2f} | "

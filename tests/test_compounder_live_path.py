@@ -47,11 +47,13 @@ class FakeClient:
     """Compounder-facing client double. Records every order it is asked to place."""
 
     def __init__(self, cash=100_000, pv=100_000, positions=None, orders=None,
-                 orders_error=None, positions_error=None, yes_bid="0.10"):
+                 orders_error=None, positions_error=None, yes_bid="0.10",
+                 orders_cursor=None, positions_cursor=None):
         self.cash, self.pv = cash, pv
         self.positions, self.orders = positions or [], orders or []
         self.orders_error, self.positions_error = orders_error, positions_error
         self.yes_bid = yes_bid
+        self.orders_cursor, self.positions_cursor = orders_cursor, positions_cursor
         self.placed = []
 
     async def get_balance(self):
@@ -60,12 +62,12 @@ class FakeClient:
     async def get_positions(self, **kw):
         if self.positions_error:
             raise self.positions_error
-        return {"market_positions": self.positions}
+        return {"market_positions": self.positions, "cursor": self.positions_cursor}
 
     async def get_orders(self, **kw):
         if self.orders_error:
             raise self.orders_error
-        return {"orders": self.orders}
+        return {"orders": self.orders, "cursor": self.orders_cursor}
 
     async def get_orderbook(self, ticker, depth=10):
         return {"orderbook_fp": {"yes_dollars": [[self.yes_bid, "100"]],
@@ -242,11 +244,6 @@ def test_same_ticker_twice_in_one_run_is_bought_once():
 
 
 @pytest.mark.parametrize("which", ["orders_error", "positions_error"])
-@pytest.mark.xfail(strict=True, reason=(
-    "safe_compounder.py:620/627 swallow a failed get_positions/get_orders and carry on with an "
-    "empty dedupe set (fail-open). One 429 on /portfolio/orders: a resting 112-contract bid "
-    "($99.68) on KXA is not seen, a second identical bid is posted, doubling exposure to $199. "
-    "Fix: on error, place nothing this run."))
 def test_failed_dedupe_lookup_fails_closed(which):
     # the failing endpoint is the only one that knows about KXA
     held = {"orders": [{"ticker": "KXA"}]} if which == "orders_error" else \
@@ -254,6 +251,20 @@ def test_failed_dedupe_lookup_fails_closed(which):
     client = FakeClient(**held, **{which: RuntimeError("429")})
     _place(client, [_opp("KXA")])
     assert client.placed == []
+
+
+@pytest.mark.parametrize("which", ["orders_cursor", "positions_cursor"])
+def test_paged_dedupe_lookup_fails_closed(which):
+    # a cursor means page 1 is not the whole book: KXA may be on page 2
+    client = FakeClient(**{which: "next-page-token"})
+    stats = _place(client, [_opp("KXA")])
+    assert client.placed == [] and stats["errors"] == 1
+
+
+def test_empty_cursor_is_a_complete_lookup():
+    client = FakeClient(orders_cursor="", positions_cursor=None)
+    _place(client, [_opp("KXA")])
+    assert len(client.placed) == 1
 
 
 # ---- order shape ------------------------------------------------------------------
