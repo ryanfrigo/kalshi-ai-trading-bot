@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.clients.kalshi_client import KalshiClient
-from src.jobs.execute import reconcile_stale_failed_rows
+from src.jobs.execute import _read_ticker_state, reconcile_stale_failed_rows
 from src.utils.database import DatabaseManager, Position
 
 from tests.test_strategies_unified_immediate import make_system, FakeKalshi, legacy_market
@@ -121,6 +121,30 @@ def test_live_rows_untouched(db):
     ex = Exchange()
     run(reconcile_stale_failed_rows(db, client(ex)))
     assert status(db, pid) == ("open", 1)
+
+
+@pytest.mark.parametrize("rows", [
+    # one YES held + one NO flat
+    [{"ticker": "MKT-1", "position_fp": "7.00"}, {"ticker": "MKT-1", "position_fp": "0.00"}],
+    # first row flat, only the second holds
+    [{"ticker": "MKT-1", "position_fp": "0.00"}, {"ticker": "MKT-1", "position_fp": "-3.00"}],
+    # both flat: still several rows for one ticker, so unknown, not flat
+    [{"ticker": "MKT-1", "position_fp": "0.00"}, {"ticker": "MKT-1", "position_fp": "0.00"}],
+])
+def test_two_position_rows_on_one_ticker_are_not_flat(db, rows):
+    pid = add_row(db, 11)
+    ex = Exchange(positions=rows)
+    log = MagicMock()
+    assert run(_read_ticker_state(client(ex), "MKT-1", log)) is None  # unknown, never flat
+    assert run(reconcile_stale_failed_rows(db, client(ex))) == 0
+    assert status(db, pid) == ("open", 0)  # left alone, not voided, not marked live
+
+
+def test_rows_for_other_tickers_do_not_count_as_a_second_row(db):
+    pid = add_row(db, 11)
+    ex = Exchange(positions=[{"ticker": "OTHER", "position_fp": "9.00"}])
+    assert run(reconcile_stale_failed_rows(db, client(ex))) == 1
+    assert status(db, pid) == ("voided", 0)
 
 
 def test_zero_non_get_requests_on_every_path(db):
