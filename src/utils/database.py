@@ -370,6 +370,15 @@ class DatabaseManager(TradingLoggerMixin):
                 if col not in column_names:
                     await db.execute(f"ALTER TABLE positions ADD COLUMN {col} {typ}")
                     self.logger.info(f"Added {col} column to positions table")
+
+            if 'strategy' not in column_names:
+                await db.execute("ALTER TABLE positions ADD COLUMN strategy TEXT")
+                self.logger.info("Added strategy column to positions table")
+
+            cursor = await db.execute("PRAGMA table_info(trade_logs)")
+            if 'strategy' not in [col[1] for col in await cursor.fetchall()]:
+                await db.execute("ALTER TABLE trade_logs ADD COLUMN strategy TEXT")
+                self.logger.info("Added strategy column to trade_logs table")
                 
             await db.commit()
             
