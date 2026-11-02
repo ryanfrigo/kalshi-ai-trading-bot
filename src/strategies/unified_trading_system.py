@@ -32,6 +32,7 @@ from src.clients.xai_client import XAIClient
 from src.utils.database import DatabaseManager, Market, Position
 from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
+from src.utils.market_prices import get_market_prices
 
 from src.strategies.market_making import (
     AdvancedMarketMaker, 
@@ -488,11 +489,15 @@ class UnifiedAdvancedTradingSystem:
                     # FIXED: Extract from nested 'market' object
                     market_info = market_data.get('market', {})
                     
-                    # Get price for the intended side (already determined above)
-                    if intended_side == "YES":
-                        price = market_info.get('yes_price', 50) / 100
-                    else:
-                        price = market_info.get('no_price', 50) / 100
+                    # Price the intended side at its live ask. get_market_prices handles
+                    # API v2 (dollars) and legacy (cents); a missing quote skips the
+                    # market rather than defaulting to 50c.
+                    _yb, yes_ask, _nb, no_ask = get_market_prices(market_info)
+                    price = yes_ask if intended_side == "YES" else no_ask
+                    if price <= 0:
+                        self.logger.warning(f"No usable {intended_side} ask for {market_id}, skipping")
+                        results['failed_executions'] += 1
+                        continue
                     
                     # Calculate quantity
                     quantity = max(1, int(position_value / price))

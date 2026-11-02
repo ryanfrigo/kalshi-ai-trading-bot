@@ -297,18 +297,27 @@ class _Mkt:
     expiration_ts = None
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "create_market_opportunities_from_markets reads market_info.get('yes_price', 50)/100. "
-    "A v2 market object carries *_dollars fields only, so the price silently becomes "
-    "50c. YES really trades ~89c; AI says 95%: the 'edge' is 45pp instead of 6pp, "
-    "and the immediate trade then buys YES at a recorded 50c while the order lifts "
-    "a 90c ask. $10 allocation -> 20 contracts = $18 actual cost."))
 def test_discovery_reads_v2_dollar_prices():
     kalshi = FakeKalshi(v2_market(0.88, 0.90, 0.08, 0.10))
     with patch("src.strategies.portfolio.immediate._get_fast_ai_prediction",
                AsyncMock(return_value=(0.95, 0.9))):
         opps = run(create_market_opportunities_from_markets([_Mkt()], MagicMock(), kalshi))
     assert opps and opps[0].market_probability == pytest.approx(0.89, abs=0.02)
+
+
+def test_discovery_skips_market_without_quotes():
+    kalshi = FakeKalshi({"market": {"status": "active", "yes_price": 40}})  # no bid/ask
+    with patch("src.strategies.portfolio.immediate._get_fast_ai_prediction",
+               AsyncMock(return_value=(0.95, 0.9))):
+        assert run(create_market_opportunities_from_markets([_Mkt()], MagicMock(), kalshi)) == []
+
+
+def test_allocation_skips_market_without_ask(db):
+    s = make_system(db, FakeKalshi({"market": {"status": "active", "no_price": 30}}))
+    with Captured() as cap:
+        res = run(s._execute_portfolio_allocations(alloc(), [make_opp(0.70, 0.50)]))
+    cap.execute.assert_not_awaited()
+    assert res["failed_executions"] == 1
 
 
 def test_discovery_reads_legacy_cent_prices():
@@ -348,14 +357,37 @@ def alloc(market_id="MKT-1", frac=0.10):
         aggregate_kelly_fraction=0, portfolio_growth_rate=0)
 
 
+def test_discovery_reads_v2_dollar_prices():
+    kalshi = FakeKalshi(v2_market(0.88, 0.90, 0.08, 0.10))
+    with patch("src.strategies.portfolio.immediate._get_fast_ai_prediction",
+               AsyncMock(return_value=(0.95, 0.9))):
+        opps = run(create_market_opportunities_from_markets([_Mkt()], MagicMock(), kalshi))
+    assert opps and opps[0].market_probability == pytest.approx(0.89)
+
+
+def test_allocation_no_side_uses_v2_no_ask(db):
+    s = make_system(db, FakeKalshi(v2_market(0.88, 0.90, 0.08, 0.10)))
+    with Captured() as cap:
+        run(s._execute_portfolio_allocations(alloc(), [make_opp(0.90, 0.70)]))
+    assert (cap.position.side, cap.position.entry_price) == ("NO", pytest.approx(0.10))
+    assert cap.position.quantity == 100
+
+
+def test_allocation_yes_side_v2_does_not_overspend(db):
+    s = make_system(db, FakeKalshi(v2_market(0.88, 0.90, 0.08, 0.10)))
+    with Captured() as cap:
+        run(s._execute_portfolio_allocations(alloc(), [make_opp(0.60, 0.95)]))
+    assert cap.position.quantity == 11 and cap.position.quantity * 0.90 <= 10.0
+
+
 def test_allocation_no_side_priced_at_no_price(db):
     kalshi = FakeKalshi(legacy_market(70, 30))
     s = make_system(db, kalshi)
     with Captured() as cap:
         res = run(s._execute_portfolio_allocations(alloc(), [make_opp(0.70, 0.50)]))
     p = cap.position
-    assert (p.side, p.entry_price) == ("NO", pytest.approx(0.30))
-    assert p.quantity == 33  # int($10 / 0.30)
+    assert (p.side, p.entry_price) == ("NO", pytest.approx(0.31))  # live NO ask
+    assert p.quantity == 32  # int($10 / 0.31)
     assert res["successful_executions"] == 1
 
 
@@ -364,15 +396,10 @@ def test_allocation_yes_side_priced_at_yes_price(db):
     s = make_system(db, kalshi)
     with Captured() as cap:
         run(s._execute_portfolio_allocations(alloc(), [make_opp(0.40, 0.60)]))
-    assert (cap.position.side, cap.position.entry_price) == ("YES", pytest.approx(0.40))
-    assert cap.position.quantity == 25
+    assert (cap.position.side, cap.position.entry_price) == ("YES", pytest.approx(0.41))  # live YES ask
+    assert cap.position.quantity == 24
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Allocation pricing uses market_info.get('no_price', 50). A v2 market (dollar "
-    "fields only) has no 'no_price', so a NO position that really costs 10c is "
-    "recorded at 50c: entry/stop/target all wrong and only 20 contracts bought "
-    "instead of 100 for a $10 allocation."))
 def test_allocation_no_side_uses_v2_no_ask(db):
     kalshi = FakeKalshi(v2_market(0.88, 0.90, 0.08, 0.10))
     s = make_system(db, kalshi)
@@ -382,10 +409,6 @@ def test_allocation_no_side_uses_v2_no_ask(db):
     assert cap.position.entry_price == pytest.approx(0.10, abs=0.02)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Same 50c fallback on the YES leg: $10 allocation, YES really asks 90c, "
-    "recorded at 50c -> 20 contracts -> $18 spent, 80% over the allocation "
-    "(10/0.90 = 11 contracts = $9.90 is correct)."))
 def test_allocation_yes_side_v2_does_not_overspend(db):
     kalshi = FakeKalshi(v2_market(0.88, 0.90, 0.08, 0.10))
     s = make_system(db, kalshi)

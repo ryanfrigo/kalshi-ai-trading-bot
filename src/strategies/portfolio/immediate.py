@@ -50,7 +50,13 @@ async def create_market_opportunities_from_markets(
             
             # FIXED: Extract from nested 'market' object (same fix as immediate trading)
             market_info = market_data.get('market', {})
-            market_prob = market_info.get('yes_price', 50) / 100
+            # get_market_prices normalizes API v2 (dollars) and legacy (cents).
+            # Never default a missing price: a made-up 50c prices every trade wrong.
+            yes_bid, yes_ask, _no_bid, _no_ask = get_market_prices(market_info)
+            if yes_bid <= 0 or yes_ask <= 0:
+                logger.warning(f"No usable YES quote for {market.market_id}, skipping")
+                continue
+            market_prob = (yes_bid + yes_ask) / 2
             
             # Skip markets with extreme prices (too risky for portfolio)
             if market_prob < 0.05 or market_prob > 0.95:
