@@ -20,7 +20,7 @@ It's a good text classifier. It's a bad pricer.
 
 ## Blind pricing loses to the book
 
-`scripts/jev_backtest.py` reproduces this. I took every market that settled Sep 19-25 (after Jev's build date, so it couldn't have seen the outcomes), read the book mid from Kalshi candlesticks on Sep 18, and asked Jev for P(YES) as of Sep 18 from the rules alone. No price in the prompt, because the price anchors it.
+`scripts/jev_backtest.py` is the script I used. It needs live Kalshi and OpenRouter access and the markets that settled Sep 19-25, so you can't rerun this exact result. I took every market that settled Sep 19-25 (after Jev's build date, so it couldn't have seen the outcomes), read the book mid from Kalshi candlesticks on Sep 18, and asked Jev for P(YES) as of Sep 18 from the rules alone. No price in the prompt, because the price anchors it.
 
 ```
 ALL     n=601  Brier book 0.1568  jev 0.2090  blend 0.1707

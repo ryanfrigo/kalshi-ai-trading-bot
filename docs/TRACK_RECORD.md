@@ -20,6 +20,8 @@ These are **whole-account** figures. This live account is *also* traded manually
 | Day P&L | -$0.35 |
 | Governor halted | no |
 
+_The all-time drawdown includes money the operator withdrew and manual bets, so it is not the strategy's drawdown._
+
 ## The honest edge verdict (forward-only)
 
 > **NO MEASURED EDGE (n=55 forward trades; won 58% vs. 60% implied, edge -1.9 pts)**
@@ -60,7 +62,7 @@ Every settlement Kalshi reports for this account — including the legacy mechan
 
 ## Edge Policy — what the record currently blocks
 
-The pre-trade gate the settled record has *earned*: categories the account provably loses money in are auto-blocked before the next trade. The gate only ever tightens from evidence.
+The pre-trade gate the settled record has *earned*: categories the account provably loses money in are blocked on the next `cli trade` (the example strategies don't read the policy). It is re-derived from the whole record each run, so a block lifts if the group's net P&L returns to break-even.
 
 Derived from **220 settled trades** on 2026-10-02.
 
