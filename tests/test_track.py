@@ -122,7 +122,7 @@ async def test_non_resolution_exit_requires_successful_sell(
         confidence=0.75,
         live=True,
         status="open",
-        take_profit_price=0.60,  # triggers when current YES >= 0.60
+        take_profit_price=0.45,  # triggers when current YES >= 0.45
         stop_loss_price=0.30,
     )
     position_id = await db_manager.add_position(test_position)
@@ -134,8 +134,8 @@ async def test_non_resolution_exit_requires_successful_sell(
         "market": {
             "status": "active",
             "result": None,
-            "yes_bid_dollars": 0.65,
-            "no_bid_dollars": 0.35,
+            "yes_bid_dollars": 0.46,  # +15%: below the 20% profit-taking job
+            "no_bid_dollars": 0.54,
         }
     })
     mock_api.close = AsyncMock()
@@ -192,7 +192,7 @@ async def test_non_resolution_exit_closes_after_successful_sell(
         confidence=0.75,
         live=True,
         status="open",
-        take_profit_price=0.60,
+        take_profit_price=0.45,
         stop_loss_price=0.30,
     )
     position_id = await db_manager.add_position(test_position)
@@ -203,8 +203,8 @@ async def test_non_resolution_exit_closes_after_successful_sell(
         "market": {
             "status": "active",
             "result": None,
-            "yes_bid_dollars": 0.65,
-            "no_bid_dollars": 0.35,
+            "yes_bid_dollars": 0.46,  # +15%: below the 20% profit-taking job
+            "no_bid_dollars": 0.54,
         }
     })
     mock_api.close = AsyncMock()
@@ -270,7 +270,7 @@ async def test_resolution_result_yes_settles_no_position_at_zero():
 async def test_v2_dollar_bid_drives_take_profit_price(mock_kalshi_client, mock_place_sell):
     """
     v2 market payloads carry dollar bids (yes_bid_dollars). The take-profit check
-    must see the dollar price, not 0, so the sell is placed at the bid (0.65).
+    must see the dollar price, not 0, so the sell is placed at the bid (0.46).
     """
     db_path = "track_test_v2_prices.db"
     if os.path.exists(db_path):
@@ -289,7 +289,7 @@ async def test_v2_dollar_bid_drives_take_profit_price(mock_kalshi_client, mock_p
         confidence=0.75,
         live=True,
         status="open",
-        take_profit_price=0.60,
+        take_profit_price=0.45,
         stop_loss_price=0.30,
     )
     position_id = await db_manager.add_position(test_position)
@@ -300,10 +300,10 @@ async def test_v2_dollar_bid_drives_take_profit_price(mock_kalshi_client, mock_p
         "market": {
             "status": "active",
             "result": None,
-            "yes_bid_dollars": 0.65,
-            "yes_ask_dollars": 0.66,
-            "no_bid_dollars": 0.34,
-            "no_ask_dollars": 0.35,
+            "yes_bid_dollars": 0.46,  # +15%: below the 20% profit-taking job
+            "yes_ask_dollars": 0.47,
+            "no_bid_dollars": 0.53,
+            "no_ask_dollars": 0.54,
         }
     })
     mock_api.close = AsyncMock()
@@ -313,7 +313,7 @@ async def test_v2_dollar_bid_drives_take_profit_price(mock_kalshi_client, mock_p
         await run_tracking(db_manager=db_manager)
 
         mock_place_sell.assert_awaited_once()
-        assert mock_place_sell.call_args.kwargs["limit_price"] == 0.65
+        assert mock_place_sell.call_args.kwargs["limit_price"] == 0.46
     finally:
         if os.path.exists(db_path):
             os.remove(db_path)

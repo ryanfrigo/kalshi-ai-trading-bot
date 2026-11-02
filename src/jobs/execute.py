@@ -457,11 +457,10 @@ async def place_profit_taking_orders(
                     logger.warning(f"Could not get market data for {position.market_id}")
                     continue
                 
-                # Get current price based on position side
-                if position.side == "YES":
-                    current_price = market_data.get('yes_price', 0) / 100  # Convert cents to dollars
-                else:
-                    current_price = market_data.get('no_price', 0) / 100
+                # Price the held side at its bid, what a sell can get. v2 sends
+                # *_dollars fields only; there is no yes_price/no_price key.
+                yes_bid, _, no_bid, _ = get_market_prices(market_data)
+                current_price = yes_bid if position.side == "YES" else no_bid
                 
                 # Calculate current profit
                 if current_price > 0:
@@ -546,11 +545,10 @@ async def place_stop_loss_orders(
                     logger.warning(f"Could not get market data for {position.market_id}")
                     continue
                 
-                # Get current price based on position side
-                if position.side == "YES":
-                    current_price = market_data.get('yes_price', 0) / 100
-                else:
-                    current_price = market_data.get('no_price', 0) / 100
+                # Price the held side at its bid, what a sell can get. v2 sends
+                # *_dollars fields only; there is no yes_price/no_price key.
+                yes_bid, _, no_bid, _ = get_market_prices(market_data)
+                current_price = yes_bid if position.side == "YES" else no_bid
                 
                 # Calculate current loss
                 if current_price > 0:

@@ -7,7 +7,7 @@ sell now caps its count at contracts held on the exchange minus our resting
 sells (fail closed), and the callers record only what the fill count says sold.
 
 Kalshi is faked (no network); the DB is a temp SQLite file. Prices: entry 40c;
-a 60c YES price trips profit-take, 30c trips stop-loss.
+a 60c YES bid trips profit-take, 30c trips stop-loss.
 """
 import asyncio
 from datetime import datetime
@@ -48,7 +48,8 @@ class FakeKalshi:
         self.sent = []  # count of every sell actually sent
 
     async def get_market(self, ticker):
-        return {"market": {"yes_price": self.yes_cents, "no_price": 100 - self.yes_cents}}
+        return {"market": {"yes_bid_dollars": f"{self.yes_cents / 100:.4f}",
+                           "no_bid_dollars": f"{(100 - self.yes_cents) / 100:.4f}"}}
 
     async def _held_on_side(self, ticker, side):
         return None if self.positions_fail else self.held
@@ -244,10 +245,13 @@ def test_partial_exit_rationale_names_the_real_reason(tmp_path, ioc, reason):
 
 # --- track.py close loop: no close on mere acceptance ---
 
-def _track(tmp_path, client):
+def _track(tmp_path, client, yes_bid=0.46):
     from src.jobs.track import run_tracking
+    # default +15%: hits take_profit_price 0.45 but not run_tracking's 20%
+    # profit-taking job, so the sell comes from the close loop under test.
     client.get_market = AsyncMock(return_value={"market": {
-        "status": "active", "result": None, "yes_bid_dollars": 0.65, "no_bid_dollars": 0.35}})
+        "status": "active", "result": None, "yes_bid_dollars": yes_bid,
+        "no_bid_dollars": round(1 - yes_bid, 2)}})
     client.close = AsyncMock()
 
     async def go():
@@ -255,7 +259,7 @@ def _track(tmp_path, client):
         await db.initialize()
         pos = Position(market_id="PH-1", side="YES", entry_price=0.40, quantity=10,
                        timestamp=datetime.now(), rationale="r", live=True, status="open",
-                       take_profit_price=0.60, stop_loss_price=0.30)
+                       take_profit_price=0.45, stop_loss_price=0.30)
         await db.add_position(pos)
         with patch("src.jobs.track.KalshiClient", return_value=client):
             await run_tracking(db_manager=db)
@@ -275,3 +279,12 @@ def test_close_loop_filled_sell_closes_position(tmp_path):
     after, logs = _track(tmp_path, client)
     assert after is None
     assert len(logs) == 1 and logs[0].quantity == pytest.approx(10)
+
+
+def test_profit_job_and_close_loop_in_one_run_sell_once(tmp_path):
+    # +62% trips both the profit-taking job and take_profit_price; the job's
+    # sell rests, so the close loop must find nothing sellable.
+    client = FakeKalshi(fill=0)
+    after, logs = _track(tmp_path, client, yes_bid=0.65)
+    assert client.sent == [10]
+    assert after.status == "open" and logs == []
