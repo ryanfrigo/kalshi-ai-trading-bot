@@ -510,14 +510,21 @@ class DatabaseManager(TradingLoggerMixin):
             await db.commit()
             self.logger.info(f"Updated position {position_id} status to {status}.")
 
-    async def update_position_quantity(self, position_id: int, quantity: float):
-        """Set an open position's quantity (e.g. what remains after a partial exit)."""
+    async def record_partial_exit(self, position_id: int, trade_log: TradeLog, remaining: float):
+        """Log the sold part of a position and shrink it to what remains, in one transaction."""
+        trade_dict = asdict(trade_log)
+        trade_dict['entry_timestamp'] = trade_log.entry_timestamp.isoformat()
+        trade_dict['exit_timestamp'] = trade_log.exit_timestamp.isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
+                INSERT INTO trade_logs (market_id, side, entry_price, exit_price, quantity, pnl, entry_timestamp, exit_timestamp, rationale, strategy)
+                VALUES (:market_id, :side, :entry_price, :exit_price, :quantity, :pnl, :entry_timestamp, :exit_timestamp, :rationale, :strategy)
+            """, trade_dict)
+            await db.execute("""
                 UPDATE positions SET quantity = ? WHERE id = ?
-            """, (quantity, position_id))
+            """, (remaining, position_id))
             await db.commit()
-            self.logger.info(f"Updated position {position_id} quantity to {quantity}.")
+            self.logger.info(f"Partial exit for position {position_id}: {remaining} left open.")
 
     async def get_position_by_market_id(self, market_id: str) -> Optional[Position]:
         """

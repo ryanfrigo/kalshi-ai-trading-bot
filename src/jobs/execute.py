@@ -180,14 +180,13 @@ async def _record_ioc_exit(position: Position, order: Dict, limit_price: float,
     if filled >= round(position.quantity, 2):
         return True
     if filled > 0:
-        await db_manager.add_trade_log(TradeLog(
+        await db_manager.record_partial_exit(position.id, TradeLog(
             market_id=position.market_id, side=position.side,
             entry_price=position.entry_price, exit_price=limit_price,
             quantity=filled, pnl=(limit_price - position.entry_price) * filled,
             entry_timestamp=position.timestamp, exit_timestamp=datetime.now(),
-            rationale=f"{position.rationale} | EXIT: partial IOC fill under risk halt"))
-        await db_manager.update_position_quantity(
-            position.id, round(position.quantity - filled, 2))
+            rationale=f"{position.rationale} | EXIT: partial IOC fill under risk halt"),
+            round(position.quantity - filled, 2))
     logger.warning(
         f"IOC exit for {position.market_id} filled {filled} of {position.quantity}; "
         f"the rest stays open.")

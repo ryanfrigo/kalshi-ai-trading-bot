@@ -86,3 +86,32 @@ def test_place_order_does_not_flag_normal_response():
     with _gov(ok):
         resp = _place(client, count=5)
     assert "reduce_only_ioc" not in resp
+
+
+def test_partial_exit_is_atomic_when_quantity_write_fails(tmp_path):
+    """If shrinking the position fails, the sale log must not survive alone."""
+    import aiosqlite
+
+    async def go():
+        db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+        await db.initialize()
+        pos = Position(market_id="IOC-1", side="YES", entry_price=0.40, quantity=10,
+                       timestamp=datetime.now(), rationale="r", live=True, status="open")
+        pos.id = await db.add_position(pos)
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("""
+                CREATE TRIGGER fail_qty BEFORE UPDATE OF quantity ON positions
+                BEGIN SELECT RAISE(ABORT, 'injected'); END
+            """)
+            await conn.commit()
+        client = AsyncMock()
+        client.place_order = AsyncMock(return_value=_ioc(fill_count_fp="4.00"))
+        ok = await place_sell_limit_order(position=pos, limit_price=0.30,
+                                          db_manager=db, kalshi_client=client)
+        return (ok, await db.get_position_by_market_id("IOC-1"),
+                await db.get_all_trade_logs())
+
+    ok, after, logs = asyncio.run(go())
+    assert ok is False
+    assert after.quantity == 10
+    assert logs == []
