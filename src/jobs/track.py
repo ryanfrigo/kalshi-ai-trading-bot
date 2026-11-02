@@ -52,39 +52,41 @@ async def should_exit_position(
         )
         return False, "", 0.0
 
-    # 2. ENHANCED Stop-loss exit using proper logic for YES/NO positions
-    if position.stop_loss_price:
+    stop_loss_price = position.stop_loss_price
+    take_profit_price = position.take_profit_price
+    if position.side == "NO" and (stop_loss_price or take_profit_price):
+        # NO rows written before the held-price fix store inverted levels (stop
+        # above entry, take-profit below), and at the clamped 0.01/0.99 bounds
+        # old and new rows look alike, so never trust stored NO levels:
+        # recompute them from entry, as run_tracking does for unset levels.
+        levels = await calculate_dynamic_exit_levels(position)
+        stop_loss_price = levels["stop_loss_price"] if stop_loss_price else None
+        take_profit_price = levels["take_profit_price"] if take_profit_price else None
+
+    # 2. Stop-loss exit; all prices are the held contract's own price
+    if stop_loss_price:
         from src.utils.stop_loss_calculator import StopLossCalculator
         
         should_trigger = StopLossCalculator.is_stop_loss_triggered(
             position_side=position.side,
             entry_price=position.entry_price,
             current_price=current_price,
-            stop_loss_price=position.stop_loss_price
+            stop_loss_price=stop_loss_price
         )
         
         if should_trigger:
             # Calculate the actual loss to log it
             expected_pnl = StopLossCalculator.calculate_pnl_at_stop_loss(
                 entry_price=position.entry_price,
-                stop_loss_price=position.stop_loss_price,
+                stop_loss_price=stop_loss_price,
                 quantity=position.quantity,
                 side=position.side
             )
             return True, f"stop_loss_triggered_pnl_{expected_pnl:.2f}", current_price
     
-    # 3. Take-profit exit (enhanced logic for YES/NO)
-    if position.take_profit_price:
-        take_profit_triggered = False
-        
-        if position.side == "YES":
-            # For YES positions, take profit when price rises above target
-            take_profit_triggered = current_price >= position.take_profit_price
-        else:
-            # For NO positions, take profit when price falls below target
-            take_profit_triggered = current_price <= position.take_profit_price
-            
-        if take_profit_triggered:
+    # 3. Take-profit exit: the held contract's price rose to the target
+    if take_profit_price:
+        if current_price >= take_profit_price:
             return True, "take_profit", current_price
     
     # 4. Time-based exit
