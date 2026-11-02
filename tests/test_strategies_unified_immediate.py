@@ -507,6 +507,48 @@ def test_allocation_fails_closed_when_resting_read_fails(db):
     cap.execute.assert_not_awaited()
 
 
+@pytest.mark.parametrize("kw", [
+    {"positions_error": RuntimeError("503")},                                  # read error
+    {"position_rows": [{"ticker": "MKT-1", "position_fp": "1"},
+                       {"ticker": "MKT-1", "position_fp": "2"}]},               # >1 row
+    {"position_rows": [{"ticker": "MKT-1", "position_fp": "nan"}]},            # non-finite
+    {"position_rows": [{"ticker": "MKT-1", "position_fp": "inf"}]},
+])
+def test_allocation_blocked_when_positions_read_is_unreliable(db, kw):
+    kalshi = FakeKalshi(legacy_market(70, 33))
+    for k, v in kw.items():
+        setattr(kalshi, k, v)
+    s = make_system(db, kalshi)
+    with Captured() as cap:
+        run(s._execute_portfolio_allocations(alloc(), [make_opp(0.70, 0.50)]))  # wants NO
+    cap.execute.assert_not_awaited()
+
+
+def test_allocation_flat_positions_read_is_not_held(db):
+    kalshi = FakeKalshi(legacy_market(70, 33))
+    kalshi.position_rows = []
+    s = make_system(db, kalshi)
+    with Captured() as cap:
+        run(s._execute_portfolio_allocations(alloc(), [make_opp(0.70, 0.50)]))
+    cap.execute.assert_awaited_once()
+
+
+def test_allocation_blocked_when_resting_page_is_full(db):
+    kalshi = FakeKalshi(legacy_market(70, 33))
+    kalshi.resting = [{"ticker": "OTHER", "outcome_side": "no", "remaining_count_fp": "1.00"}] * 100
+    orig = kalshi.get_orders
+
+    async def paged(**kw):
+        r = await orig(**kw)
+        r["cursor"] = "next"
+        return r
+    kalshi.get_orders = paged
+    s = make_system(db, kalshi)
+    with Captured() as cap:
+        run(s._execute_portfolio_allocations(alloc(), [make_opp(0.70, 0.50)]))
+    cap.execute.assert_not_awaited()
+
+
 # --- void-on-failure only when the exchange shows nothing (revision A)
 
 def _accepted_then_4xx(kalshi):

@@ -603,12 +603,27 @@ class UnifiedAdvancedTradingSystem:
         try:
             if await self.db_manager.get_position_by_market_and_side(market_id, opposite):
                 return True
-            held = await self.kalshi_client._held_on_side(market_id, opposite)
-            if isinstance(held, (int, float)) and not isinstance(held, bool) and held > 0:
+            # Read positions directly: _held_on_side returns None for both "flat"
+            # and "read failed", which would let a read error pass as not held.
+            from src.utils.market_prices import signed_position
+            presp = await self.kalshi_client.get_positions(ticker=market_id)
+            rows = presp.get("market_positions") if isinstance(presp, dict) else None
+            if not isinstance(rows, list):
                 return True
+            mine = [r for r in rows if isinstance(r, dict) and r.get("ticker") == market_id]
+            if len(mine) > 1:
+                return True
+            if mine:
+                signed = signed_position(mine[0])
+                if not math.isfinite(signed):
+                    return True
+                if (signed < 0 if opposite == "NO" else signed > 0):
+                    return True
             resp = await self.kalshi_client.get_orders(ticker=market_id, status="resting")
             orders = resp.get("orders") if isinstance(resp, dict) else None
             if not isinstance(orders, list):
+                return True
+            if resp.get("cursor") and len(orders) >= 100:  # full page: there may be more
                 return True
             for o in orders:
                 if isinstance(o, dict) and o.get("ticker") == market_id:
