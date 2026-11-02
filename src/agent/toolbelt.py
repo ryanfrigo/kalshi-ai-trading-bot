@@ -10,8 +10,22 @@
 from __future__ import annotations
 
 import math
+import re
 import uuid
 from typing import Any, Dict, Optional, Tuple
+
+
+_TICKER_RE = re.compile(r"[A-Z0-9][A-Z0-9._-]{0,99}")
+
+
+def _normalize_ticker(ticker) -> Optional[str]:
+    """``ticker`` stripped and upper-cased if it is then a plain Kalshi ticker, else
+    None. It is spliced into request paths, so URL syntax (/ ? # %) must never
+    get through."""
+    if not isinstance(ticker, str):
+        return None
+    t = ticker.strip().upper()
+    return t if _TICKER_RE.fullmatch(t) else None
 
 
 def cap_count(
@@ -168,6 +182,10 @@ async def place_guarded_order(
     if not max_position_pct <= cap_pct:  # also catches NaN
         max_position_pct = cap_pct
 
+    clean = _normalize_ticker(ticker)
+    if clean is None:
+        return {"ok": False, "reason": f"invalid ticker {ticker!r}"}
+    ticker = clean
     side = side.lower() if isinstance(side, str) else ""
     if side not in ("yes", "no"):
         return {"ok": False, "reason": "side must be 'yes' or 'no'"}
@@ -295,6 +313,10 @@ async def close_position(
     from src.utils.market_prices import get_market_prices
     from src.agent.journal import make_decision_record, append_decision, DEFAULT_JOURNAL_PATH
 
+    clean = _normalize_ticker(ticker)
+    if clean is None:
+        return {"ok": False, "reason": f"invalid ticker {ticker!r}", "ticker": ticker}
+    ticker = clean
     pos = await kalshi_client.get_positions(ticker=ticker)
     mine = [p for p in pos.get("market_positions", []) if p.get("ticker") == ticker]
     fp = float(mine[0].get("position_fp", "0")) if mine else 0.0

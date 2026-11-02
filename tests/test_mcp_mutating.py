@@ -359,31 +359,55 @@ async def test_trade_bad_side_is_refused_in_dry_run(ex, side):
     assert out == {"ok": False, "reason": "side must be 'yes' or 'no'"} and ex.log == []
 
 
-@pytest.mark.parametrize("ticker", [
-    "T-A/../../portfolio/balance", "", "T-A%2F..", "T-A\n", "'; DROP TABLE positions;--",
-    "T-B",
-])
+BAD_TICKERS = [
+    "T-A/../../portfolio/balance", "", "  ", "T-A%2F..", "'; DROP TABLE positions;--",
+    "T-A?status=resting", "t-a?x=1", "T-A#frag", "../markets/T-A", "T A", "-T-A", "A" * 101,
+]
+
+
+@pytest.mark.parametrize("ticker", BAD_TICKERS)
 @pytest.mark.parametrize("confirm", [False, True])
-async def test_trade_unknown_or_injected_ticker_sends_no_order(ex, ticker, confirm):
-    """These land on an endpoint that is not a tradeable market (or 404), so the
-    market check fails closed and no order goes out."""
-    try:
-        out = await server.trade(ticker=ticker, side="yes", count=1, confirm=confirm)
-    except (KalshiAPIError, ValueError, httpx.InvalidURL):
-        out = {"ok": False}
-    assert out["ok"] is False and ex.posts == [] and ex.gets_only()
+async def test_trade_injected_ticker_is_refused_before_any_request(ex, ticker, confirm):
+    """D5: validated at the toolbelt boundary, so nothing reaches the URL."""
+    out = await server.trade(ticker=ticker, side="yes", count=1, confirm=confirm)
+    assert out == {"ok": False, "reason": f"invalid ticker {ticker!r}"} and ex.log == []
 
 
-@pytest.mark.xfail(strict=True, reason="D5: ticker is spliced raw into the market URL and "
-                   "not validated; the market check reads T-A while the live POST carries "
-                   "the raw string (the exchange should reject it, so no $ at risk)")
-@pytest.mark.parametrize("ticker", ["T-A?status=resting", "T-A#frag", "../markets/T-A"])
-async def test_trade_ticker_with_url_syntax_never_reaches_the_order_payload(ex, ticker):
-    try:
-        await server.trade(ticker=ticker, side="yes", count=1, confirm=True)
-    except (KalshiAPIError, ValueError):
-        pass
-    assert ex.posts == [], [p["ticker"] for p in ex.posts]
+@pytest.mark.parametrize("ticker", BAD_TICKERS)
+async def test_close_injected_ticker_is_refused_before_any_request(ex, ticker):
+    ex.positions["T-A"] = "10.00"
+    out = await server.close(ticker=ticker, confirm=True)
+    assert out["ok"] is False and out["reason"].startswith("invalid ticker") and ex.log == []
+
+
+async def test_trade_unknown_ticker_sends_no_order(ex):
+    with pytest.raises(KalshiAPIError, match="404"):
+        await server.trade(ticker="T-B", side="yes", count=1, confirm=True)
+    assert ex.posts == []
+
+
+@pytest.mark.parametrize("ticker", ["t-a", " T-A", "T-A\n", "  t-A\t"])
+async def test_trade_lowercase_or_padded_ticker_is_sent_uppercase(ex, ticker):
+    out = await server.trade(ticker=ticker, side="yes", count=1, confirm=True)
+    assert out["ok"] is True and out["ticker"] == "T-A"
+    assert [p["ticker"] for p in ex.posts] == ["T-A"]
+    assert all(path in ("/trade-api/v2/markets/T-A",) or "/markets/" not in path
+               for _, path, _ in ex.log)
+
+
+@pytest.mark.parametrize("ticker", ["t-a", " t-a\n"])
+async def test_close_lowercase_or_padded_ticker_is_sent_uppercase(ex, ticker):
+    ex.positions["T-A"] = "3.00"
+    out = await server.close(ticker=ticker, confirm=True)
+    assert out["ok"] is True and out["ticker"] == "T-A"
+    assert [(p["ticker"], p["count"]) for p in ex.posts] == [("T-A", "3.00")]
+
+
+@pytest.mark.parametrize("ticker", ["KXHIGHNY-26NOV02-B58.5", "A", "A" * 100])
+async def test_valid_ticker_shapes_pass_validation(ex, ticker):
+    ex.markets[ticker] = ex.markets["T-A"]
+    out = await server.trade(ticker=ticker, side="yes", count=1)
+    assert out["ok"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -450,12 +474,6 @@ async def test_close_with_no_bid_is_refused(ex):
     ex.markets["T-A"]["yes_bid_dollars"] = 0
     out = await server.close(ticker="T-A", confirm=True)
     assert out["ok"] is False and "no bid" in out["reason"] and ex.posts == []
-
-
-async def test_close_injected_ticker_finds_no_position(ex):
-    ex.positions["T-A"] = "10.00"
-    out = await server.close(ticker="T-A?x=1", confirm=True)
-    assert out["ok"] is False and ex.posts == []
 
 
 async def test_close_nets_resting_sells_against_the_holding(ex):
