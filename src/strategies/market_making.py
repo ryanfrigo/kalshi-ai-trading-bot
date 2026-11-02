@@ -461,9 +461,9 @@ class AdvancedMarketMaker:
                 
                 # Add the appropriate price parameter
                 if side == "yes":
-                    order_params["yes_price"] = int(order.price)  # Price in cents
+                    order_params["yes_price"] = int(round(order.price))  # Price in cents
                 else:
-                    order_params["no_price"] = int(order.price)
+                    order_params["no_price"] = int(round(order.price))
                 
                 # Place the order
                 response = await self.kalshi_client.place_order(**order_params)

@@ -734,10 +734,6 @@ def test_mm_live_orders_map_side_to_price_field():
     assert y["action"] == n["action"] == "buy"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "_place_limit_order does int(order.price) on a float made by dollars*100, which "
-    "truncates: 0.58*100 = 57.99999999999999 -> a 57c bid instead of 58c, a "
-    "systematic 1c/contract mispricing on ~25% of tick values (250 contracts: $2.50)."))
 def test_mm_live_price_rounds_not_truncates():
     mm = _mm()
     with patch.object(settings.trading, "live_trading_enabled", True):
