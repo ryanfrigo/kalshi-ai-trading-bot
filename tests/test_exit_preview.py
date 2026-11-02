@@ -34,6 +34,11 @@ MARKETS = {
              "yes_ask_dollars": 0.62, "no_bid_dollars": 0.38, "no_ask_dollars": 0.40},
 }
 HELD = {"T-NO": "-5.00", "T-HOLD": "3.00", "T-RES": "2.00", "T-PT": "4.00"}
+ALL_ORDERS_PAGES = {  # cursor -> (orders, next cursor); the unscoped, any-status listing
+    None: ([{"order_id": "J-1", "ticker": "T-OTHER", "status": "resting"},
+            {"order_id": "Z-0", "ticker": "T-Z", "status": "canceled"}], "c2"),
+    "c2": ([{"order_id": "F-7", "ticker": "T-F", "status": "executed"}], ""),
+}
 RESTING = [
     {"order_id": "J-1", "ticker": "T-OTHER", "outcome_side": "yes", "book_side": "bid",
      "remaining_count_fp": "2.00"},
@@ -52,6 +57,9 @@ def _handler(log):
             t = q["ticker"][0]
             return httpx.Response(200, json={"market_positions": [
                 {"ticker": t, "position_fp": HELD[t]}]})
+        if path == "/trade-api/v2/portfolio/orders" and "status" not in q:
+            orders, nxt = ALL_ORDERS_PAGES[q.get("cursor", [None])[0]]
+            return httpx.Response(200, json={"orders": orders, "cursor": nxt})
         if path == "/trade-api/v2/portfolio/orders":
             t = q.get("ticker", [None])[0]
             orders = [o for o in RESTING if t is None or o["ticker"] == t]
@@ -113,7 +121,7 @@ async def test_preview_sends_only_gets_and_never_calls_order_methods(tmp_path, w
     cancel.assert_not_called()
     assert log and all(m == "GET" for m, _ in log), log
     assert not any("/events/orders" in p for _, p in log)
-    assert sum(1 for m, p in log if p == "/trade-api/v2/portfolio/orders") >= 1
+    assert sum(1 for m, p in log if p == "/trade-api/v2/portfolio/orders") >= 3
     con = sqlite3.connect(db_path)
     assert con.execute("SELECT id, status, quantity FROM positions ORDER BY id").fetchall() == before
     assert con.execute("SELECT COUNT(*) FROM trade_logs").fetchone()[0] == 0
@@ -124,13 +132,14 @@ async def test_preview_reports_the_real_exit_decisions(tmp_path, wire, capsys):
     rc = await ep.run(await _db(tmp_path), _journal(tmp_path, ["J-1"]), client_factory=factory)
     out = capsys.readouterr().out
     rows = {line.split()[0]: line for line in out.splitlines() if line.startswith("T-")}
-    assert "SELL" in rows["T-NO"] and "stop_loss_triggered" in rows["T-NO"]
-    assert "sell 5 @ 30c" in rows["T-NO"]
+    # NO bid .30 vs entry .40 is -25%: the stop-loss job sells first at
+    # .40 * (1 - .165) = 33c, then the should_exit stop finds nothing sellable
+    assert "stop_loss: sell 5 @ 33c" in rows["T-NO"]
+    assert "stop_loss_triggered_pnl_-0.15: blocked, nothing sellable" in rows["T-NO"]
     assert "hold" in rows["T-HOLD"] and "SELL" not in rows["T-HOLD"]
     assert "CLOSE" in rows["T-RES"] and "resolution: DB close at 1.00" in rows["T-RES"]
-    assert "profit_take: sell 4 @ 58c" in rows["T-PT"]
+    assert "profit_take: sell 4 @ 59c" in rows["T-PT"]  # .60 * .98, rounded
     assert "take_profit: blocked, nothing sellable" in rows["T-PT"]
-    assert "profit/stop skipped (market has no no_price field)" in rows["T-NO"]
     assert "update_position_status" in out  # resolution write reported, not made
     assert rc == 0
 
@@ -143,14 +152,64 @@ async def test_resting_report_fields_and_events_endpoint_answer(tmp_path, wire, 
     x9 = next(l for l in out.splitlines() if l.startswith("X-9"))
     assert j1.split()[2:5] == ["yes", "yes", "yes"]
     assert x9.split()[2:5] == ["NO", "NO", "NO"] and "guard blocks" in x9
-    assert "ANSWER: YES" in out and "J-1" in out
 
 
-async def test_events_endpoint_answer_is_inconclusive_without_a_match(tmp_path, wire, capsys):
+@pytest.mark.parametrize("ids, expected", [
+    (["J-1", "F-7"], "ANSWER: YES. 2 of the journal's 2 events-endpoint order id(s) are in "
+                     "GET /portfolio/orders (1 executed, 1 resting)."),
+    (["F-7"], "ANSWER: YES. 1 of the journal's 1"),  # filled only, on page 2: still proof
+    (["GONE-1"], "ANSWER: NO MATCH. None of the journal's 1 events-endpoint order id(s) "
+                 "is among the 3 orders"),
+    ([], "ANSWER: CANNOT TELL. The decision journal holds no order ids"),
+])
+async def test_events_endpoint_answer_uses_the_full_listing(tmp_path, wire, capsys, ids, expected):
+    log, factory = wire
+    await ep.run(await _db(tmp_path), _journal(tmp_path, ids), client_factory=factory)
+    assert expected in capsys.readouterr().out
+    assert all(m == "GET" for m, _ in log)
+
+
+@pytest.mark.parametrize("pages, why", [
+    ({None: ([{"order_id": "J-1"}], "c2"), "c2": ("not a list", "")}, "no 'orders' list"),
+    ({None: ([{"order_id": "J-1"}], "c2"), "c2": ([], "c2")}, "repeated a cursor"),
+])
+async def test_events_endpoint_answer_fails_closed_on_a_bad_listing(
+        tmp_path, wire, capsys, pages, why):
     _, factory = wire
-    await ep.run(await _db(tmp_path), _journal(tmp_path, ["GONE-1"]), client_factory=factory)
+    with patch.dict(ALL_ORDERS_PAGES, pages, clear=True):
+        await ep.run(await _db(tmp_path), _journal(tmp_path, ["J-1"]), client_factory=factory)
     out = capsys.readouterr().out
-    assert "ANSWER: NOT SHOWN BY THIS ACCOUNT" in out and "not evidence either way" in out
+    assert "ANSWER: CANNOT TELL. The full order listing failed" in out and why in out
+    assert "ANSWER: YES" not in out  # page 1 had a hit, but a partial listing gives no verdict
+
+
+async def test_listing_stops_at_max_pages(wire):
+    _, factory = wire
+    pages = {None: ([], "p0"), **{f"p{i}": ([], f"p{i + 1}") for i in range(ep.MAX_PAGES + 1)}}
+    client = ep.ReadOnlyClient(factory())
+    with patch.dict(ALL_ORDERS_PAGES, pages, clear=True), pytest.raises(ValueError, match="pages"):
+        await client.list_all_orders()
+    await client.close()
+
+
+async def test_db_is_opened_read_only(tmp_path, wire):
+    import aiosqlite
+    _, factory = wire
+    db_path = await _db(tmp_path)
+    calls = []
+    real = aiosqlite.connect
+
+    def spy(path, *a, **k):
+        calls.append((path, k))
+        return real(path, *a, **k)
+
+    with patch.object(aiosqlite, "connect", spy):
+        assert await ep.run(db_path, _journal(tmp_path, []), client_factory=factory) == 0
+    assert calls and all(k.get("uri") is True and str(p).endswith("?mode=ro") for p, k in calls)
+    ro = ep.ReadOnlyDB(db_path)._inner.db_path
+    async with real(ro, uri=True) as con:
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            await con.execute("DELETE FROM positions")
 
 
 async def test_proxy_refuses_mutating_methods_and_non_get_on_the_wire(wire):

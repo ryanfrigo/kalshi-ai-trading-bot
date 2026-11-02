@@ -14,9 +14,10 @@ A recorded sell is treated like a resting GTC order that filled nothing, so a
 later step in the same pass sees it through the sellable guard, as it would live.
 
 It then calls GET /portfolio/orders?status=resting once and reports the fields
-the sellable guard reads on each resting order, and whether orders the bot
-placed through POST /portfolio/events/orders (ids in the decision journal)
-show up in that list.
+the sellable guard reads on each resting order. Last, it lists every order
+(GET /portfolio/orders, no status filter, all pages) and checks whether order
+ids the bot placed through POST /portfolio/events/orders (from the decision
+journal) appear there, whatever their status.
 
 Usage:  python scripts/exit_preview.py [--db trading_system.db]
 """
@@ -25,10 +26,12 @@ import asyncio
 import logging
 import math
 import os
+from pathlib import Path
 import sys
 from typing import Any, Dict, List, Optional
 from unittest.mock import patch
 
+import aiosqlite
 import httpx
 import structlog
 
@@ -41,6 +44,9 @@ from src.utils.database import DatabaseManager  # noqa: E402
 from src.utils.market_prices import get_market_prices  # noqa: E402
 
 NOT_SENT_ID = "PREVIEW-NOT-SENT"
+ORDERS_PATH = "/trade-api/v2/portfolio/orders"
+PAGE_LIMIT = 200
+MAX_PAGES = 50
 
 
 class ReadOnlyViolation(RuntimeError):
@@ -98,6 +104,29 @@ class ReadOnlyClient:
         return {"order": {"order_id": NOT_SENT_ID, "fill_count_fp": "0.00",
                           "status": "resting"}}
 
+    async def list_all_orders(self) -> List[Dict]:
+        """Every order, any status: GET /portfolio/orders paginated by cursor.
+
+        Fails closed (raises) on a malformed page, a repeated cursor or more than
+        MAX_PAGES pages, so a partial listing is never mistaken for the whole.
+        """
+        orders: List[Dict] = []
+        cursor, seen = None, set()
+        for _ in range(MAX_PAGES):
+            params = {"limit": PAGE_LIMIT, **({"cursor": cursor} if cursor else {})}
+            resp = await self._inner._make_authenticated_request("GET", ORDERS_PATH, params=params)
+            page = resp.get("orders") if isinstance(resp, dict) else None
+            if not isinstance(page, list):
+                raise ValueError("a page of GET /portfolio/orders has no 'orders' list")
+            orders += [o for o in page if isinstance(o, dict)]
+            cursor = resp.get("cursor") or None
+            if not cursor:
+                return orders
+            if cursor in seen:
+                raise ValueError("GET /portfolio/orders repeated a cursor")
+            seen.add(cursor)
+        raise ValueError(f"GET /portfolio/orders has more than {MAX_PAGES} pages")
+
     async def close(self) -> None:
         await self._inner.close()
 
@@ -113,14 +142,21 @@ async def _async_refuse(request: httpx.Request) -> None:
 
 
 class ReadOnlyDB:
-    """Forwards the one read run_tracking makes; records and drops every write."""
+    """Forwards the one read run_tracking makes; records and drops every write.
 
-    def __init__(self, inner: DatabaseManager):
-        self._inner = inner
+    The read goes through the real DatabaseManager reader on a mode=ro URI
+    connection, so even a SELECT cannot write (no hot-journal recovery).
+    """
+
+    def __init__(self, db_path: str):
+        self._inner = DatabaseManager(db_path=Path(db_path).resolve().as_uri() + "?mode=ro")
         self.writes: List[tuple] = []
 
     async def get_open_live_positions(self):
-        return await self._inner.get_open_live_positions()
+        real_connect = aiosqlite.connect
+        with patch.object(aiosqlite, "connect",
+                          lambda path, **k: real_connect(path, uri=True, **k)):
+            return await self._inner.get_open_live_positions()
 
     def __getattr__(self, name: str):
         async def _dropped(*args, **kwargs):
@@ -136,6 +172,8 @@ async def preview_exits(client: ReadOnlyClient, db: ReadOnlyDB) -> Dict[str, Any
     real_profit = execute_mod.place_profit_taking_orders
     real_stop = execute_mod.place_stop_loss_orders
     real_sellable = execute_mod._sellable_contracts
+    real_sell = execute_mod.place_sell_limit_order
+    attempts: List[Dict] = []
     real_should_exit = track_mod.should_exit_position
 
     async def profit(*a, **k):
@@ -157,13 +195,19 @@ async def preview_exits(client: ReadOnlyClient, db: ReadOnlyDB) -> Dict[str, Any
         sellable.append({"phase": client.phase, "ticker": ticker, "sellable": value})
         return value
 
+    async def sell_spy(position, limit_price, *a, **k):
+        attempts.append({"phase": client.phase, "ticker": position.market_id,
+                         "limit_price": limit_price})
+        return await real_sell(position, limit_price, *a, **k)
+
     with patch.object(track_mod, "KalshiClient", lambda *a, **k: client), \
          patch.object(execute_mod, "place_profit_taking_orders", profit), \
          patch.object(execute_mod, "place_stop_loss_orders", stop), \
          patch.object(execute_mod, "_sellable_contracts", sellable_spy), \
+         patch.object(execute_mod, "place_sell_limit_order", sell_spy), \
          patch.object(track_mod, "should_exit_position", should_exit):
         await track_mod.run_tracking(db)
-    return {"exits": exits, "sellable": sellable}
+    return {"exits": exits, "sellable": sellable, "attempts": attempts}
 
 
 def _fmt(v, nd=2) -> str:
@@ -193,9 +237,6 @@ def exit_rows(positions, client: ReadOnlyClient, db: ReadOnlyDB,
             yb, _, nb, _ = get_market_prices(market)
             bid = yb if p.side == "YES" else nb
         steps = []
-        legacy = "yes_price" if p.side == "YES" else "no_price"
-        if market is not None and legacy not in market:
-            steps.append(f"profit/stop skipped (market has no {legacy} field)")
         for phase in ("profit_take", "stop_loss"):
             steps += _phase_steps(t, phase, client, result)
         ex = result["exits"].get(t)
@@ -227,20 +268,25 @@ def exit_rows(positions, client: ReadOnlyClient, db: ReadOnlyDB,
 
 
 def _phase_steps(ticker, phase, client, result) -> List[str]:
+    """One line per sell attempt run_tracking made for ``ticker`` in ``phase``."""
     out = []
     name = phase.split(":", 1)[-1]
-    for s in result["sellable"]:
-        if s["ticker"] != ticker or s["phase"] != phase:
-            continue
-        sold = [o for o in client.sells if o.get("ticker") == ticker and o["phase"] == phase]
-        if s["sellable"] is None:
-            out.append(f"{name}: blocked, sellable guard could not confirm holdings/resting orders")
-        elif s["sellable"] <= 0 or not sold:
-            out.append(f"{name}: blocked, nothing sellable (held minus resting = {s['sellable']})")
-        else:
-            o = sold[0]
+    pick = lambda xs: [x for x in xs if x.get("ticker") == ticker and x["phase"] == phase]
+    sold, guard = pick(client.sells), pick(result["sellable"])
+    for a in pick(result["attempts"]):
+        if sold:
+            o = sold.pop(0)
             cents = o.get("yes_price") if o.get("side") == "yes" else o.get("no_price")
-            out.append(f"{name}: sell {o.get('count')} @ {cents}c (sellable {s['sellable']})")
+            g = guard.pop(0)["sellable"] if guard else None
+            out.append(f"{name}: sell {o.get('count')} @ {cents}c (sellable {g})")
+        elif guard:
+            g = guard.pop(0)["sellable"]
+            out.append(f"{name}: blocked, sellable guard could not confirm holdings/resting orders"
+                       if g is None else
+                       f"{name}: blocked, nothing sellable (held minus resting = {g})")
+        else:
+            out.append(f"{name}: not sent, limit {int(round(a['limit_price'] * 100))}c "
+                       f"outside 1-99c")
     return out
 
 
@@ -259,7 +305,7 @@ def _remaining(o: Dict) -> Optional[float]:
     return None
 
 
-def resting_report(resp: Any, journal: List[Dict]) -> str:
+def resting_report(resp: Any) -> str:
     orders = resp.get("orders") if isinstance(resp, dict) else None
     if not isinstance(orders, list):
         return "GET /portfolio/orders?status=resting returned no 'orders' list; cannot answer."
@@ -277,29 +323,35 @@ def resting_report(resp: Any, journal: List[Dict]) -> str:
     if rows:
         out.append(_table(["order_id", "ticker", "outcome_side", "book_side",
                            "remaining_count_fp", "guard_can_read"], rows))
-    out.append("")
-    out.append(events_endpoint_verdict(orders, journal))
     return "\n".join(out)
 
 
-def events_endpoint_verdict(orders: List[Dict], journal: List[Dict]) -> str:
-    """Do orders placed via POST /portfolio/events/orders appear in the resting list?
+def events_endpoint_verdict(all_orders: Optional[List[Dict]], error: Optional[str],
+                            journal: List[Dict]) -> str:
+    """Do orders placed via POST /portfolio/events/orders appear in GET /portfolio/orders?
 
     Every order this bot places goes through place_order, which posts only to
-    /portfolio/events/orders, and the agent journal records its order_id.
+    /portfolio/events/orders, and the decision journal records its order_id. Any
+    journal id in the full listing, whatever its status, proves they appear.
     """
-    resting_ids = {o.get("order_id") for o in orders if isinstance(o, dict)}
-    placed = [r for r in journal if r.get("order_id")]
-    open_ids = {r["order_id"] for r in placed if not r.get("outcome") and not r.get("voided")}
-    seen = sorted(open_ids & resting_ids)
-    q = "Do orders placed via POST /portfolio/events/orders appear in GET /portfolio/orders?status=resting?"
-    if seen:
-        return (f"{q}\nANSWER: YES. {len(seen)} order id(s) the bot placed through the events "
-                f"endpoint (from the journal) are in the resting list: {', '.join(seen)}")
-    return (f"{q}\nANSWER: NOT SHOWN BY THIS ACCOUNT. The journal holds {len(placed)} events-endpoint "
-            f"order id(s), {len(open_ids)} not yet settled or voided, and none is in the resting "
-            f"list. That is consistent with all of them having filled or been cancelled, so it is "
-            f"not evidence either way. It needs one known resting events-endpoint order to settle.")
+    q = "Do orders placed via POST /portfolio/events/orders appear in GET /portfolio/orders?"
+    ids = {r["order_id"] for r in journal if r.get("order_id")}
+    if not ids:
+        return (f"{q}\nANSWER: CANNOT TELL. The decision journal holds no order ids, so there "
+                f"is no known events-endpoint order to look for.")
+    if all_orders is None:
+        return f"{q}\nANSWER: CANNOT TELL. The full order listing failed: {error}"
+    matched = [o for o in all_orders if o.get("order_id") in ids]
+    if matched:
+        by_status: Dict[str, int] = {}
+        for o in matched:
+            by_status[str(o.get("status") or "?")] = by_status.get(str(o.get("status") or "?"), 0) + 1
+        detail = ", ".join(f"{n} {s}" for s, n in sorted(by_status.items()))
+        return (f"{q}\nANSWER: YES. {len(matched)} of the journal's {len(ids)} events-endpoint "
+                f"order id(s) are in GET /portfolio/orders ({detail}).")
+    return (f"{q}\nANSWER: NO MATCH. None of the journal's {len(ids)} events-endpoint order id(s) "
+            f"is among the {len(all_orders)} orders GET /portfolio/orders returned. Either they are "
+            f"not listed there or the listing no longer reaches back to them.")
 
 
 def _quiet_logs() -> None:
@@ -317,9 +369,13 @@ async def run(db_path: str, journal_path: str, client_factory=None) -> int:
         from src.clients.kalshi_client import KalshiClient
         client_factory = KalshiClient
     client = ReadOnlyClient(client_factory())
-    db = ReadOnlyDB(DatabaseManager(db_path=db_path))
+    db = ReadOnlyDB(db_path)
     positions = await db.get_open_live_positions()
-    resting = await client.get_orders(status="resting")  # the one unscoped call
+    resting = await client.get_orders(status="resting")
+    try:
+        all_orders, list_error = await client.list_all_orders(), None
+    except Exception as e:  # fail closed: no verdict from a partial listing
+        all_orders, list_error = None, str(e)
     print(f"EXIT PREVIEW: next run_tracking pass, nothing sent. {len(positions)} open live position(s).")
     print("Sells are as sent before the risk governor; under a DAILY_LOSS/DRAWDOWN halt "
           "a sell goes out IOC reduce-only.\n")
@@ -331,7 +387,9 @@ async def run(db_path: str, journal_path: str, client_factory=None) -> int:
     if dropped:
         print(f"\nDB writes the pass would make (dropped): {', '.join(dropped)}")
     print()
-    print(resting_report(resting, load_journal(journal_path)))
+    print(resting_report(resting))
+    print()
+    print(events_endpoint_verdict(all_orders, list_error, load_journal(journal_path)))
     violations = client.violations
     if violations:
         print(f"\nREAD-ONLY VIOLATION, refused and not sent: {violations}", file=sys.stderr)
