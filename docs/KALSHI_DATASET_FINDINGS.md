@@ -1,5 +1,7 @@
 # Kalshi trade-dataset findings (Becker replication, our copy)
 
+Unreproduced: the underlying dataset is not in this repo. Treat every number as unverified.
+
 _Data: 72.1M trades (2023-03 → 2025-11-25), 7,314,377 settled markets with results.
 Tool: `scripts/kalshi_dataset_analysis.py`; results JSON: `data/external/analysis_results.json`._
 
@@ -71,7 +73,7 @@ buying ANY cheap contract** — YES longshots (−17% to −51%) AND NO-at-80-99
 (betting against near-certainties, −17% to −40%). The only consistently positive
 taker cells are buying expensive near-certainties (YES ≥90c: +0.1-1.0%, NO at
 99c+: +13.5%) — and those fills are only available when someone is dumping
-(= our measured adverse selection). Practical rule, now enforced: never buy
+(= our measured adverse selection). Working hypothesis (not enforced in code): never buy
 anything priced ≤20c as a taker; near-certainties only as a gated maker.
 
 ## Notes

@@ -1,5 +1,7 @@
 # Quick Flip Scalping Strategy 🎯
 
+> Experimental and unsupported. The code lives in `experimental/`. There is no backtest, and our own dataset notes (docs/KALSHI_DATASET_FINDINGS.md) show cheap-contract taker buys lose money on average.
+
 A high-frequency scalping strategy that targets rapid profits on low-priced Kalshi contracts.
 
 ## Strategy Overview
@@ -118,12 +120,12 @@ results = await run_quick_flip_strategy(
 
 ## Strategy Advantages
 
-### High Return Potential
+### Upside (unproven)
 - A 1¢ contract that moves to 2¢ is a 100% gross return before fees. This strategy has no committed backtest.
 - **Quick turnover** - capital not tied up long-term
 - **Many opportunities** - low-priced contracts are common
 
-### Low Risk Profile  
+### Risk notes
 - **Small position sizes** limit downside per trade
 - **Time-based stops** prevent large losses
 - **Diversification** across many markets reduces risk

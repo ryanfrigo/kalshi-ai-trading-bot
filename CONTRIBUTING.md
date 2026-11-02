@@ -29,7 +29,7 @@ We welcome various types of contributions:
 - Python 3.12+
 - Git
 - Kalshi API account (for testing)
-- xAI API key (for AI features)
+- OpenRouter API key (only for AI features)
 
 ### Local Development Setup
 
@@ -58,7 +58,7 @@ We welcome various types of contributions:
 
 5. **Initialize database**
    ```bash
-   python init_database.py
+   python scripts/init_database.py
    ```
 
 ## 📝 Code Style and Standards

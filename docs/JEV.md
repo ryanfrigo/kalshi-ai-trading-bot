@@ -1,5 +1,7 @@
 # Jev on Kalshi: what worked, what didn't
 
+These are one-off measurements from 2026-09-25. The inputs are not committed, so you cannot reproduce them from this repo.
+
 [Jev](https://openrouter.ai/~typesafe/jev-latest) is TypeSafe's "decisions" model. You don't chat with it. You send a `state` (facts) and typed questions, and it sends back calibrated probabilities in about 0.3 seconds for roughly $0.00002 a call. It isn't on OpenRouter's chat endpoint at all — it lives at `POST https://openrouter.ai/api/alpha/decisions`, and `~typesafe/jev-latest` resolved to `typesafe/jev-1.13-20260917` when I tested it.
 
 A fast, cheap, calibrated probability engine sounds made for prediction markets. So on 2026-09-25 I pointed it at a live account and measured it. Most of what I expected was wrong.

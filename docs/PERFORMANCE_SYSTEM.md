@@ -1,11 +1,11 @@
 # 🎯 Kalshi Automated Performance Analysis System
 
-A comprehensive, AI-powered performance analysis and risk management system for the Kalshi prediction market trading platform. This system provides real-time monitoring, automated analysis using Grok4, and actionable recommendations to optimize trading performance.
+A comprehensive, AI-powered performance analysis and risk management system for the Kalshi prediction market trading platform. This system provides real-time monitoring, automated analysis using the configured LLM, and actionable recommendations to optimize trading performance.
 
 ## 🚀 **System Overview**
 
 ### **What It Does**
-- **Automated Performance Analysis**: Runs daily/weekly analysis with Grok4 AI
+- **Automated Performance Analysis**: Runs daily/weekly analysis with the configured LLM
 - **Risk Management**: Monitors capital utilization, cash reserves, position limits
 - **Real-time Alerts**: Immediate notifications for critical issues
 - **Action Item Generation**: Specific, prioritized recommendations
@@ -15,26 +15,11 @@ A comprehensive, AI-powered performance analysis and risk management system for 
 ### **Key Features**
 - **Health Score (0-100)**: Overall system health rating
 - **Risk Checks**: Automated monitoring of 5+ critical risk factors
-- **Grok4 Intelligence**: AI-powered analysis and recommendations
+- **LLM Intelligence**: AI-powered analysis and recommendations
 - **Emergency Intervention**: Immediate analysis for critical situations
 - **Scheduler**: Automated daily (9 AM) and weekly (Monday) analysis
 - **Interactive CLI**: Command-line interface for manual operations
 
-## 📊 **Current System Status**
-
-Based on the latest analysis:
-- **Health Score**: 15.0/100 (CRITICAL)
-- **Critical Issues**: 2 (Cash reserves, Capital utilization)
-- **Warnings**: 2 (Position concentration, Single position risk)
-- **Available Cash**: $9.84 (CRITICAL - need ~$90+ for safety)
-- **Capital Utilization**: 91.4% (DANGEROUS - should be <80%)
-- **Active Positions**: 16 (HIGH - optimal: 10-12)
-
-### **Immediate Actions Required**
-1. **🚨 CRITICAL**: Build cash reserves immediately (close 2-3 positions)
-2. **🚨 CRITICAL**: Reduce capital utilization to <80%
-3. **⚠️ HIGH**: Reduce position count to improve concentration
-4. **⚠️ MEDIUM**: Analyze manual vs automated performance gap
 
 ## 🛠 **Installation & Setup**
 
@@ -64,7 +49,7 @@ python3 performance_system_manager.py --interactive
 ## 📋 **System Components**
 
 ### **1. Automated Performance Analyzer** (`src/jobs/automated_performance_analyzer.py`)
-- **Core Engine**: Main analysis logic with Grok4 integration
+- **Core Engine**: Main analysis logic with the configured LLM integration
 - **Risk Checks**: 5 automated risk management checks
 - **Performance Metrics**: Comprehensive trading statistics
 - **Action Items**: Prioritized recommendations (CRITICAL, HIGH, MEDIUM, LOW)
@@ -114,14 +99,11 @@ python3 performance_system_manager.py --interactive
 - **Recommendation**: Extract patterns from profitable manual trades
 - **Impact**: Could improve automated trading win rate
 
-## 🤖 **Grok4 AI Integration**
+## 🤖 **LLM Integration**
 
 ### **Analysis Cost**: ~$0.01-0.02 per analysis
 ### **Response Time**: 25-30 seconds
 ### **Analysis Depth**: 3,000-4,000 character detailed reports
-
-### **Sample Grok4 Insights**:
-> "The system shows severe risk exposure, poor performance, and over-reliance on automation, leading to significant losses. Critical cash shortage and overutilization require immediate intervention..."
 
 ### **Key Capabilities**:
 - **Quantitative Analysis**: Specific metrics and thresholds
@@ -192,7 +174,7 @@ python3 performance_system_manager.py --analyze
 
 ### **Emergency Situations**
 ```bash
-# Immediate analysis with Grok4
+# Immediate analysis with the configured LLM
 python3 performance_system_manager.py --emergency
 
 # Interactive troubleshooting
@@ -289,7 +271,7 @@ python3 src/jobs/performance_dashboard_integration.py --summary
 
 This system provides:
 - **98% Automated**: Minimal manual intervention required
-- **Real-time**: <30 second analysis with Grok4
+- **Real-time**: <30 second analysis with the configured LLM
 - **Cost-effective**: ~$0.30/month for daily analysis
 - **Comprehensive**: 20+ metrics and 5+ risk checks
 - **Actionable**: Specific steps with target dates

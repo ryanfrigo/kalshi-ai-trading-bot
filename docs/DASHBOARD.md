@@ -17,7 +17,7 @@ A comprehensive Streamlit-based dashboard for monitoring and analyzing all aspec
 - **Capital deployment**: How funds are allocated across strategies
 
 ### 🤖 LLM Analysis & Review
-- **Query tracking**: Every Grok request and response logged
+- **Query tracking**: Every LLM request and response logged
 - **Usage statistics**: Token consumption, costs, query frequency
 - **Strategy breakdown**: LLM usage by trading strategy
 - **Response analysis**: Review AI predictions and confidence levels
@@ -55,10 +55,7 @@ pip install streamlit pandas plotly
 ### Quick Start
 ```bash
 # Launch the dashboard
-python launch_dashboard.py
-
-# Or run directly with Streamlit
-streamlit run trading_dashboard.py
+python cli.py dashboard
 ```
 
 The dashboard will open automatically in your browser at `http://localhost:8501`
@@ -84,7 +81,7 @@ Use the sidebar to navigate between different sections:
 The dashboard automatically tracks and displays:
 
 ### What's Logged
-- **Every Grok query**: Complete prompt and response
+- **Every LLM query**: Complete prompt and response
 - **Strategy attribution**: Which strategy made the query
 - **Query type**: Movement prediction, market analysis, etc.
 - **Market context**: Which market was being analyzed
@@ -92,7 +89,7 @@ The dashboard automatically tracks and displays:
 - **Extracted data**: Confidence levels, decisions, etc.
 
 ### Benefits
-- **Review AI reasoning**: See exactly what Grok is thinking
+- **Review AI reasoning**: See exactly what the LLM is thinking
 - **Optimize prompts**: Identify successful vs. failed queries
 - **Cost management**: Track and control AI expenses
 - **Strategy improvement**: Understand which strategies use AI effectively
@@ -227,7 +224,7 @@ The dashboard is responsive and works on:
 ## 🎯 Quick Start Summary
 
 1. **Install**: `pip install -e ".[dashboard]"`
-2. **Launch**: `python launch_dashboard.py`
+2. **Launch**: `python cli.py dashboard`
 3. **Browse**: Navigate to different sections via sidebar
 4. **Analyze**: Review strategy performance and LLM usage
 5. **Optimize**: Use insights to improve trading strategies
