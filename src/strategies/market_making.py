@@ -144,6 +144,10 @@ class AdvancedMarketMaker:
                 if current_no_price > 1.0:
                     current_no_price = current_no_price / 100.0
                 
+                # Same-side asks (dollars) cap our bids; 0 = no ask on that side
+                yes_ask = self._book_ask(market_data, 'yes_ask_dollars', 'yes_ask')
+                no_ask = self._book_ask(market_data, 'no_ask_dollars', 'no_ask')
+
                 # Skip if prices are extreme (hard to make markets) - relaxed thresholds
                 if current_yes_price < 0.02 or current_yes_price > 0.98:
                     continue
@@ -167,7 +171,8 @@ class AdvancedMarketMaker:
                 if yes_edge_result.passes_filter or no_edge_result.passes_filter:
                     # Calculate market making opportunity
                     opportunity = await self._calculate_market_making_opportunity(
-                        market, current_yes_price, current_no_price, ai_prob, ai_confidence
+                        market, current_yes_price, current_no_price, ai_prob, ai_confidence,
+                        yes_ask, no_ask
                     )
                     
                     if opportunity and opportunity.total_expected_profit > 0:
@@ -184,13 +189,21 @@ class AdvancedMarketMaker:
         opportunities.sort(key=lambda x: x.total_expected_profit, reverse=True)
         return opportunities
 
+    @staticmethod
+    def _book_ask(market_data: Dict, dollars_key: str, cents_key: str) -> float:
+        """Best ask in dollars from either field format; 0.0 when the side has none."""
+        ask = float(market_data.get(dollars_key, 0) or market_data.get(cents_key, 0) or 0)
+        return ask / 100.0 if ask > 1.0 else ask
+
     async def _calculate_market_making_opportunity(
         self,
         market: Market,
         yes_price: float,
         no_price: float, 
         ai_prob: float,
-        ai_confidence: float
+        ai_confidence: float,
+        yes_ask: float = 0.0,
+        no_ask: float = 0.0
     ) -> Optional[MarketMakingOpportunity]:
         """
         Calculate optimal market making prices and expected profits.
@@ -227,6 +240,15 @@ class AdvancedMarketMaker:
             optimal_yes_ask = max(0.01, min(0.99, optimal_yes_ask))
             optimal_no_bid = max(0.01, min(0.99, optimal_no_bid))
             optimal_no_ask = max(0.01, min(0.99, optimal_no_ask))
+
+            # A bid at or above the same-side ask fills at once as a taker: keep each bid
+            # one cent under its ask, and quote no side whose ask is missing or <= 1c
+            yes_quotable = yes_ask > 0.01
+            no_quotable = no_ask > 0.01
+            if yes_quotable:
+                optimal_yes_bid = max(0.01, min(optimal_yes_bid, yes_ask - 0.01))
+            if no_quotable:
+                optimal_no_bid = max(0.01, min(optimal_no_bid, no_ask - 0.01))
             
             # Calculate expected profits
             yes_spread_profit = (optimal_yes_ask - optimal_yes_bid) * ai_confidence
@@ -237,6 +259,8 @@ class AdvancedMarketMaker:
             yes_size, no_size = self._calculate_optimal_sizes(
                 yes_edge, no_edge, volatility, ai_confidence
             )
+            yes_size = yes_size if yes_quotable else 0
+            no_size = no_size if no_quotable else 0
             
             return MarketMakingOpportunity(
                 market_id=market.market_id,

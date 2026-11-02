@@ -709,7 +709,8 @@ def test_mm_analysis_works_only_on_flat_shape_real_api_never_returns():
 
 
 def _opportunity(mm, yes=0.50, no=0.48, ai=0.7, conf=1.0):
-    return run(mm._calculate_market_making_opportunity(_mm_market(), yes, no, ai, conf))
+    # Asks default wide (0.99) so the same-side-ask clamp does not bind unless a test asks for it.
+    return run(mm._calculate_market_making_opportunity(_mm_market(), yes, no, ai, conf, 0.99, 0.99))
 
 
 def test_mm_quotes_stay_in_bounds_and_bids_sum_below_a_dollar():
@@ -748,23 +749,26 @@ def test_mm_live_no_price_floors_with_epsilon_absorbing_float_error():
     assert mm.kalshi_client.orders[0]["no_price"] == 29
 
 
-def _mm_bid_sent(ai_prob, side):
+def _mm_bid_sent(ai_prob, side, default_spread=False, book=(0.40, 0.42, 0.58, 0.60)):
     """Run the real path (analysis -> opportunity -> LimitOrder -> _place_limit_order)
     on a 40c/42c YES book (NO bid 58c / ask 60c) with a 3c spread; return the cents sent.
 
     The nested-market read is an owner-gated xfail, so the book is the flattened
     shape (as in test_mm_analysis_works_only_on_flat_shape...). max_spread is pinned to
-    min_spread so the quoted spread really is ~3c rather than the 10c default cap.
+    min_spread so the quoted spread really is ~3c rather than the 10c default cap,
+    unless default_spread=True (the shipped max_spread). Returns None if the side
+    was not quoted.
     """
     mm = _mm()
-    mm.min_spread = mm.max_spread = 0.03
-    mm.kalshi_client.market = v2_market(0.40, 0.42, 0.58, 0.60)["market"]
+    if not default_spread:
+        mm.min_spread = mm.max_spread = 0.03
+    mm.kalshi_client.market = v2_market(*book)["market"]
     mm._get_ai_analysis = AsyncMock(return_value={"probability": ai_prob, "confidence": 0.9})
     opp = run(mm.analyze_market_making_opportunities([_mm_market()]))[0]
     with patch.object(settings.trading, "live_trading_enabled", True):
         run(mm._place_market_making_orders(opp))
-    sent = {o["side"]: o for o in mm.kalshi_client.orders}[side]
-    return sent["yes_price" if side == "yes" else "no_price"]
+    sent = {o["side"]: o for o in mm.kalshi_client.orders}.get(side)
+    return sent and sent["yes_price" if side == "yes" else "no_price"]
 
 
 def test_mm_yes_bid_stays_below_the_ask_on_a_40_42_book():
@@ -775,6 +779,19 @@ def test_mm_yes_bid_stays_below_the_ask_on_a_40_42_book():
 def test_mm_no_bid_stays_below_the_ask_on_a_40_42_book():
     # AI favours NO: computed NO bid is 59.77c; round() sent 60c == the NO ask (100 - 40).
     assert _mm_bid_sent(0.2, "no") < 60
+
+
+def test_mm_default_spread_bids_clamp_one_cent_under_same_side_ask():
+    # Default max_spread 0.10: unclamped bids were ~46c YES vs a 42c ask, ~63c NO vs a 60c ask.
+    assert _mm_bid_sent(0.7, "yes", default_spread=True) <= 41
+    assert _mm_bid_sent(0.2, "no", default_spread=True) <= 59
+
+
+def test_mm_side_with_one_cent_or_missing_ask_is_not_quoted():
+    for book in [(0.40, 0.42, 0.58, 0.01), (0.40, 0.42, 0.58, 0)]:  # NO ask 1c / absent
+        assert _mm_bid_sent(0.2, "no", default_spread=True, book=book) is None
+    for book in [(0.40, 0.01, 0.58, 0.60), (0.40, 0, 0.58, 0.60)]:  # YES ask 1c / absent
+        assert _mm_bid_sent(0.7, "yes", default_spread=True, book=book) is None
 
 
 def test_mm_refused_order_is_marked_failed():
