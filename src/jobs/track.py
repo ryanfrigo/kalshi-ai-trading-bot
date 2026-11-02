@@ -246,21 +246,24 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
                             exit_sell_failures += 1
                             continue
 
-                        from src.jobs.execute import place_sell_limit_order
+                        from src.jobs.execute import place_sell_limit_order, reconcile_exit_fill
+                        order = {}
                         sell_ok = await place_sell_limit_order(
                             position=position,
                             limit_price=exit_price,
                             db_manager=db_manager,
                             kalshi_client=kalshi_client,
+                            order_out=order,
                         )
-                        if not sell_ok:
-                            logger.error(
-                                f"Sell order failed for {position.market_id} ({exit_reason}); "
-                                f"position remains open. Will retry next cycle."
-                            )
+                        # Close only what the fill count says sold; a resting sell
+                        # stays open and the sellable guard stops a second one.
+                        await reconcile_exit_fill(
+                            position, order, sell_ok, exit_price, db_manager, exit_reason)
+                        if order:
+                            exit_sell_orders_placed += 1
+                        else:
                             exit_sell_failures += 1
-                            continue
-                        exit_sell_orders_placed += 1
+                        continue
 
                     # Calculate PnL
                     pnl = (exit_price - position.entry_price) * position.quantity
@@ -278,10 +281,7 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
                         rationale=f"{position.rationale} | EXIT: {exit_reason}"
                     )
 
-                    # Record the exit. For non-resolution exits the sell order
-                    # may still be resting unfilled — the local DB now optimistically
-                    # treats it as closed, which mirrors the existing behavior of
-                    # place_profit_taking_orders / place_stop_loss_orders.
+                    # Only market resolution reaches here: Kalshi settles it, no sell.
                     await db_manager.add_trade_log(trade_log)
                     await db_manager.update_position_status(position.id, 'closed')
 

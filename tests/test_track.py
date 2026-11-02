@@ -209,7 +209,12 @@ async def test_non_resolution_exit_closes_after_successful_sell(
     })
     mock_api.close = AsyncMock()
 
-    mock_place_sell.return_value = True
+    # A close needs the fill count, not mere acceptance: report a full fill.
+    async def filled_sell(position, order_out=None, **kw):
+        order_out.update({"order": {"order_id": "o1",
+                                    "fill_count_fp": f"{position.quantity:.2f}"}})
+        return True
+    mock_place_sell.side_effect = filled_sell
 
     try:
         await run_tracking(db_manager=db_manager)

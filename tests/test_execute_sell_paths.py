@@ -34,6 +34,9 @@ def _client(order_resp=_DEFAULT, market=None, balance=1_000_000):
                               if order_resp is _DEFAULT else order_resp)
     c.get_market = AsyncMock(return_value={"market": market if market is not None else {}})
     c.get_balance = AsyncMock(return_value={"balance": balance})
+    # Exit sells first check what the exchange says is sellable: hold plenty, nothing resting.
+    c._held_on_side = AsyncMock(return_value=1_000_000.0)
+    c.get_orders = AsyncMock(return_value={"orders": [], "cursor": ""})
     return c
 
 
