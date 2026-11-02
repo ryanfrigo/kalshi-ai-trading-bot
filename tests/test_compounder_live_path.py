@@ -103,6 +103,14 @@ def test_old_cent_format_last_price_is_normalised():
     assert [x["ticker"] for x in c._find_no_candidates([keep, drop])] == ["KXA"]
 
 
+@pytest.mark.parametrize("last", [None, "", "0", "0.0000", 0, 0.0, "-0.01", "garbage"])
+def test_missing_or_nonpositive_last_price_is_not_a_candidate(last):
+    m = _market(last=None)
+    if last is not None:
+        m["last_price_dollars"] = last
+    assert _compounder(FakeClient())._find_no_candidates([m]) == []
+
+
 @pytest.mark.parametrize("volume,kept", [("9", False), ("10", True)])
 def test_minimum_volume_boundary(volume, kept):
     c = _compounder(FakeClient())
@@ -116,11 +124,6 @@ def test_sports_prefix_mention_titles_and_expired_markets_are_skipped():
     assert c._find_no_candidates([_market(hours=-1)]) == []
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "safe_compounder.py:456 treats a missing last price as 0.00, i.e. a 0% YES chance, so "
-    "estimate_true_no_prob returns 0.99. Payload with volume 500 and no last_price, YES bid 0.10 "
-    "(NO ask $0.90): bot sees 9c of edge and buys NO at $0.89 on a price it never saw. Fix: "
-    "skip candidates with no last price."))
 def test_market_without_last_price_is_not_a_candidate():
     c = _compounder(FakeClient())
     assert c._find_no_candidates([_market(last=None)]) == []

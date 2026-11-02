@@ -225,6 +225,17 @@ def market_confidence_score(ticker: str, orderbook: dict, market: dict) -> Tuple
 # SafeCompounder class
 # -----------------------------------------------------------------------
 
+def _has_last_price(m: Dict) -> bool:
+    """True iff the market carries a last price > 0 (missing, "", 0 and "0.0000" all fail)."""
+    for k in ("last_price_dollars", "last_price"):
+        try:
+            if float(m.get(k) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 def _to_int_count(v) -> int:
     """Coerce a Kalshi count field to int. The v2 API returns these as strings
     ('0.00', '16.00'); comparing a str to an int raises TypeError."""
@@ -453,6 +464,8 @@ class SafeCompounder:
             if int(float(m.get("volume_fp", 0) or m.get("volume", 0) or 0)) < MIN_VOLUME:
                 continue
 
+            if not _has_last_price(m):
+                continue  # no observed price: don't treat it as a 0% YES chance
             yes_last = float(m.get("last_price_dollars", 0) or m.get("last_price", 0) or 0)
             # Convert old cent format to dollar format if needed
             if yes_last > 1.0:
