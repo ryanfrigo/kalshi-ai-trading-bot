@@ -448,31 +448,6 @@ async def _read_ticker_state(kalshi_client: KalshiClient, ticker: str, logger):
         return None
 
 
-async def void_position_if_exchange_flat(db_manager: DatabaseManager, kalshi_client: KalshiClient,
-                                         position_id: int, ticker: str) -> bool:
-    """Void a pre-inserted position row only if the exchange shows nothing on ``ticker``.
-
-    A failed ``execute_position`` does not prove no order went out: KalshiClient
-    retries a POST under one client_order_id, so an accepted first attempt can
-    surface as a 4xx duplicate, and ``update_position_to_live`` can raise after
-    the order was accepted. So read positions and resting orders first. Void
-    only when both reads succeed and show zero held and zero resting; any read
-    failure, held contract, resting order or unreadable row leaves the row open.
-    Returns True if the row was voided.
-    """
-    logger = get_trading_logger("void_guard")
-    state = await _read_ticker_state(kalshi_client, ticker, logger)
-    if state is None:
-        logger.error(f"Row {position_id} on {ticker} left open: exchange state unknown.")
-        return False
-    held, n_orders, _ = state
-    if held != 0 or n_orders:
-        logger.error(f"Row {position_id} on {ticker} left open: exchange shows a holding or a resting order.")
-        return False
-    await db_manager.update_position_status(position_id, 'voided')
-    return True
-
-
 STALE_FAILED_ROW_MINUTES = 10
 
 
