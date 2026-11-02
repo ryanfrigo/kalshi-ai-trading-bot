@@ -142,8 +142,9 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None, live: bool 
     
     Args:
         db_manager: Optional DatabaseManager instance for testing.
-        live: False (default) never calls place_order/cancel_order: exits are simulated
-            in the DB (trade_logs row + position closed). True sends real sells.
+        live: False (default) never calls place_order/cancel_order and makes NO DB write on
+            any exit path (log lines only); a live=1 row may be a real holding. True sends
+            and records real sells.
     """
     logger = get_trading_logger("position_tracking")
     logger.info("Starting enhanced position tracking job with sell limit orders.")
@@ -159,7 +160,7 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None, live: bool 
         # filled exit closes here and never reaches the settlement log below.
         from src.jobs.execute import (place_profit_taking_orders, place_stop_loss_orders,
                                       reconcile_resting_exit)
-        for position in await db_manager.get_open_live_positions():
+        for position in (await db_manager.get_open_live_positions()) if live else []:
             if position.exit_order_id:
                 try:
                     await reconcile_resting_exit(position, kalshi_client, db_manager)
@@ -261,9 +262,9 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None, live: bool 
                             continue
 
                         from src.jobs.execute import (place_sell_limit_order, reconcile_exit_fill,
-                                                      simulate_paper_exit)
+                                                      log_paper_exit)
                         if not live:
-                            if await simulate_paper_exit(position, exit_price, db_manager, exit_reason):
+                            if log_paper_exit(position, exit_price, exit_reason):
                                 exit_sell_orders_placed += 1
                             else:
                                 exit_sell_failures += 1
@@ -285,6 +286,11 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None, live: bool 
                             exit_sell_orders_placed += 1
                         else:
                             exit_sell_failures += 1
+                        continue
+
+                    if not live:
+                        logger.info(f"PAPER: would record {position.market_id} closed via "
+                                    f"{exit_reason}; no DB write in paper mode.")
                         continue
 
                     # Calculate PnL

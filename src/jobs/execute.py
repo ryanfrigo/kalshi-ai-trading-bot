@@ -200,29 +200,17 @@ async def _record_ioc_exit(position: Position, order: Dict, limit_price: float,
     return False
 
 
-async def simulate_paper_exit(position: Position, limit_price: float,
-                              db_manager: DatabaseManager, reason: str) -> bool:
-    """Paper-mode exit: the counterpart of execute_position's simulated entry.
+def log_paper_exit(position: Position, limit_price: float, reason: str) -> bool:
+    """Paper-mode exit: a log line and NOTHING else.
 
-    Sends nothing to the exchange. Assumes a full fill at ``limit_price`` and makes
-    exactly the two DB writes a live full fill makes (see reconcile_exit_fill):
-      1. ``trade_logs`` row: entry/exit price, quantity, pnl, rationale "| EXIT: <reason>"
-      2. ``positions.status`` -> 'closed'
+    No exchange request and no DB write. The DB cannot tell a paper-simulated row from a
+    real holding (execute_position's paper branch also stores live=1), so closing or
+    logging a P&L for the row would corrupt a real position's management.
     """
-    logger = get_trading_logger("paper_exit")
-    if not 0 < limit_price < 1:
-        logger.warning(f"PAPER exit for {position.market_id} skipped: price {limit_price} out of range.")
-        return False
-    await db_manager.add_trade_log(TradeLog(
-        market_id=position.market_id, side=position.side,
-        entry_price=position.entry_price, exit_price=limit_price,
-        quantity=position.quantity,
-        pnl=(limit_price - position.entry_price) * position.quantity,
-        entry_timestamp=position.timestamp, exit_timestamp=datetime.now(),
-        rationale=f"{position.rationale} | EXIT: {reason} (PAPER)"))
-    await db_manager.update_position_status(position.id, 'closed')
-    logger.info(f"📝 PAPER EXIT SIMULATED for {position.market_id} ({reason}) at "
-                f"{limit_price:.2f} - no order sent, position closed in DB.")
+    cents = int(round(limit_price * 100))
+    get_trading_logger("paper_exit").info(
+        f"PAPER: would sell {position.quantity} {position.side} {position.market_id} "
+        f"at {cents}c ({reason})")
     return True
 
 
@@ -563,7 +551,7 @@ async def place_profit_taking_orders(
     
     Returns:
         Dictionary with results: {'orders_placed': int, 'positions_processed': int}; paper mode adds 'simulated': int
-        (live=False, the default, sends nothing: exits are simulated in the DB)
+        (live=False, the default, sends nothing and writes nothing: exits are log-only)
     """
     logger = get_trading_logger("profit_taking")
     
@@ -611,7 +599,7 @@ async def place_profit_taking_orders(
                         logger.info(f"💰 PROFIT TARGET HIT: {position.market_id} - {profit_pct:.1%} profit (${unrealized_pnl:.2f})")
                         
                         if not live:
-                            if await simulate_paper_exit(position, sell_price, db_manager, "profit_take"):
+                            if log_paper_exit(position, sell_price, "profit_take"):
                                 results['simulated'] = results.get('simulated', 0) + 1
                             continue
                         # Place sell limit order
@@ -658,7 +646,7 @@ async def place_stop_loss_orders(
     
     Returns:
         Dictionary with results: {'orders_placed': int, 'positions_processed': int}; paper mode adds 'simulated': int
-        (live=False, the default, sends nothing: exits are simulated in the DB)
+        (live=False, the default, sends nothing and writes nothing: exits are log-only)
     """
     logger = get_trading_logger("stop_loss_orders")
     
@@ -705,7 +693,7 @@ async def place_stop_loss_orders(
                         logger.info(f"🛡️ STOP LOSS TRIGGERED: {position.market_id} - {loss_pct:.1%} loss (${unrealized_pnl:.2f})")
                         
                         if not live:
-                            if await simulate_paper_exit(position, stop_price, db_manager, "stop_loss"):
+                            if log_paper_exit(position, stop_price, "stop_loss"):
                                 results['simulated'] = results.get('simulated', 0) + 1
                             continue
                         # Place stop-loss sell order

@@ -330,14 +330,24 @@ def test_env_var_is_a_documented_but_unreferenced_switch():
 # strict xfails: default-mode paths that DO send a mutating request
 # --------------------------------------------------------------------------
 
-async def _seed_live_row(tmp_path, ticker="T-PT"):
+def _dump(tmp_path):
+    """Every row of every table, for byte-identical before/after comparison."""
+    import sqlite3
+    con = sqlite3.connect(str(tmp_path / "trading_system.db"))
+    out = {}
+    for (t,) in con.execute("select name from sqlite_master where type='table' order by name"):
+        out[t] = con.execute(f"select * from {t} order by 1").fetchall()
+    return out
+
+
+async def _seed_live_row(tmp_path, ticker="T-PT", take_profit=0.48):
     from src.utils.database import DatabaseManager, Position
     db = DatabaseManager(db_path=str(tmp_path / "trading_system.db"))
     await db.initialize()
     # a row exactly as a prior `--live` run (or a paper "simulated" fill, see
     # execute_position's else-branch) leaves it: open, live=1
     await db.add_position(Position(ticker, "YES", 0.40, 4, datetime.now(), live=True,
-                                   confidence=0.7, stop_loss_price=0.37, take_profit_price=0.48))
+                                   confidence=0.7, stop_loss_price=0.37, take_profit_price=take_profit))
     return db
 
 
@@ -348,6 +358,7 @@ async def test_run_default_position_tracking_sends_no_mutation(wire, tmp_path, a
     wire.held["T-PT"] = "4.00"
     wire.markets["T-PT"] = {"status": "active", "yes_price": 60, "yes_bid_dollars": 0.60,
                             "yes_ask_dollars": 0.62, "no_bid_dollars": 0.38, "no_ask_dollars": 0.40}
+    before = _dump(tmp_path)
     bot = beast_mode_bot.BeastModeBot(live_mode=False)          # exactly what cmd_run builds without --live
     assert bot.live_mode is False
 
@@ -363,12 +374,7 @@ async def test_run_default_position_tracking_sends_no_mutation(wire, tmp_path, a
         await bot._run_position_tracking(db, MagicMock())
     assert wire.mutations == [], f"paper-mode run sent {wire.mutations}"
     assert wire.calls.n == {"place_order": 0, "cancel_order": 0}
-    import sqlite3
-    con = sqlite3.connect(str(tmp_path / "trading_system.db"))
-    # documented paper-exit DB writes: one trade_logs row + position closed
-    assert con.execute("select status from positions").fetchall() == [("closed",)]
-    rows = con.execute("select market_id, quantity, rationale from trade_logs").fetchall()
-    assert len(rows) == 1 and rows[0][:2] == ("T-PT", 4) and "EXIT: profit_take (PAPER)" in rows[0][2]
+    assert _dump(tmp_path) == before, "paper run wrote to the DB"
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
@@ -608,18 +614,20 @@ _PT_MARKET = {"status": "active", "yes_price": 60, "yes_bid_dollars": 0.60,
               "yes_ask_dollars": 0.62, "no_bid_dollars": 0.38, "no_ask_dollars": 0.40}
 
 
-async def _tracking_setup(wire, tmp_path):
+async def _tracking_setup(wire, tmp_path, **kw):
     from src.utils.database import DatabaseManager
-    await _seed_live_row(tmp_path)
+    await _seed_live_row(tmp_path, **kw)
     wire.held["T-PT"] = "4.00"
     wire.markets["T-PT"] = dict(_PT_MARKET)
     return DatabaseManager(db_path=str(tmp_path / "trading_system.db"))
 
 
-async def test_run_tracking_default_sends_no_mutation_and_simulates_exit(wire, tmp_path):
+async def test_run_tracking_default_sends_no_mutation_and_writes_nothing(wire, tmp_path):
     from src.jobs.track import run_tracking
     db = await _tracking_setup(wire, tmp_path)
+    before = _dump(tmp_path)
     await run_tracking(db)
+    assert _dump(tmp_path) == before
     assert wire.log and wire.mutations == []
     assert wire.calls.n == {"place_order": 0, "cancel_order": 0}
 
@@ -656,8 +664,42 @@ async def test_profit_and_stop_helpers_default_paper(wire, tmp_path, helper, mar
     import src.jobs.execute as ex_mod
     db = await _tracking_setup(wire, tmp_path)
     wire.markets["T-PT"] = dict(market)
+    before = _dump(tmp_path)
     c = KalshiClient()
     res = await getattr(ex_mod, helper)(db, c)
     await c.close()
     assert res["simulated"] == 1 and res["orders_placed"] == 0
+    assert _dump(tmp_path) == before
     assert wire.mutations == [] and wire.calls.n["place_order"] == 0
+
+
+@pytest.mark.parametrize("name,market,pos_kw,reason", [
+    ("stop", {"status": "active", "yes_bid_dollars": 0.20, "yes_ask_dollars": 0.22,
+              "no_bid_dollars": 0.78, "no_ask_dollars": 0.80}, {}, "stop_loss"),
+    ("profit", _PT_MARKET, {}, "profit_take"),
+    # exit-level path: +15% hits the row's take_profit_price (0.45) but not the helper's 20%
+    ("exit_level", {"status": "active", "yes_bid_dollars": 0.46, "yes_ask_dollars": 0.48,
+                    "no_bid_dollars": 0.52, "no_ask_dollars": 0.54}, {"take_profit": 0.45}, "take_profit"),
+    # resolution: used to close the row and log pnl with no sell
+    ("resolution", {"status": "closed", "result": "yes", "yes_bid_dollars": 0.0,
+                    "no_bid_dollars": 0.0}, {}, "market_resolution"),
+])
+async def test_paper_run_leaves_db_byte_identical_and_sends_nothing(wire, tmp_path, name, market, pos_kw, reason):
+    import src.jobs.execute as ex_mod
+    from src.jobs.track import run_tracking
+    db = await _tracking_setup(wire, tmp_path, **pos_kw)
+    wire.markets["T-PT"] = dict(market)
+    before = _dump(tmp_path)
+    assert before["positions"], "seed row missing"
+    seen = []
+    real = ex_mod.log_paper_exit
+    with patch.object(ex_mod, "log_paper_exit", lambda p, px, r: (seen.append(r), real(p, px, r))[1]):
+        await run_tracking(db)                     # paper (default)
+    assert _dump(tmp_path) == before, f"{name}: paper run wrote to the DB"
+    assert wire.mutations == [] and wire.calls.n == {"place_order": 0, "cancel_order": 0}
+    assert wire.log, "never reached the exchange"
+    if name != "resolution":
+        assert seen and seen[0] == reason, f"{name}: expected first paper exit {reason!r}, got {seen}"
+    # control: the same scenario under live=True acts, so this test can fail
+    await run_tracking(db, live=True)
+    assert wire.mutations or _dump(tmp_path) != before, f"{name}: live control did nothing"
