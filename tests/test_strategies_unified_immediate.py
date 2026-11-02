@@ -138,9 +138,9 @@ def test_immediate_yes_edge_buys_yes_at_yes_price(db):
         run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
     p = cap.position
     assert p.side == "YES"
-    assert p.entry_price == pytest.approx(0.40)
-    # $1000 book, 3% cap = $30 -> int(30 / 0.40) = 75 contracts
-    assert p.quantity == 75
+    assert p.entry_price == pytest.approx(0.41)  # live YES ask, not the 40c snapshot
+    # $1000 book, 3% cap = $30 -> int(30 / 0.41) = 73 contracts
+    assert p.quantity == 73
 
 
 def test_immediate_no_edge_buys_no_at_one_minus_p(db):
@@ -150,7 +150,7 @@ def test_immediate_no_edge_buys_no_at_one_minus_p(db):
         run(_evaluate_immediate_trade(make_opp(0.70, 0.50), db, kalshi, 1000))
     p = cap.position
     assert p.side == "NO"
-    assert p.entry_price == pytest.approx(0.30)
+    assert p.entry_price == pytest.approx(0.31)  # live NO ask
     assert p.quantity * p.entry_price <= 30.0 + 1e-6  # 3% of $1000
 
 
@@ -176,18 +176,23 @@ def test_immediate_skips_collection_ticker_both_sides_at_one_dollar(db):
     cap.execute.assert_not_awaited()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "entry_price is the discovery-time snapshot (1 - yes_price), never refreshed "
-    "from the live ask the validation step just fetched. NO snapshot 30c, live "
-    "NO ask 45c: 99 contracts are recorded at $29.70 but cost $44.55 "
-    "(execute_position buys at the live ask). Stops/targets are also built off 30c."))
-def test_immediate_entry_price_tracks_live_ask(db):
-    kalshi = FakeKalshi(v2_market(0.53, 0.58, 0.40, 0.45))  # NO ask 45c
+def test_immediate_entry_price_is_live_ask(db):
+    """NO snapshot 30c, live NO ask 45c, edge still 15pp: record 45c, size off 45c."""
+    kalshi = FakeKalshi(v2_market(0.53, 0.58, 0.40, 0.45))
+    with Captured() as cap:
+        run(_evaluate_immediate_trade(make_opp(0.70, 0.40), db, kalshi, 1000))
+    p = cap.position
+    assert (p.side, p.entry_price) == ("NO", pytest.approx(0.45))
+    assert p.quantity == 66  # int($30 / 0.45), was 100 at the 30c snapshot
+    assert p.quantity * p.entry_price <= 30.0
+
+
+def test_immediate_refuses_when_live_ask_eats_the_edge(db):
+    """Snapshot NO 30c, AI says NO is worth 50c, live NO ask 45c: 5pp left < 10pp."""
+    kalshi = FakeKalshi(v2_market(0.53, 0.58, 0.40, 0.45))
     with Captured() as cap:
         run(_evaluate_immediate_trade(make_opp(0.70, 0.50), db, kalshi, 1000))
-    if cap.execute.await_args is None:
-        return  # skipping the trade is also acceptable
-    assert cap.position.entry_price == pytest.approx(0.45)
+    cap.execute.assert_not_awaited()
 
 
 # ------------------------------------------------ immediate trade: sizing
