@@ -1,8 +1,11 @@
 """Build data/aaa/backtest_outcomes.csv: the realized print for every
-(series, target_date) that appears in data/aaa/alerts/*.json.
+(series, settlement date) that appears in data/aaa/alerts/*.json, where the
+settlement date is the date in the ticker (26SEP27 -> 2026-09-27), not the
+alert's target_date. The CSV column keeps the name `target_date` and holds the
+settlement date.
 
 Dates already in the committed CSVs are copied (source=committed_csv). Dates
-that are not (the 10-01 / 10-03 targets) are read from Wayback Machine
+that are not are read from Wayback Machine
 snapshots of gasprices.aaa.com, the ONLY network access this script makes, and
 only when run with --fetch. Parsing reuses aaa_data.parse_aaa_page.
 
@@ -32,6 +35,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import aaa_data  # noqa: E402
+from fee_backtest_aaa import ticker_date  # noqa: E402
 
 REPO = aaa_data.REPO
 ALERTS = REPO / "data" / "aaa" / "alerts"
@@ -44,8 +48,20 @@ def alert_keys() -> list[tuple[str, str]]:
     keys = set()
     for f in glob.glob(str(ALERTS / "*.json")):
         d = json.loads(Path(f).read_text())
-        keys.add((d["series"], d["target_date"]))
+        for r in d["rows"]:
+            day = ticker_date(r["ticker"])
+            if day:
+                keys.add((d["series"], day))
     return sorted(keys)
+
+
+def prior_wayback() -> dict:
+    """Previously fetched, cross-checked Wayback rows; reused to spare archive.org."""
+    if not OUT.exists():
+        return {}
+    with open(OUT) as f:
+        return {(r["series"], r["target_date"]): r for r in csv.DictReader(f)
+                if r["source"].startswith("wayback")}
 
 
 def spec(series: str):
@@ -131,6 +147,7 @@ def main() -> int:
                     help="allow Wayback network access for dates not in the committed CSVs")
     args = ap.parse_args()
     out, missing = [], []
+    prior = prior_wayback()
     for series, day in alert_keys():
         _, col, path = spec(series)
         row = aaa_data.load_csv_from(path).get(day)
@@ -139,6 +156,9 @@ def main() -> int:
                         "source": "committed_csv",
                         "snapshot_url": str(path.relative_to(REPO)),
                         "snapshot_ts": row.get("snapshot_ts", "")})
+            continue
+        if (series, day) in prior:
+            out.append(prior[(series, day)])
             continue
         if not args.fetch:
             missing.append((series, day, "not in committed CSV; rerun with --fetch"))
