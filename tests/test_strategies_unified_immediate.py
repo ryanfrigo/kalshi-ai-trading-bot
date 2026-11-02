@@ -749,7 +749,7 @@ def test_mm_live_no_price_floors_with_epsilon_absorbing_float_error():
     assert mm.kalshi_client.orders[0]["no_price"] == 29
 
 
-def _mm_bid_sent(ai_prob, side, default_spread=False, book=(0.40, 0.42, 0.58, 0.60)):
+def _mm_bid_sent(ai_prob, side, default_spread=False, book=(0.40, 0.42, 0.58, 0.60), market=None):
     """Run the real path (analysis -> opportunity -> LimitOrder -> _place_limit_order)
     on a 40c/42c YES book (NO bid 58c / ask 60c) with a 3c spread; return the cents sent.
 
@@ -762,7 +762,7 @@ def _mm_bid_sent(ai_prob, side, default_spread=False, book=(0.40, 0.42, 0.58, 0.
     mm = _mm()
     if not default_spread:
         mm.min_spread = mm.max_spread = 0.03
-    mm.kalshi_client.market = v2_market(*book)["market"]
+    mm.kalshi_client.market = market or v2_market(*book)["market"]
     mm._get_ai_analysis = AsyncMock(return_value={"probability": ai_prob, "confidence": 0.9})
     opp = run(mm.analyze_market_making_opportunities([_mm_market()]))[0]
     with patch.object(settings.trading, "live_trading_enabled", True):
@@ -792,6 +792,14 @@ def test_mm_side_with_one_cent_or_missing_ask_is_not_quoted():
         assert _mm_bid_sent(0.2, "no", default_spread=True, book=book) is None
     for book in [(0.40, 0.01, 0.58, 0.60), (0.40, 0, 0.58, 0.60)]:  # YES ask 1c / absent
         assert _mm_bid_sent(0.7, "yes", default_spread=True, book=book) is None
+
+
+def test_mm_cents_only_book_picks_unit_by_key_not_magnitude():
+    cents = {"yes_price": 40, "no_price": 58, "yes_ask": 42, "no_ask": 60}
+    assert _mm_bid_sent(0.7, "yes", default_spread=True, market=cents) <= 41
+    assert _mm_bid_sent(0.2, "no", default_spread=True, market=cents) <= 59
+    # yes_ask=1 is 1c, not $1.00: that side must not be quoted.
+    assert _mm_bid_sent(0.7, "yes", default_spread=True, market={**cents, "yes_ask": 1}) is None
 
 
 def test_mm_refused_order_is_marked_failed():

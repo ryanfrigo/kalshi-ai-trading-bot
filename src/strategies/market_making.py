@@ -191,9 +191,11 @@ class AdvancedMarketMaker:
 
     @staticmethod
     def _book_ask(market_data: Dict, dollars_key: str, cents_key: str) -> float:
-        """Best ask in dollars from either field format; 0.0 when the side has none."""
-        ask = float(market_data.get(dollars_key, 0) or market_data.get(cents_key, 0) or 0)
-        return ask / 100.0 if ask > 1.0 else ask
+        """Best ask in dollars; the key that supplied it fixes the unit. 0.0 when the side has none."""
+        dollars = float(market_data.get(dollars_key, 0) or 0)
+        if dollars:
+            return dollars
+        return float(market_data.get(cents_key, 0) or 0) / 100.0
 
     async def _calculate_market_making_opportunity(
         self,
