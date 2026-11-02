@@ -506,7 +506,11 @@ class UnifiedAdvancedTradingSystem:
                         continue
                     
                     # Calculate quantity
-                    quantity = max(1, int(position_value / price))
+                    quantity = int(position_value / price)
+                    if quantity < 1:
+                        # One contract costs more than this allotment; never round up past it.
+                        self.logger.info(f"⏭️ SKIPPING {market_id} {intended_side} - allotment ${position_value:.2f} cannot buy 1 contract @ ${price:.2f}")
+                        continue
                     
                     # Calculate proper stop-loss levels using Grok4 recommendations
                     from src.utils.stop_loss_calculator import StopLossCalculator

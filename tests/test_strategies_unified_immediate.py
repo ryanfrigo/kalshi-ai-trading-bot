@@ -851,3 +851,26 @@ def test_mm_capital_too_small_for_one_contract_places_nothing():
     mm = _mm()
     res = run(mm.execute_market_making_strategy([_opportunity(mm)], capital=0.10))
     assert res["orders_placed"] == 0 and res["markets_count"] == 0
+
+
+# ---------------------------------- allocation sizing: no forced 1st contract
+
+def test_allocation_below_one_contract_is_skipped(db):
+    # directional $2 * 10% = $0.20 allotment; YES ask 41c -> 0 contracts fit.
+    # max(1, ...) used to buy 1 for $0.41 (205% of the allotment).
+    s = make_system(db, FakeKalshi(legacy_market(40, 60)), directional=2.0)
+    with Captured() as cap:
+        res = run(s._execute_portfolio_allocations(alloc(), [make_opp(0.40, 0.60)]))
+    cap.execute.assert_not_awaited()
+    assert res["successful_executions"] == 0 and res["total_capital_used"] == 0.0
+
+
+def test_capital_efficiency_is_zero_when_total_capital_is_zero(db):
+    # Without the guard the division raises, the broad except swallows it and
+    # returns an empty TradingSystemResults, so check the other fields survive.
+    s = make_system(db, FakeKalshi(legacy_market(40, 60)))
+    s.total_capital = 0
+    pa = alloc(frac=0.5)
+    res = s._compile_unified_results({}, pa, {})
+    assert res.capital_efficiency == 0.0
+    assert res.total_capital_used == 0.5
