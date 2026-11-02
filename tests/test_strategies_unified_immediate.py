@@ -69,6 +69,12 @@ class FakeKalshi:
     async def get_positions(self):
         return {"event_positions": []}
 
+    async def get_orders(self, ticker=None, status=None, **kw):
+        return {"orders": list(getattr(self, "resting", []))}
+
+    async def _held_on_side(self, ticker, side):
+        return getattr(self, "held", {}).get(side.lower())
+
     async def place_order(self, **kw):
         self.orders.append(kw)
         return {"order": {"order_id": "o1"}}
@@ -440,17 +446,51 @@ def test_allocation_same_side_dedupe(db):
     cap.execute.assert_not_awaited()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Dedupe is per (market, side): with YES already held, a later NO allocation on "
-    "the same market is bought too ('Adding NO position (already have YES)'). "
-    "Holding both legs pays exactly $1 whatever happens: YES bought at 70c plus NO at "
-    "33c costs $1.03 for a $1.00 payout, a guaranteed 3c/contract loss before fees "
-    "(5 contracts: $0.15, plus a fee on each leg). The immediate path blocks any "
-    "side; this one only blocks the same side."))
-def test_allocation_blocks_opposite_side_on_same_market(db):
+def test_allocation_blocks_opposite_side_in_db(db):
     run(db.add_position(Position(market_id="MKT-1", side="YES", entry_price=0.70,
                                  quantity=5, timestamp=datetime.now())))
     s = make_system(db, FakeKalshi(legacy_market(70, 33)))
+    with Captured() as cap:
+        run(s._execute_portfolio_allocations(alloc(), [make_opp(0.70, 0.50)]))
+    cap.execute.assert_not_awaited()
+
+
+def test_allocation_blocks_opposite_side_held_on_exchange(db):
+    kalshi = FakeKalshi(legacy_market(70, 33))
+    kalshi.held = {"yes": 4.0}
+    s = make_system(db, kalshi)
+    with Captured() as cap:
+        run(s._execute_portfolio_allocations(alloc(), [make_opp(0.70, 0.50)]))  # wants NO
+    cap.execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("resting", [
+    {"ticker": "MKT-1", "outcome_side": "yes", "remaining_count_fp": "3.00"},  # buy-YES rests
+    {"ticker": "MKT-1", "side": "yes", "action": "buy", "remaining_count": 3},
+    {"ticker": "MKT-1", "mystery": 1},  # unreadable -> fail closed
+])
+def test_allocation_blocks_opposite_side_resting(db, resting):
+    kalshi = FakeKalshi(legacy_market(70, 33))
+    kalshi.resting = [resting]
+    s = make_system(db, kalshi)
+    with Captured() as cap:
+        run(s._execute_portfolio_allocations(alloc(), [make_opp(0.70, 0.50)]))
+    cap.execute.assert_not_awaited()
+
+
+def test_allocation_allows_resting_order_on_same_side(db):
+    kalshi = FakeKalshi(legacy_market(70, 33))
+    kalshi.resting = [{"ticker": "MKT-1", "outcome_side": "no", "remaining_count_fp": "3.00"}]
+    s = make_system(db, kalshi)
+    with Captured() as cap:
+        run(s._execute_portfolio_allocations(alloc(), [make_opp(0.70, 0.50)]))
+    cap.execute.assert_awaited_once()
+
+
+def test_allocation_fails_closed_when_resting_read_fails(db):
+    kalshi = FakeKalshi(legacy_market(70, 33))
+    kalshi.get_orders = AsyncMock(side_effect=RuntimeError("503"))
+    s = make_system(db, kalshi)
     with Captured() as cap:
         run(s._execute_portfolio_allocations(alloc(), [make_opp(0.70, 0.50)]))
     cap.execute.assert_not_awaited()

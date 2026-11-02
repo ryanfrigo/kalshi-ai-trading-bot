@@ -414,14 +414,13 @@ class UnifiedAdvancedTradingSystem:
                         results['positions_created'] += 1  # Count as created since it exists
                         results['total_capital_used'] += allocation_fraction * self.directional_capital
                         continue
-                    else:
-                        # Check if we have the opposite side (just for logging)
-                        opposite_side = "NO" if intended_side == "YES" else "YES"
-                        opposite_position = await self.db_manager.get_position_by_market_and_side(market_id, opposite_side)
-                        if opposite_position:
-                            self.logger.info(f"📊 {market_id} - Adding {intended_side} position (already have {opposite_side})")
-                        else:
-                            self.logger.info(f"📊 {market_id} - New {intended_side} position")
+                    
+                    # Never open the opposite side of a market we hold or rest: YES + NO
+                    # pays exactly $1, so holding both locks in the spread plus two fees.
+                    if await self._holds_or_rests_opposite_side(market_id, intended_side):
+                        self.logger.info(f"⏭️ SKIPPING {market_id} {intended_side} - opposite side already held or resting")
+                        continue
+                    self.logger.info(f"📊 {market_id} - New {intended_side} position")
                     
                     # Calculate initial position size
                     initial_position_value = allocation_fraction * self.directional_capital
@@ -588,6 +587,33 @@ class UnifiedAdvancedTradingSystem:
         except Exception as e:
             self.logger.error(f"Error in portfolio allocation execution: {e}")
             return results
+
+    async def _holds_or_rests_opposite_side(self, market_id: str, intended_side: str) -> bool:
+        """True if we hold (DB or exchange) or have a resting order for the other side.
+
+        Fails closed: an unreadable resting-orders read counts as "yes".
+        """
+        from src.jobs.execute import _order_outcome
+        opposite = "NO" if intended_side == "YES" else "YES"
+        try:
+            if await self.db_manager.get_position_by_market_and_side(market_id, opposite):
+                return True
+            held = await self.kalshi_client._held_on_side(market_id, opposite)
+            if isinstance(held, (int, float)) and not isinstance(held, bool) and held > 0:
+                return True
+            resp = await self.kalshi_client.get_orders(ticker=market_id, status="resting")
+            orders = resp.get("orders") if isinstance(resp, dict) else None
+            if not isinstance(orders, list):
+                return True
+            for o in orders:
+                if isinstance(o, dict) and o.get("ticker") == market_id:
+                    outcome = _order_outcome(o)
+                    if outcome is None or outcome == opposite.lower():
+                        return True
+            return False
+        except Exception as e:
+            self.logger.warning(f"Opposite-side check failed for {market_id} ({e}); skipping")
+            return True
 
     async def _execute_arbitrage_strategy(self, markets: List[Market]) -> Dict:
         """
