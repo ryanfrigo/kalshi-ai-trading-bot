@@ -340,10 +340,15 @@ class AdvancedMarketMaker:
 
     async def execute_market_making_strategy(
         self, 
-        opportunities: List[MarketMakingOpportunity]
+        opportunities: List[MarketMakingOpportunity],
+        capital: Optional[float] = None
     ) -> Dict:
         """
         Execute market making strategy on top opportunities.
+
+        ``capital`` is the dollar allotment for the whole call; it is split evenly
+        across the opportunities and each market's YES+NO bids are scaled down to
+        fit. None keeps the legacy unscaled sizes.
         """
         results = {
             'orders_placed': 0,
@@ -356,13 +361,19 @@ class AdvancedMarketMaker:
         max_markets = getattr(settings.trading, 'max_concurrent_markets', 10)
         top_opportunities = opportunities[:max_markets]
         
+        budget = capital / len(top_opportunities) if capital is not None and top_opportunities else None
         for opportunity in top_opportunities:
             try:
-                await self._place_market_making_orders(opportunity)
+                orders = await self._place_market_making_orders(opportunity, budget)
                 
-                results['orders_placed'] += 2  # YES and NO orders
-                results['total_exposure'] += opportunity.optimal_yes_size + opportunity.optimal_no_size
-                results['expected_profit'] += opportunity.total_expected_profit
+                # Count only orders the exchange accepted (a refused order is "failed").
+                placed = [o for o in orders if o.status == "placed"]
+                if not placed:
+                    self.logger.warning(f"No market making orders placed for {opportunity.market_id}")
+                    continue
+                results['orders_placed'] += len(placed)
+                results['total_exposure'] += sum(o.quantity * o.price / 100.0 for o in placed)
+                results['expected_profit'] += sum(o.expected_profit for o in placed)
                 results['markets_count'] += 1
                 
                 self.logger.info(
@@ -376,18 +387,28 @@ class AdvancedMarketMaker:
         
         return results
 
-    async def _place_market_making_orders(self, opportunity: MarketMakingOpportunity):
+    async def _place_market_making_orders(
+        self, opportunity: MarketMakingOpportunity, budget: Optional[float] = None
+    ) -> List[LimitOrder]:
         """
-        Place the actual limit orders for market making.
+        Place the actual limit orders for market making; returns the orders (check .status).
+
+        ``budget`` caps the combined dollar cost of the YES and NO bids.
         """
         orders = []
+        yes_qty, no_qty = opportunity.optimal_yes_size, opportunity.optimal_no_size
+        if budget is not None:
+            cost = yes_qty * opportunity.optimal_yes_bid + no_qty * opportunity.optimal_no_bid
+            if cost > budget:
+                scale = budget / cost
+                yes_qty, no_qty = int(yes_qty * scale), int(no_qty * scale)
         
         # Create YES bid order (we buy YES at lower price)
         yes_bid_order = LimitOrder(
             market_id=opportunity.market_id,
             side="YES",
             price=opportunity.optimal_yes_bid * 100,  # Convert to cents
-            quantity=opportunity.optimal_yes_size,
+            quantity=yes_qty,
             expected_profit=opportunity.yes_spread_profit
         )
         
@@ -396,11 +417,11 @@ class AdvancedMarketMaker:
             market_id=opportunity.market_id,
             side="NO", 
             price=opportunity.optimal_no_bid * 100,
-            quantity=opportunity.optimal_no_size,
+            quantity=no_qty,
             expected_profit=opportunity.no_spread_profit
         )
         
-        orders.extend([yes_bid_order, no_bid_order])
+        orders.extend(o for o in (yes_bid_order, no_bid_order) if o.quantity >= 1)
         
         # Place orders with Kalshi (simulated for now)
         for order in orders:
@@ -410,6 +431,7 @@ class AdvancedMarketMaker:
         if opportunity.market_id not in self.active_orders:
             self.active_orders[opportunity.market_id] = []
         self.active_orders[opportunity.market_id].extend(orders)
+        return orders
 
     async def _place_limit_order(self, order: LimitOrder):
         """

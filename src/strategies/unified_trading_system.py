@@ -310,7 +310,9 @@ class UnifiedAdvancedTradingSystem:
             top_opportunities = opportunities[:max_opportunities]
             
             # Execute market making
-            results = await self.market_maker.execute_market_making_strategy(top_opportunities)
+            results = await self.market_maker.execute_market_making_strategy(
+                top_opportunities, capital=self.market_making_capital
+            )
             
             self.logger.info(
                 f"✅ Market Making: {results['orders_placed']} orders, "

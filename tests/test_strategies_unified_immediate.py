@@ -570,6 +570,7 @@ def _mm_market():
 
 
 @pytest.mark.xfail(strict=True, reason=(
+    "OWNER DECISION: activates market making. "
     "analyze_market_making_opportunities reads yes_bid_dollars/yes_price from the TOP "
     "LEVEL of get_market(); the API nests them under 'market'. Prices are always 0, "
     "the <0.02 guard skips every market, and market making can never fire: "
@@ -635,12 +636,6 @@ def test_mm_refused_order_is_marked_failed():
     assert o.status == "failed"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "execute_market_making_strategy adds 2 orders and the full YES+NO size to its "
-    "result after every _place_market_making_orders call, but that method swallows "
-    "per-order failures. Under a risk halt both orders are refused yet the result "
-    "reports orders_placed=2, exposure=sizes, and expected profit, which feed "
-    "TradingSystemResults.total_positions/capital_efficiency."))
 def test_mm_results_do_not_count_refused_orders():
     mm = _mm()
     mm.kalshi_client.place_order = AsyncMock(side_effect=KalshiAPIError("RISK_HALT: x"))
@@ -650,11 +645,6 @@ def test_mm_results_do_not_count_refused_orders():
     assert res["orders_placed"] == 0
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Per-side size is 25% of a FIXED $1000 (MARKET_MAKING_CAPITAL_CAP) and used as a "
-    "contract count, independent of the capital the unified system allotted. With "
-    "$400 equity the market-making allotment is $120, yet one opportunity rests "
-    "$158 of YES+NO bids (observed), 32% over the allotment."))
 def test_mm_unified_orders_fit_market_making_allotment(db):
     s = make_system(db, FakeKalshi(None))
     s.market_making_capital = 120.0
@@ -680,6 +670,7 @@ def test_mm_unified_small_account_places_nothing(db):
 # ------------------------------------------------- jobs.trade fallback path
 
 @pytest.mark.xfail(strict=True, reason=(
+    "OWNER DECISION: activates the legacy fallback. "
     "_fallback_legacy_trading calls execute_position(position, kalshi_client, "
     "db_manager) but the signature is (position, live_mode, db_manager, "
     "kalshi_client). The call raises TypeError on every market, is swallowed by "
@@ -708,3 +699,41 @@ def create_autospec_async(fn):
     from unittest.mock import create_autospec
     m = create_autospec(fn, return_value=True)
     return m
+
+
+def test_mm_accepted_orders_are_counted_with_real_notional():
+    mm = _mm()
+    opp = _opportunity(mm)
+    res = run(mm.execute_market_making_strategy([opp]))  # paper mode: simulated "placed"
+    assert res["orders_placed"] == 2 and res["markets_count"] == 1
+    assert res["total_exposure"] == pytest.approx(
+        opp.optimal_yes_size * opp.optimal_yes_bid + opp.optimal_no_size * opp.optimal_no_bid)
+
+
+def test_mm_half_refused_counts_only_the_placed_leg():
+    mm = _mm()
+    calls = []
+
+    async def place(**kw):
+        calls.append(kw)
+        if kw["side"] == "no":
+            raise KalshiAPIError("POSITION_CAP")
+        return {"order": {"order_id": "o"}}
+    mm.kalshi_client.place_order = place
+    with patch.object(settings.trading, "live_trading_enabled", True):
+        res = run(mm.execute_market_making_strategy([_opportunity(mm)]))
+    assert res["orders_placed"] == 1
+
+
+def test_mm_capital_scales_orders_to_the_allotment_exactly_once():
+    mm = _mm()
+    opps = [_opportunity(mm), _opportunity(mm)]
+    res = run(mm.execute_market_making_strategy(opps, capital=60.0))
+    assert res["total_exposure"] <= 60.0
+    assert res["markets_count"] == 2
+
+
+def test_mm_capital_too_small_for_one_contract_places_nothing():
+    mm = _mm()
+    res = run(mm.execute_market_making_strategy([_opportunity(mm)], capital=0.10))
+    assert res["orders_placed"] == 0 and res["markets_count"] == 0
