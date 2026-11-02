@@ -251,6 +251,12 @@ class OpenRouterClient(TradingLoggerMixin):
         except Exception as exc:
             self.logger.error(f"Failed to schedule DB cost update: {exc}")
 
+    async def _flush_db_costs(self) -> None:
+        """Wait for pending DB spend writes, so a short job's last cost is not lost
+        when asyncio.run cancels unfinished tasks."""
+        if self._db_cost_tasks:
+            await asyncio.gather(*list(self._db_cost_tasks), return_exceptions=True)
+
     async def _upsert_db_cost(self, cost: float) -> None:
         try:
             await self.db_manager.upsert_daily_cost(cost)
@@ -506,6 +512,7 @@ class OpenRouterClient(TradingLoggerMixin):
                 self.total_cost += cost
                 self.request_count += 1
                 self._update_daily_cost(cost)
+                await self._flush_db_costs()
 
                 # Log query if db_manager is available
                 await self._log_query(
@@ -572,6 +579,7 @@ class OpenRouterClient(TradingLoggerMixin):
                 self.total_cost += cost
                 self.request_count += 1
                 self._update_daily_cost(cost)
+                await self._flush_db_costs()
 
                 decision = self._parse_trading_decision(content)
 
@@ -803,6 +811,7 @@ If you do not recommend trading, use action "SKIP":
 
     async def close(self) -> None:
         """Shut down the underlying HTTP client."""
+        await self._flush_db_costs()
         try:
             await self.client.close()
         except Exception:
