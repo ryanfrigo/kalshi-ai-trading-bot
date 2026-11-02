@@ -10,6 +10,7 @@ Kalshi is faked (no network); the DB is a temp SQLite file. Prices: entry 40c;
 a 60c YES bid trips profit-take, 30c trips stop-loss.
 """
 import asyncio
+import types
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
@@ -78,10 +79,10 @@ def _logged(capsys, caplog):
     return capsys.readouterr().out + caplog.text
 
 
-async def _setup(tmp_path, quantity=10):
+async def _setup(tmp_path, quantity=10, side="YES"):
     db = DatabaseManager(db_path=str(tmp_path / "t.db"))
     await db.initialize()
-    pos = Position(market_id="PH-1", side="YES", entry_price=0.40, quantity=quantity,
+    pos = Position(market_id="PH-1", side=side, entry_price=0.40, quantity=quantity,
                    timestamp=datetime.now(), rationale="r", live=True, status="open")
     pos.id = await db.add_position(pos)
     return db, pos
@@ -146,9 +147,9 @@ def test_gtc_partial_remainder_resting_is_not_resold(tmp_path, kind):
 
 # --- the sellable guard, at place_sell_limit_order (every exit path uses it) ---
 
-def _sell(tmp_path, client):
+def _sell(tmp_path, client, side="YES"):
     async def go():
-        db, pos = await _setup(tmp_path)
+        db, pos = await _setup(tmp_path, side=side)
         order = {}
         ok = await place_sell_limit_order(position=pos, limit_price=0.30, db_manager=db,
                                           kalshi_client=client, order_out=order)
@@ -190,6 +191,26 @@ def test_resting_orders_for_our_own_outcome_do_not_block(tmp_path):
         _rest_sell("OTHER-1", "yes", 10)])
     _sell(tmp_path, client)
     assert client.sent == [10]
+
+
+def test_no_holding_nets_only_orders_positioned_for_yes(tmp_path):
+    # Holding NO: sell-no ('yes'/'bid') and buy-yes ('yes') are against us;
+    # buy-no and sell-yes ('no') are for our NO and must not reduce the sell.
+    client = FakeKalshi(fill=0, resting=[
+        _rest_sell("PH-1", "no", 3),                                      # sell-no
+        {"ticker": "PH-1", "outcome_side": "yes", "remaining_count_fp": "1.00"},  # buy-yes
+        {"ticker": "PH-1", "outcome_side": "no", "remaining_count_fp": "5.00"},   # buy-no
+        _rest_sell("PH-1", "yes", 5)])                                    # sell-yes
+    # The real held read: v2 reports 10 NO as a signed position_fp of -10.
+    from src.clients.kalshi_client import KalshiClient
+
+    async def positions(ticker=None):
+        return {"market_positions": [{"ticker": "PH-1", "position_fp": "-10.00"}]}
+    client.get_positions = positions
+    client._held_on_side = types.MethodType(KalshiClient._held_on_side, client)
+    ok, order = _sell(tmp_path, client, side="NO")
+    assert client.sent == [6]       # 10 held - 3 sell-no - 1 buy-yes
+    assert ok is True and order["order"]["order_id"] == "o1"
 
 
 def test_unreadable_resting_order_logs_the_missing_fields(tmp_path, capsys, caplog):
