@@ -560,7 +560,7 @@ def estimate_market_volatility(market: Market) -> float:
     """
     try:
         # Get current price to estimate volatility
-        current_price = getattr(market, 'yes_price', 50) / 100  # Convert to 0-1
+        current_price = getattr(market, 'yes_price', 0.5)  # already dollars (0-1)
         
         # Binary option volatility formula
         intrinsic_vol = np.sqrt(current_price * (1 - current_price))

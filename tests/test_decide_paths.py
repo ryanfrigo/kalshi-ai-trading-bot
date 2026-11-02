@@ -316,14 +316,6 @@ def test_zero_quantity_creates_no_position():
 
 
 # ---- helpers ---------------------------------------------------------------------
-@pytest.mark.xfail(strict=True, reason=(
-    "decide.py:522 divides yes_price by 100 'to convert to 0-1', but Market.yes_price is "
-    "already dollars (0-1; compared with high_confidence_market_odds=0.90). A 50c market is "
-    "treated as 0.5c: volatility 0.07 instead of ~0.50, so the stop's volatility widening is "
-    "wrong on every position. Entry $0.92, 96% confidence, 25% vol: stop $0.88 (4.4%) with the "
-    "bug's vol vs $0.86 (6.5%) with the right one, 2c per contract (33 contracts: $0.66) of "
-    "stop that is too tight, i.e. stopped out by noise. Small in dollars, wrong everywhere. "
-    "Fix: drop the /100."))
 def test_volatility_of_a_fifty_cent_market_is_high():
     m = _market(yes=0.50, no=0.50, volume=900, days=7.0)
     assert estimate_market_volatility(m) >= 0.4
