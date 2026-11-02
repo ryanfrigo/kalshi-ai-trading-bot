@@ -271,3 +271,20 @@ def test_settlement_paths_do_not_read_wayback_state_rows():
     for name in ("aaa_pricer.py", "scalp_paper.py"):
         src = (REPO / "scripts" / name).read_text()
         assert "aaa_data.load_state(" not in src, name
+
+
+def test_backfill_state_does_not_reuse_old_national_cache(monkeypatch, tmp_path):
+    monkeypatch.setattr(aaa_data, "AAA_DIR", tmp_path)
+    monkeypatch.setattr(aaa_data, "RAW_DIR", tmp_path / "raw")
+    old = tmp_path / "raw" / "states" / "AZ"
+    old.mkdir(parents=True)
+    (old / "20250105120000.html").write_text(PAGE + " " * 25000)
+    fetched = []
+    class Resp:
+        status_code = 200
+        text = PAGE
+        def json(self):
+            return [["timestamp", "statuscode"], ["20250105120000", "200"]]
+    monkeypatch.setattr(aaa_data.httpx, "get", lambda url, *a, **k: fetched.append(url) or Resp())
+    aaa_data.backfill_state("AZ", from_date="20250101", to_date="20250110", max_workers=1, sleep_s=0)
+    assert any(u.endswith("?state=AZ") for u in fetched), fetched
