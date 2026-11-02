@@ -2,7 +2,8 @@
 
 The exit's order id is stored on the position row when it rests; each
 run_tracking cycle reads that order (GET /portfolio/orders/{id}) and logs and
-closes or shrinks the row by what newly filled. Read problems change nothing.
+closes or shrinks the row by what newly filled. A bad read books nothing; the
+third in a row drops the stored id.
 Kalshi is faked (no network); the DB is a temp SQLite file.
 """
 import asyncio
@@ -12,10 +13,11 @@ from unittest.mock import AsyncMock, patch
 import aiosqlite
 import pytest
 
+from src.clients.kalshi_client import KalshiAPIError
 from src.jobs.execute import (place_profit_taking_orders, place_sell_limit_order,
                               reconcile_resting_exit)
 from src.utils.database import DatabaseManager, Position
-from tests.test_phantom_exit_callers import FakeKalshi
+from tests.test_phantom_exit_callers import FakeKalshi, _logged
 
 
 def _order(fill, status, ticker="RX-1", price="0.6000", oid="o1"):
@@ -172,3 +174,59 @@ def test_old_db_without_exit_columns_migrates(tmp_path):
     pos, row = asyncio.run(go())
     assert pos.exit_order_id is None and pos.quantity == 10
     assert row == ("open", 10, "o9", 0.0)
+
+
+# --- an id that stays unreadable is dropped after 3 bad reads in a row ---
+
+async def _failures(db):
+    async with aiosqlite.connect(db.db_path) as conn:
+        cur = await conn.execute("SELECT exit_order_id, exit_order_read_failures "
+                                 "FROM positions WHERE market_id = 'RX-1'")
+        return await cur.fetchone()
+
+
+def _cycles(tmp_path, replies):
+    """One reconcile per reply (a dict, or an exception to raise); state after each."""
+    async def go():
+        db = await _db(tmp_path)
+        client = FakeKalshi(fill=0)
+        client.get_order = AsyncMock(side_effect=replies)
+        out = []
+        for _ in replies:
+            (pos,) = await db.get_open_live_positions()
+            out.append((await reconcile_resting_exit(pos, client, db), await _failures(db)))
+        (pos,) = await db.get_open_live_positions()
+        sent = await place_sell_limit_order(pos, 0.30, db, client)
+        return out, sent, client.sent
+    return asyncio.run(go())
+
+
+BAD_READS = {
+    "raises": RuntimeError("HTTP 503"),
+    "api-404": KalshiAPIError("HTTP 404 not_found"),  # not special-cased
+    "no-fields": {"order": {"ticker": "RX-1", "status": "executed"}},
+    "unknown-status": _order(0, "pending"),
+}
+
+
+def test_two_bad_reads_keep_the_id_and_block_a_new_exit(tmp_path):
+    out, sent, sent_counts = _cycles(tmp_path, [RuntimeError("x"), _order(0, "pending")])
+    assert out == [("unchanged", ("o1", 1)), ("unchanged", ("o1", 2))]
+    assert sent is False and sent_counts == []
+
+
+@pytest.mark.parametrize("bad", BAD_READS.values(), ids=BAD_READS.keys())
+def test_third_bad_read_drops_the_id_and_falls_back_to_the_guard(tmp_path, bad, capsys,
+                                                                 caplog):
+    out, sent, sent_counts = _cycles(tmp_path, [RuntimeError("x"), RuntimeError("y"), bad])
+    assert out[-1] == ("abandoned", (None, 0))
+    assert "late fills of o1 will not be booked; check the trade log" in _logged(capsys, caplog)
+    assert sent is True and sent_counts == [10]  # the sellable guard decides now
+
+
+def test_a_good_read_resets_the_count(tmp_path):
+    out, sent, _ = _cycles(tmp_path, [RuntimeError("x"), RuntimeError("y"),
+                                      _order(0, "resting"), RuntimeError("z"),
+                                      RuntimeError("w")])
+    assert [o[1] for o in out] == [("o1", 1), ("o1", 2), ("o1", 0), ("o1", 1), ("o1", 2)]
+    assert sent is False  # still tracked: never 3 in a row

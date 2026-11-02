@@ -427,12 +427,30 @@ async def _track_resting_exit(position: Position, order: Dict, db_manager: Datab
     await db_manager.set_exit_order(position.id, order["order_id"], _filled_count(order))
 
 
+_MAX_EXIT_READ_FAILURES = 3
+
+
+async def _exit_read_failed(position: Position, db_manager: DatabaseManager, logger) -> str:
+    """Count one bad read of the stored exit order; drop the id on the third in a row."""
+    oid = position.exit_order_id
+    failures = (position.exit_order_read_failures or 0) + 1
+    if failures >= _MAX_EXIT_READ_FAILURES:
+        await db_manager.set_exit_order(position.id, None, None)
+        logger.error(f"Exit order {oid} on {position.market_id} unreadable {failures} times "
+                     f"in a row: late fills of {oid} will not be booked; check the trade log.")
+        return "abandoned"
+    await db_manager.set_exit_order(position.id, oid, position.exit_order_filled, failures)
+    return "unchanged"
+
+
 async def reconcile_resting_exit(position: Position, kalshi_client: KalshiClient,
                                  db_manager: DatabaseManager) -> str:
     """Book fills of the position's stored exit order since we last looked.
 
-    Returns "closed", "shrunk", "cleared" (order done, nothing new filled) or
-    "unchanged". Any read or field problem changes nothing.
+    Returns "closed", "shrunk", "cleared" (order done, nothing new filled),
+    "unchanged" or "abandoned". A read or field problem books nothing and counts
+    one failure; a good read resets the count. The third failure in a row drops
+    the stored id, so the row falls back to the sellable guard.
     """
     logger = get_trading_logger("exit_fill")
     oid, ticker = position.exit_order_id, position.market_id
@@ -443,19 +461,21 @@ async def reconcile_resting_exit(position: Position, kalshi_client: KalshiClient
         status = order["status"]
     except Exception as e:
         logger.error(f"Exit order {oid} on {ticker} unreadable ({e!r}); position unchanged.")
-        return "unchanged"
+        return await _exit_read_failed(position, db_manager, logger)
     new = round(min(filled - (position.exit_order_filled or 0), position.quantity), 2)
     if (order.get("ticker") != ticker or status not in ("resting", "canceled", "executed")
             or not math.isfinite(filled) or not math.isfinite(price) or new < 0):
         logger.error(f"Exit order {oid} on {ticker} inconsistent (ticker={order.get('ticker')}, "
                      f"status={status}, filled={filled}); position unchanged.")
-        return "unchanged"
+        return await _exit_read_failed(position, db_manager, logger)
     done = status != "resting"
     if new == 0:
         if done:
             await db_manager.set_exit_order(position.id, None, None)
             logger.info(f"Exit order {oid} on {ticker} {status} with no new fill; cleared.")
             return "cleared"
+        if position.exit_order_read_failures:
+            await db_manager.set_exit_order(position.id, oid, position.exit_order_filled)
         return "unchanged"
     log = TradeLog(market_id=ticker, side=position.side, entry_price=position.entry_price,
                    exit_price=price, quantity=new, pnl=(price - position.entry_price) * new,
@@ -463,12 +483,14 @@ async def reconcile_resting_exit(position: Position, kalshi_client: KalshiClient
                    rationale=f"{position.rationale} | EXIT: resting exit {oid} filled later")
     if new >= round(position.quantity, 2):
         await db_manager.record_partial_exit(position.id, log, position.quantity, status="closed",
-                                             exit_order_id=None, exit_order_filled=None)
+                                             exit_order_id=None, exit_order_filled=None,
+                                             exit_order_read_failures=0)
         logger.info(f"Exit order {oid} on {ticker} filled; position closed.")
         return "closed"
     await db_manager.record_partial_exit(position.id, log, round(position.quantity - new, 2),
                                          exit_order_id=None if done else oid,
-                                         exit_order_filled=None if done else filled)
+                                         exit_order_filled=None if done else filled,
+                                         exit_order_read_failures=0)
     logger.info(f"Exit order {oid} on {ticker} filled {new} more; position shrunk.")
     return "shrunk"
 
