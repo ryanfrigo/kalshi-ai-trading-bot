@@ -83,3 +83,9 @@ def test_should_update_order_unwraps_get_market_envelope(maker):
 
 def test_should_update_order_legacy_cents_still_work(maker):
     assert _update_check(maker, {"yes_price": 70}, 50.0) is True
+
+
+def test_should_update_order_legacy_cents_near_order_does_not_update(maker):
+    # 52c legacy price vs 50c resting order: 2c apart, below the 5c threshold.
+    # Kills the mutant that reads yes_price without dividing by 100.
+    assert _update_check(maker, {"yes_price": 52}, 50.0) is False
