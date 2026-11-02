@@ -185,8 +185,8 @@ class UnifiedAdvancedTradingSystem:
                 self.logger.warning(f"⚠️ Total capital too low: ${self.total_capital:.2f} - may limit trading")
 
         except Exception as e:
-            self.logger.error(f"Failed to get portfolio value, using default: {e}")
-            self.total_capital = 100  # Conservative fallback
+            self.logger.error(f"Failed to read portfolio value; capital set to 0, no new buys: {e}")
+            self.total_capital = 0  # Unreadable balance must not invent capital
 
         # Update capital allocation based on actual balance
         self.market_making_capital = self.total_capital * self.config.market_making_allocation
@@ -688,7 +688,7 @@ class UnifiedAdvancedTradingSystem:
             expected_annual_return = portfolio_expected_return * (365 / 30)
             
             # Capital efficiency
-            capital_efficiency = total_capital_used / self.total_capital
+            capital_efficiency = total_capital_used / self.total_capital if self.total_capital > 0 else 0.0
             
             # Total positions
             total_positions = (

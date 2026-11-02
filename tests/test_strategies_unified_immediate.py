@@ -660,11 +660,6 @@ def test_cash_emergency_halt_stops_before_market_scan(db):
     s.db_manager.get_eligible_markets.assert_not_awaited()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "async_initialize falls back to total_capital = $100 when the balance call "
-    "fails ('Conservative fallback'). For a $20 account that is 5x reality: "
-    "directional capital $70 and market-making capital $30 are sized off money "
-    "that does not exist. Unreadable balance should mean no new buys (capital 0)."))
 def test_unreadable_balance_does_not_invent_capital(db):
     kalshi = FakeKalshi(legacy_market(40, 60))
     kalshi.get_balance = AsyncMock(side_effect=RuntimeError("boom"))
