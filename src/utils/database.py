@@ -510,6 +510,15 @@ class DatabaseManager(TradingLoggerMixin):
             await db.commit()
             self.logger.info(f"Updated position {position_id} status to {status}.")
 
+    async def update_position_quantity(self, position_id: int, quantity: float):
+        """Set an open position's quantity (e.g. what remains after a partial exit)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                UPDATE positions SET quantity = ? WHERE id = ?
+            """, (quantity, position_id))
+            await db.commit()
+            self.logger.info(f"Updated position {position_id} quantity to {quantity}.")
+
     async def get_position_by_market_id(self, market_id: str) -> Optional[Position]:
         """
         Get a position by market ID.

@@ -4,11 +4,12 @@ Trade Execution Job
 This job takes a position and executes it as a trade.
 """
 import asyncio
+import math
 import uuid
 from datetime import datetime
 from typing import Optional, Dict
 
-from src.utils.database import DatabaseManager, Position
+from src.utils.database import DatabaseManager, Position, TradeLog
 from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
 from src.clients.kalshi_client import KalshiClient, KalshiAPIError
@@ -156,6 +157,43 @@ async def execute_position(
         return True
 
 
+def _filled_count(order: Dict) -> float:
+    """fill_count from a Kalshi order response; 0.0 when absent or unreadable."""
+    for key in ("fill_count_fp", "fill_count"):
+        try:
+            v = float(order.get(key))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v >= 0:
+            return v
+    return 0.0
+
+
+async def _record_ioc_exit(position: Position, order: Dict, limit_price: float,
+                           db_manager: DatabaseManager, logger) -> bool:
+    """True only when the IOC sell filled the whole position.
+
+    A partial fill logs the sold part and shrinks the open position to what is
+    left; no fill leaves it untouched. Either way the caller keeps it open.
+    """
+    filled = round(min(_filled_count(order), position.quantity), 2)
+    if filled >= round(position.quantity, 2):
+        return True
+    if filled > 0:
+        await db_manager.add_trade_log(TradeLog(
+            market_id=position.market_id, side=position.side,
+            entry_price=position.entry_price, exit_price=limit_price,
+            quantity=filled, pnl=(limit_price - position.entry_price) * filled,
+            entry_timestamp=position.timestamp, exit_timestamp=datetime.now(),
+            rationale=f"{position.rationale} | EXIT: partial IOC fill under risk halt"))
+        await db_manager.update_position_quantity(
+            position.id, round(position.quantity - filled, 2))
+    logger.warning(
+        f"IOC exit for {position.market_id} filled {filled} of {position.quantity}; "
+        f"the rest stays open.")
+    return False
+
+
 async def place_sell_limit_order(
     position: Position,
     limit_price: float,
@@ -210,6 +248,12 @@ async def place_sell_limit_order(
         
         if response and 'order' in response:
             order_id = response['order'].get('order_id', client_order_id)
+
+            if response.get('reduce_only_ioc'):
+                # Under a limit halt the sell went out immediate-or-cancel, so the
+                # unfilled remainder is gone. Count only what filled.
+                return await _record_ioc_exit(
+                    position, response['order'], limit_price, db_manager, logger)
             
             # Record the sell order in the database (we could add a sell_orders table if needed)
             logger.info(f"✅ SELL LIMIT ORDER placed successfully! Order ID: {order_id}")

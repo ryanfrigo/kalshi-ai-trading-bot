@@ -522,7 +522,11 @@ class KalshiClient(TradingLoggerMixin):
         # Backward-compat: legacy callers read resp["order"]["order_id"]. The v2
         # response is flat ({order_id, fill_count, ...}), so expose it both ways.
         if isinstance(resp, dict) and "order" not in resp:
-            return {"order": resp, **resp}
+            resp = {"order": resp, **resp}
+        if reduce_only and isinstance(resp, dict):
+            # The halt-exempt sell went out IOC: any unfilled remainder is already
+            # cancelled. Callers that record a close must read fill_count.
+            resp["reduce_only_ioc"] = True
         return resp
     
     @staticmethod
