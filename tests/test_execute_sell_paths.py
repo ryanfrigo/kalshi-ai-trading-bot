@@ -112,6 +112,12 @@ async def test_profit_taking_exactly_at_threshold_triggers():
     assert res["orders_placed"] == 1
 
 
+async def test_profit_taking_exact_threshold_survives_float_error():
+    c = _client(market={"yes_price": 12})  # (0.12-0.10)/0.10 == 0.1999999999999999
+    res = await place_profit_taking_orders(_db([_pos("YES", 0.10)]), c, profit_threshold=0.20)
+    assert res["orders_placed"] == 1
+
+
 async def test_profit_taking_no_side_reads_no_price():
     c = _client(market={"yes_price": 5, "no_price": 90})
     res = await place_profit_taking_orders(_db([_pos("NO", 0.60)]), c, profit_threshold=0.25)
@@ -160,10 +166,6 @@ async def test_stop_loss_not_triggered_above_threshold():
     c.place_order.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: src/jobs/execute.py place_stop_loss_orders compares an unrounded float ratio: "
-    "(0.45-0.50)/0.50 == -0.09999999999999998 > -0.10, so a position exactly at the "
-    "stop-loss threshold does NOT trigger (needs ~1 more cent of loss)."))
 async def test_stop_loss_exactly_at_threshold_triggers():
     c = _client(market={"yes_price": 45})  # exactly -10%
     res = await place_stop_loss_orders(_db([_pos("YES", 0.50)]), c, stop_loss_threshold=-0.10)

@@ -410,6 +410,11 @@ async def reconcile_exit_fill(position: Position, response: Dict, sell_ok: bool,
     return "none"
 
 
+# Threshold compares allow float error: (0.45 - 0.50) / 0.50 is
+# -0.09999999999999998, which would miss an exact -10% stop.
+_PCT_EPS = 1e-9
+
+
 async def place_profit_taking_orders(
     db_manager: DatabaseManager,
     kalshi_client: KalshiClient,
@@ -466,7 +471,7 @@ async def place_profit_taking_orders(
                     logger.debug(f"Position {position.market_id}: Entry=${position.entry_price:.3f}, Current=${current_price:.3f}, Profit={profit_pct:.1%}, PnL=${unrealized_pnl:.2f}")
                     
                     # Check if we should place a profit-taking sell order
-                    if profit_pct >= profit_threshold:
+                    if profit_pct >= profit_threshold - _PCT_EPS:
                         # Calculate sell limit price (slightly below current to ensure execution)
                         sell_price = current_price * 0.98  # 2% below current price for quick execution
                         
@@ -553,7 +558,7 @@ async def place_stop_loss_orders(
                     unrealized_pnl = (current_price - position.entry_price) * position.quantity
                     
                     # Check if we need stop-loss protection
-                    if loss_pct <= stop_loss_threshold:  # Negative loss percentage
+                    if loss_pct <= stop_loss_threshold + _PCT_EPS:  # Negative loss percentage
                         # Calculate stop-loss sell price
                         stop_price = position.entry_price * (1 + stop_loss_threshold * 1.1)  # Slightly more aggressive
                         stop_price = max(0.01, stop_price)  # Ensure price is at least 1¢
