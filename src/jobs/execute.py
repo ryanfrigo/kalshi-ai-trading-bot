@@ -170,7 +170,8 @@ def _filled_count(order: Dict) -> float:
 
 
 async def _record_ioc_exit(position: Position, order: Dict, limit_price: float,
-                           db_manager: DatabaseManager, logger) -> bool:
+                           db_manager: DatabaseManager, logger,
+                           reason: str = "partial IOC fill under risk halt") -> bool:
     """True only when the IOC sell filled the whole position.
 
     A partial fill logs the sold part and shrinks the open position to what is
@@ -185,11 +186,11 @@ async def _record_ioc_exit(position: Position, order: Dict, limit_price: float,
             entry_price=position.entry_price, exit_price=limit_price,
             quantity=filled, pnl=(limit_price - position.entry_price) * filled,
             entry_timestamp=position.timestamp, exit_timestamp=datetime.now(),
-            rationale=f"{position.rationale} | EXIT: partial IOC fill under risk halt"),
+            rationale=f"{position.rationale} | EXIT: {reason}"),
             round(position.quantity - filled, 2))
     logger.warning(
-        f"IOC exit for {position.market_id} filled {filled} of {position.quantity}; "
-        f"the rest stays open.")
+        f"Exit sell for {position.market_id} filled {filled} of {position.quantity} "
+        f"({reason}); the rest stays open.")
     return False
 
 
@@ -289,40 +290,75 @@ async def place_sell_limit_order(
         return False
 
 
+def _order_outcome(o: Dict) -> Optional[str]:
+    """Outcome ('yes'/'no') a resting order is positioned for; None if unreadable.
+
+    Kalshi's Order schema: outcome_side ("buy-yes and sell-no produce 'yes';
+    buy-no and sell-yes produce 'no'"), book_side ('bid' = yes, 'ask' = no), and
+    the deprecated side + action (https://docs.kalshi.com/api-reference/orders/get-orders).
+    """
+    outcome = str(o.get("outcome_side") or "").lower()
+    if outcome in ("yes", "no"):
+        return outcome
+    book = str(o.get("book_side") or "").lower()
+    if book in ("bid", "ask"):
+        return "yes" if book == "bid" else "no"
+    side, action = str(o.get("side") or "").lower(), str(o.get("action") or "").lower()
+    if side in ("yes", "no") and action in ("buy", "sell"):
+        return side if action == "buy" else ("no" if side == "yes" else "yes")
+    return None
+
+
 async def _sellable_contracts(kalshi_client: KalshiClient, ticker: str,
                               side: str) -> Optional[float]:
-    """Contracts held on ``side`` of ``ticker`` minus our resting sells there.
+    """Contracts held on ``side`` of ``ticker`` minus our resting orders against it.
 
-    None when either exchange read fails or a resting order can't be read, so
-    the caller sends nothing (fail closed).
+    A resting order counts against a YES holding when it is positioned for NO
+    (sell YES, or buy NO, which nets the same contracts), and vice versa. None
+    when an exchange read fails or a resting order can't be read, so the caller
+    sends nothing (fail closed); an unreadable order is logged by its fields.
     """
+    logger = get_trading_logger("sellable_guard")
     held = await kalshi_client._held_on_side(ticker, side)
     if isinstance(held, bool) or not isinstance(held, (int, float)) or not math.isfinite(held):
+        logger.error(f"Exit blocked on {ticker}: held {side} contracts unreadable ({held!r}).")
         return None
     try:
         resp = await kalshi_client.get_orders(ticker=ticker, status="resting")
-        if not isinstance(resp, dict) or resp.get("cursor"):
-            return None  # unreadable, or more pages than we read
-        resting = 0.0
-        for o in resp.get("orders") or []:
-            if o.get("ticker") != ticker:
-                continue
-            o_side, action = str(o.get("side", "")).lower(), str(o.get("action", "")).lower()
-            if o_side not in ("yes", "no") or action not in ("buy", "sell"):
-                return None  # can't tell whether it sells our contracts
-            if action == "sell" and o_side == side.lower():
-                left = None
-                for key in ("remaining_count_fp", "remaining_count"):
-                    try:
-                        left = float(o.get(key))
-                        break
-                    except (TypeError, ValueError):
-                        continue
-                if left is None or not math.isfinite(left) or left < 0:
-                    return None
-                resting += left
-    except Exception:
+    except Exception as e:
+        logger.error(f"Exit blocked on {ticker}: resting-orders read failed ({e}).")
         return None
+    orders = resp.get("orders") if isinstance(resp, dict) else None
+    if not isinstance(orders, list):
+        logger.error(f"Exit blocked on {ticker}: resting-orders response has no 'orders' list.")
+        return None
+    if resp.get("cursor") and len(orders) >= 100:  # a full default page: there may be more
+        logger.error(f"Exit blocked on {ticker}: resting orders span more than one page.")
+        return None
+    against = "no" if side.lower() == "yes" else "yes"
+    resting = 0.0
+    for o in orders:
+        if not isinstance(o, dict) or o.get("ticker") != ticker:
+            continue
+        outcome = _order_outcome(o)
+        if outcome is None:
+            logger.error(f"Exit blocked on {ticker}: resting order {o.get('order_id')} has no "
+                         f"readable outcome_side, book_side or side+action; keys={sorted(o)}.")
+            return None
+        if outcome != against:
+            continue
+        left = None
+        for key in ("remaining_count_fp", "remaining_count"):
+            try:
+                left = float(o.get(key))
+                break
+            except (TypeError, ValueError):
+                continue
+        if left is None or not math.isfinite(left) or left < 0:
+            logger.error(f"Exit blocked on {ticker}: resting order {o.get('order_id')} has no "
+                         f"readable remaining_count_fp; keys={sorted(o)}.")
+            return None
+        resting += left
     return held - resting
 
 
@@ -344,7 +380,8 @@ async def reconcile_exit_fill(position: Position, response: Dict, sell_ok: bool,
         # place_sell_limit_order already ran _record_ioc_exit: True = all filled.
         full = sell_ok
     elif _filled_count(order) > 0:
-        full = await _record_ioc_exit(position, order, limit_price, db_manager, logger)
+        full = await _record_ioc_exit(position, order, limit_price, db_manager, logger,
+                                      reason=f"partial fill ({reason})")
     else:
         logger.info(f"{reason} sell for {position.market_id} is resting; "
                     f"not recorded as sold until it fills.")

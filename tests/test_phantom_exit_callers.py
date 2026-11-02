@@ -25,6 +25,18 @@ CALLERS = {
 }
 
 
+def _rest_sell(ticker, side, n):
+    """A resting sell as GET /portfolio/orders documents it: no side/action, _fp counts.
+
+    https://docs.kalshi.com/api-reference/orders/get-orders - sell-yes is
+    outcome_side 'no' / book_side 'ask'; sell-no is 'yes' / 'bid'.
+    """
+    outcome = "no" if side == "yes" else "yes"
+    return {"order_id": "r1", "ticker": ticker, "outcome_side": outcome,
+            "book_side": "bid" if outcome == "yes" else "ask",
+            "remaining_count_fp": f"{n:.2f}", "status": "resting"}
+
+
 class FakeKalshi:
     """Exchange state: held contracts and our resting sells; fills move both."""
 
@@ -52,12 +64,17 @@ class FakeKalshi:
         filled = count if self.fill is None else min(self.fill, count)
         self.held -= filled
         if not self.ioc and count > filled:
-            self.resting.append({"ticker": kw["ticker"], "side": kw["side"], "action": "sell",
-                                 "remaining_count_fp": f"{count - filled:.2f}"})
+            self.resting.append(_rest_sell(kw["ticker"], kw["side"], count - filled))
         resp = {"order": {"order_id": "o1", "fill_count_fp": f"{filled:.2f}"}}
         if self.ioc:
             resp["reduce_only_ioc"] = True
         return resp
+
+
+def _logged(capsys, caplog):
+    """Log text from either sink: structlog prints or goes via stdlib logging,
+    depending on which test configured it first."""
+    return capsys.readouterr().out + caplog.text
 
 
 async def _setup(tmp_path, quantity=10):
@@ -92,13 +109,15 @@ def test_full_fill_closes_position_and_logs_exit(tmp_path, kind, ioc):
 
 @pytest.mark.parametrize("kind", CALLERS)
 @pytest.mark.parametrize("ioc", [True, False], ids=["ioc", "gtc"])
-def test_partial_fill_logs_sold_part_and_shrinks(tmp_path, kind, ioc, capsys):
+def test_partial_fill_logs_sold_part_and_shrinks(tmp_path, kind, ioc, capsys, caplog):
     client = FakeKalshi(ioc=ioc, fill=4)
     _, after, logs = _run(tmp_path, kind, client)
     assert after.status == "open" and after.quantity == pytest.approx(6)
     assert len(logs) == 1 and logs[0].quantity == pytest.approx(4)
     assert logs[0].pnl == pytest.approx((logs[0].exit_price - 0.40) * 4)
-    assert "Failed to place" not in capsys.readouterr().out
+    out = _logged(capsys, caplog)
+    assert "filled 4.0 of 10" in out  # warning-level: proves capture, so the next check bites
+    assert "Failed to place" not in out
 
 
 @pytest.mark.parametrize("kind", CALLERS)
@@ -142,26 +161,50 @@ def test_db_above_held_caps_sell_at_held(tmp_path):
     assert client.sent == [6]
 
 
-def test_resting_sell_on_book_blocks_a_second_sell(tmp_path):
-    client = FakeKalshi(resting=[{"ticker": "PH-1", "side": "yes", "action": "sell",
-                                  "remaining_count_fp": "10.00"}])
+@pytest.mark.parametrize("rest", [
+    _rest_sell("PH-1", "yes", 10),                                           # documented
+    {"ticker": "PH-1", "book_side": "ask", "remaining_count_fp": "10.00"},   # book_side only
+    {"ticker": "PH-1", "side": "yes", "action": "sell", "remaining_count": 10},  # legacy
+], ids=["outcome_side", "book_side", "legacy-side-action"])
+def test_resting_sell_on_book_blocks_a_second_sell(tmp_path, rest):
+    client = FakeKalshi(resting=[rest])
     ok, order = _sell(tmp_path, client)
     assert ok is False and order == {} and client.sent == []
 
 
-def test_resting_orders_on_other_side_or_buys_do_not_block(tmp_path):
+def test_resting_buy_no_counts_against_a_yes_holding(tmp_path):
+    # buy-no is outcome_side 'no' like sell-yes; Kalshi nets it against our YES
+    client = FakeKalshi(fill=0, resting=[{"ticker": "PH-1", "outcome_side": "no",
+                                          "remaining_count_fp": "4.00"}])
+    _sell(tmp_path, client)
+    assert client.sent == [6]
+
+
+def test_resting_orders_for_our_own_outcome_do_not_block(tmp_path):
+    # buy-yes / sell-no are positioned for YES: they add to, never sell, our YES
     client = FakeKalshi(fill=0, resting=[
-        {"ticker": "PH-1", "side": "no", "action": "sell", "remaining_count_fp": "5.00"},
-        {"ticker": "PH-1", "side": "yes", "action": "buy", "remaining_count_fp": "5.00"}])
+        _rest_sell("PH-1", "no", 5),
+        {"ticker": "PH-1", "outcome_side": "yes", "book_side": "bid",
+         "remaining_count_fp": "5.00"},
+        _rest_sell("OTHER-1", "yes", 10)])
     _sell(tmp_path, client)
     assert client.sent == [10]
+
+
+def test_unreadable_resting_order_logs_the_missing_fields(tmp_path, capsys, caplog):
+    client = FakeKalshi(resting=[{"order_id": "r9", "ticker": "PH-1",
+                                  "remaining_count_fp": "1.00"}])
+    _sell(tmp_path, client)
+    out = _logged(capsys, caplog)
+    assert client.sent == []
+    assert "Exit blocked on PH-1" in out and "r9" in out and "outcome_side" in out
 
 
 @pytest.mark.parametrize("client", [
     FakeKalshi(positions_fail=True),
     FakeKalshi(orders_fail=True),
     FakeKalshi(held=0.0),
-    FakeKalshi(resting=[{"ticker": "PH-1", "side": "yes", "action": "sell"}]),  # no count
+    FakeKalshi(resting=[{"ticker": "PH-1", "outcome_side": "no"}]),             # no count
     FakeKalshi(resting=[{"ticker": "PH-1", "remaining_count_fp": "1.00"}]),     # no side
 ], ids=["positions-read-fails", "orders-read-fails", "nothing-held",
         "unreadable-remaining", "unreadable-side"])
@@ -170,14 +213,33 @@ def test_unconfirmable_exchange_state_sends_nothing(tmp_path, client):
     assert ok is False and client.sent == []
 
 
-def test_paginated_resting_orders_fail_closed(tmp_path):
+def test_full_page_with_cursor_fails_closed(tmp_path):
     client = FakeKalshi()
 
     async def paged(ticker=None, status=None):
-        return {"orders": [], "cursor": "next"}
+        return {"orders": [_rest_sell("PH-1", "no", 1)] * 100, "cursor": "next"}
     client.get_orders = paged
     ok, _ = _sell(tmp_path, client)
     assert ok is False and client.sent == []
+
+
+def test_short_page_with_cursor_is_complete(tmp_path):
+    # cursor is a required field in the response; a page under the 100 default is the last
+    client = FakeKalshi(fill=0)
+
+    async def last_page(ticker=None, status=None):
+        return {"orders": [], "cursor": "abc"}
+    client.get_orders = last_page
+    _sell(tmp_path, client)
+    assert client.sent == [10]
+
+
+@pytest.mark.parametrize("ioc,reason", [(True, "partial IOC fill under risk halt"),
+                                        (False, "partial fill (profit_take)")],
+                         ids=["halt-ioc", "normal-gtc"])
+def test_partial_exit_rationale_names_the_real_reason(tmp_path, ioc, reason):
+    _, _, logs = _run(tmp_path, "profit", FakeKalshi(ioc=ioc, fill=4))
+    assert logs[0].rationale.endswith(f"EXIT: {reason}")
 
 
 # --- track.py close loop: no close on mere acceptance ---
