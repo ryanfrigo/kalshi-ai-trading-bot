@@ -734,18 +734,47 @@ def test_mm_live_orders_map_side_to_price_field():
     assert y["action"] == n["action"] == "buy"
 
 
-def test_mm_live_price_rounds_not_truncates():
+def test_mm_live_price_floors_with_epsilon_absorbing_float_error():
     mm = _mm()
     with patch.object(settings.trading, "live_trading_enabled", True):
         run(mm._place_limit_order(LimitOrder("MM-1", "YES", 0.58 * 100, 10)))
     assert mm.kalshi_client.orders[0]["yes_price"] == 58
 
 
-def test_mm_live_no_price_rounds_not_truncates():
+def test_mm_live_no_price_floors_with_epsilon_absorbing_float_error():
     mm = _mm()
     with patch.object(settings.trading, "live_trading_enabled", True):
         run(mm._place_limit_order(LimitOrder("MM-1", "NO", 0.29 * 100, 10)))
     assert mm.kalshi_client.orders[0]["no_price"] == 29
+
+
+def _mm_bid_sent(ai_prob, side):
+    """Run the real path (analysis -> opportunity -> LimitOrder -> _place_limit_order)
+    on a 40c/42c YES book (NO bid 58c / ask 60c) with a 3c spread; return the cents sent.
+
+    The nested-market read is an owner-gated xfail, so the book is the flattened
+    shape (as in test_mm_analysis_works_only_on_flat_shape...). max_spread is pinned to
+    min_spread so the quoted spread really is ~3c rather than the 10c default cap.
+    """
+    mm = _mm()
+    mm.min_spread = mm.max_spread = 0.03
+    mm.kalshi_client.market = v2_market(0.40, 0.42, 0.58, 0.60)["market"]
+    mm._get_ai_analysis = AsyncMock(return_value={"probability": ai_prob, "confidence": 0.9})
+    opp = run(mm.analyze_market_making_opportunities([_mm_market()]))[0]
+    with patch.object(settings.trading, "live_trading_enabled", True):
+        run(mm._place_market_making_orders(opp))
+    sent = {o["side"]: o for o in mm.kalshi_client.orders}[side]
+    return sent["yes_price" if side == "yes" else "no_price"]
+
+
+def test_mm_yes_bid_stays_below_the_ask_on_a_40_42_book():
+    # AI favours YES: computed bid is 41.905c; round() sent 42c == the ask (taker fill + fee).
+    assert _mm_bid_sent(0.7, "yes") < 42
+
+
+def test_mm_no_bid_stays_below_the_ask_on_a_40_42_book():
+    # AI favours NO: computed NO bid is 59.77c; round() sent 60c == the NO ask (100 - 40).
+    assert _mm_bid_sent(0.2, "no") < 60
 
 
 def test_mm_refused_order_is_marked_failed():

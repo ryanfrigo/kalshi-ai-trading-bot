@@ -16,6 +16,7 @@ Key advantages:
 
 import asyncio
 import logging
+import math
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, NamedTuple
 from dataclasses import dataclass, asdict
@@ -461,9 +462,10 @@ class AdvancedMarketMaker:
                 
                 # Add the appropriate price parameter
                 if side == "yes":
-                    order_params["yes_price"] = int(round(order.price))  # Price in cents
+                    # BUY bids floor (never round up into the ask); 1e-6 absorbs float error (0.58*100)
+                    order_params["yes_price"] = int(math.floor(order.price + 1e-6))  # Price in cents
                 else:
-                    order_params["no_price"] = int(round(order.price))
+                    order_params["no_price"] = int(math.floor(order.price + 1e-6))
                 
                 # Place the order
                 response = await self.kalshi_client.place_order(**order_params)
