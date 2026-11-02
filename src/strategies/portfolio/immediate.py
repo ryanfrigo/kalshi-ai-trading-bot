@@ -260,7 +260,7 @@ async def _evaluate_immediate_trade(
         import aiosqlite
         async with aiosqlite.connect(db_manager.db_path) as db:
             cursor = await db.execute(
-                "SELECT COUNT(*) FROM positions WHERE market_id = ?",
+                "SELECT COUNT(*) FROM positions WHERE market_id = ? AND status != 'voided'",
                 (opportunity.market_id,)
             )
             result = await cursor.fetchone()
@@ -386,7 +386,15 @@ async def _evaluate_immediate_trade(
             
             # Execute the trade - respect the global trading mode setting
             live_mode = getattr(settings.trading, 'live_trading_enabled', False)
-            success = await execute_position(position, live_mode, db_manager, kalshi_client)
+            try:
+                success = await execute_position(position, live_mode, db_manager, kalshi_client)
+            except Exception:
+                await db_manager.update_position_status(position_id, 'voided')
+                raise
+            if not success:
+                # No order went out (halt, balance guard, API error): the pre-inserted
+                # row must not linger as an open position that blocks this market.
+                await db_manager.update_position_status(position_id, 'voided')
             if success:
                 logger.info(f"✅ IMMEDIATE TRADE EXECUTED: {opportunity.market_id} - ${position_size:.0f} position")
             else:

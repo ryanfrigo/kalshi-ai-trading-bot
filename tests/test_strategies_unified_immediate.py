@@ -243,12 +243,6 @@ def test_immediate_skips_when_any_side_already_held(db):
     cap.execute.assert_not_awaited()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "The position row is inserted (status=open, live=0) BEFORE execution and never "
-    "removed when execution fails (risk halt, insufficient balance, API error). "
-    "The row then (a) blocks that market via the dedupe SELECT forever, even after "
-    "the halt lifts, and (b) counts toward position-limit/exposure sums with no "
-    "order behind it."))
 def test_failed_execution_leaves_no_open_row(db):
     kalshi = FakeKalshi(legacy_market(40, 60))
     with Captured(execute_result=False):
@@ -256,13 +250,27 @@ def test_failed_execution_leaves_no_open_row(db):
     assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is None
 
 
-def test_failed_execution_blocks_retry_today(db):
-    """Characterization of the row-left-behind behaviour above."""
+def test_failed_execution_row_is_voided_and_retry_allowed(db):
     kalshi = FakeKalshi(legacy_market(40, 60))
     with Captured(execute_result=False) as cap:
         run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
         run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
-    assert cap.execute.await_count == 1
+    assert cap.execute.await_count == 2  # the failed row did not block the retry
+
+
+def test_raising_execution_also_voids_row(db):
+    kalshi = FakeKalshi(legacy_market(40, 60))
+    with Captured() as cap:
+        cap.execute.side_effect = RuntimeError("boom")
+        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
+    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is None
+
+
+def test_allocation_failed_execution_voids_row(db):
+    s = make_system(db, FakeKalshi(legacy_market(40, 60)))
+    with Captured(execute_result=False):
+        run(s._execute_portfolio_allocations(alloc(), [make_opp(0.40, 0.60)]))
+    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is None
 
 
 def test_halted_client_refuses_order_and_marks_nothing_live(db):

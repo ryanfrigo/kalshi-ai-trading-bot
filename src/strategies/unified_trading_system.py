@@ -554,12 +554,20 @@ class UnifiedAdvancedTradingSystem:
                     live_mode = getattr(settings.trading, 'live_trading_enabled', False)
                     self.logger.info(f"🎛️ Trading mode check: live_mode={live_mode} for market {opportunity.market_id}")
                     
-                    success = await execute_position(
-                        position=position,
-                        live_mode=live_mode,
-                        db_manager=self.db_manager,
-                        kalshi_client=self.kalshi_client
-                    )
+                    try:
+                        success = await execute_position(
+                            position=position,
+                            live_mode=live_mode,
+                            db_manager=self.db_manager,
+                            kalshi_client=self.kalshi_client
+                        )
+                    except Exception:
+                        await self.db_manager.update_position_status(position_id, 'voided')
+                        raise
+                    if not success:
+                        # No order went out: void the pre-inserted row so it cannot
+                        # block the market or count toward limits.
+                        await self.db_manager.update_position_status(position_id, 'voided')
                     
                     if success:
                         results['successful_executions'] += 1
