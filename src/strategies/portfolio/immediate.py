@@ -392,15 +392,17 @@ async def _evaluate_immediate_trade(
             
             # Execute the trade - respect the global trading mode setting
             live_mode = getattr(settings.trading, 'live_trading_enabled', False)
+            from src.jobs.execute import void_position_if_exchange_flat
             try:
                 success = await execute_position(position, live_mode, db_manager, kalshi_client)
             except Exception:
-                await db_manager.update_position_status(position_id, 'voided')
+                await void_position_if_exchange_flat(db_manager, kalshi_client, position_id,
+                                                     opportunity.market_id)
                 raise
             if not success:
-                # No order went out (halt, balance guard, API error): the pre-inserted
-                # row must not linger as an open position that blocks this market.
-                await db_manager.update_position_status(position_id, 'voided')
+                # No order is known to have gone out; void only if the exchange agrees.
+                await void_position_if_exchange_flat(db_manager, kalshi_client, position_id,
+                                                     opportunity.market_id)
             if success:
                 logger.info(f"✅ IMMEDIATE TRADE EXECUTED: {opportunity.market_id} - ${position_size:.0f} position")
             else:

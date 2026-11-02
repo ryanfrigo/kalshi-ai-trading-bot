@@ -66,8 +66,19 @@ class FakeKalshi:
     async def get_balance(self):
         return {"balance": self.balance_cents, "portfolio_value": self.portfolio_cents}
 
-    async def get_positions(self):
-        return {"event_positions": []}
+    async def get_positions(self, ticker=None, **kw):
+        """Exchange positions for ``ticker``, derived from ``held``/``position_rows``."""
+        if getattr(self, "positions_error", None):
+            raise self.positions_error
+        if hasattr(self, "position_rows"):
+            return {"market_positions": list(self.position_rows)}
+        rows = []
+        held = getattr(self, "held", {})
+        if held.get("yes"):
+            rows.append({"ticker": ticker, "position_fp": f"{held['yes']:.2f}"})
+        elif held.get("no"):
+            rows.append({"ticker": ticker, "position_fp": f"{-held['no']:.2f}"})
+        return {"market_positions": rows}
 
     async def get_orders(self, ticker=None, status=None, **kw):
         return {"orders": list(getattr(self, "resting", []))}
@@ -494,6 +505,73 @@ def test_allocation_fails_closed_when_resting_read_fails(db):
     with Captured() as cap:
         run(s._execute_portfolio_allocations(alloc(), [make_opp(0.70, 0.50)]))
     cap.execute.assert_not_awaited()
+
+
+# --- void-on-failure only when the exchange shows nothing (revision A)
+
+def _accepted_then_4xx(kalshi):
+    """place_order: the POST reaches the exchange (order rests), then the client raises."""
+    async def place(**kw):
+        kalshi.orders.append(kw)
+        kalshi.resting = [{"ticker": "MKT-1", "outcome_side": "yes", "remaining_count_fp": "5.00"}]
+        raise KalshiAPIError("409 duplicate client_order_id")
+    kalshi.place_order = place
+
+
+def test_immediate_keeps_row_open_when_order_reached_exchange_then_raised(db, monkeypatch):
+    # in-memory flag only; the client is a fake, so no order can leave the process
+    monkeypatch.setattr(settings.trading, "live_trading_enabled", True)
+    kalshi = FakeKalshi(legacy_market(40, 60))
+    _accepted_then_4xx(kalshi)
+    opp = make_opp(0.40, 0.60)
+    with patch("src.utils.position_limits.check_can_add_position",
+               AsyncMock(return_value=(True, "ok"))), \
+         patch("src.utils.cash_reserves.check_can_trade_with_cash_reserves",
+               AsyncMock(return_value=(True, "ok"))):
+        run(_evaluate_immediate_trade(opp, db, kalshi, 1000))
+        run(_evaluate_immediate_trade(opp, db, kalshi, 1000))  # second run
+    assert len(kalshi.orders) == 1  # no re-buy
+    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is not None
+
+
+def test_allocation_keeps_row_open_when_order_reached_exchange_then_raised(db, monkeypatch):
+    # in-memory flag only; the client is a fake, so no order can leave the process
+    monkeypatch.setattr(settings.trading, "live_trading_enabled", True)
+    kalshi = FakeKalshi(legacy_market(40, 60))
+    _accepted_then_4xx(kalshi)
+    s = make_system(db, kalshi)
+    with patch("src.utils.position_limits.check_can_add_position",
+               AsyncMock(return_value=(True, "ok"))), \
+         patch("src.utils.cash_reserves.check_can_trade_with_cash_reserves",
+               AsyncMock(return_value=(True, "ok"))):
+        run(s._execute_portfolio_allocations(alloc(), [make_opp(0.40, 0.60)]))
+        run(s._execute_portfolio_allocations(alloc(), [make_opp(0.40, 0.60)]))
+    assert len(kalshi.orders) == 1
+    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is not None
+
+
+@pytest.mark.parametrize("kw", [
+    {"held": {"yes": 5.0}},
+    {"resting": [{"ticker": "MKT-1", "outcome_side": "yes", "remaining_count_fp": "5.00"}]},
+    {"positions_error": RuntimeError("503")},
+    {"position_rows": [{"ticker": "MKT-1", "position_fp": "x"}]},
+])
+def test_failed_execution_not_voided_unless_exchange_flat(db, kw):
+    kalshi = FakeKalshi(legacy_market(40, 60))
+    for k, v in kw.items():
+        setattr(kalshi, k, v)
+    with Captured(execute_result=False):
+        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
+    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is not None
+
+
+def test_raise_not_voided_when_orders_read_fails(db):
+    kalshi = FakeKalshi(legacy_market(40, 60))
+    kalshi.get_orders = AsyncMock(side_effect=RuntimeError("503"))
+    with Captured() as cap:
+        cap.execute.side_effect = RuntimeError("boom")
+        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
+    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is not None
 
 
 def test_allocation_limit_failure_counts_failed_not_created(db):

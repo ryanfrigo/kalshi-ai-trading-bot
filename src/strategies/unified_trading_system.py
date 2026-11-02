@@ -21,6 +21,7 @@ Key innovations:
 """
 
 import asyncio
+import math
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -555,6 +556,7 @@ class UnifiedAdvancedTradingSystem:
                     live_mode = getattr(settings.trading, 'live_trading_enabled', False)
                     self.logger.info(f"🎛️ Trading mode check: live_mode={live_mode} for market {opportunity.market_id}")
                     
+                    from src.jobs.execute import void_position_if_exchange_flat
                     try:
                         success = await execute_position(
                             position=position,
@@ -563,13 +565,14 @@ class UnifiedAdvancedTradingSystem:
                             kalshi_client=self.kalshi_client
                         )
                     except Exception:
-                        await self.db_manager.update_position_status(position_id, 'voided')
+                        await void_position_if_exchange_flat(
+                            self.db_manager, self.kalshi_client, position_id, market_id)
                         raise
                     if not success:
-                        # No order went out: void the pre-inserted row so it cannot
-                        # block the market or count toward limits.
-                        await self.db_manager.update_position_status(position_id, 'voided')
-                    
+                        # No order is known to have gone out; void only if the exchange agrees.
+                        await void_position_if_exchange_flat(
+                            self.db_manager, self.kalshi_client, position_id, market_id)
+
                     if success:
                         results['successful_executions'] += 1
                         results['positions_created'] += 1
