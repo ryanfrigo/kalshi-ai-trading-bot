@@ -14,7 +14,7 @@ A ``--live`` control is run beside the dry run where one exists, to prove the
 sensor can see a mutation (a test that never sees a POST proves nothing).
 
 Paths that CAN send a mutating request without ``--live`` are strict xfails that
-carry the exact command. Full table: /private/tmp/paper-live-report.md
+carry the exact command.
 """
 from __future__ import annotations
 
