@@ -213,18 +213,11 @@ def test_limits_reduce_the_size_until_it_fits():
     assert pos.quantity == int(full * 0.60 * 0.60 / 0.60)    # 60% of the original value
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "decide.py:353-354: `break` on 'less than 1 contract' exits the for/else, which skips the "
-    "else-branch that rejects the trade, so the ORIGINAL oversize quantity goes through. "
-    "Balance $40, NO limit headroom (e.g. position count at max): initial 2 contracts @0.60; "
-    "0.4 x reduction rounds to 0 -> break -> the 2-contract order that every limit check refused "
-    "is created anyway. Any order of <=4 contracts bypasses the position-count and exposure "
-    "limits. Fix: treat the break as 'does not fit' (return None)."))
 def test_small_order_that_no_limit_check_accepts_is_not_created():
     kalshi = Kalshi(balance_cents=4_000)
     assert _calculate_dynamic_quantity(40.0, 0.60, 0.25) == 2           # precondition
     pos, db, *_ = _run(_market(), _decision("YES", 0.85), kalshi=kalshi, limits=(False, "max positions"))
-    assert pos is None
+    assert pos is None and "POSITION_LIMITS" in _actions(db)
 
 
 def test_insufficient_cash_reserve_records_and_returns_none():

@@ -356,7 +356,10 @@ async def make_decision_for_market(
                     reduced_quantity = int(reduced_position_value / price)
                     
                     if reduced_quantity < 1:
-                        break  # Can't have less than 1 contract
+                        # Under 1 contract: keep going so the loop ends in its else
+                        # branch, which records POSITION_LIMITS and returns None.
+                        # (A break here skipped that and let the oversize order through.)
+                        continue
                     
                     can_add_reduced, reduced_reason = await check_can_add_position(
                         reduced_position_value, db_manager, kalshi_client
