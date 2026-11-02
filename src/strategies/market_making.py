@@ -634,7 +634,8 @@ class AdvancedMarketMaker:
             if not market_data:
                 return False
             
-            current_yes_price = market_data.get('yes_price', 0) / 100
+            market_info = market_data.get('market', market_data)  # get_market nests under "market"
+            current_yes_price = self._book_ask(market_info, 'last_price_dollars', 'yes_price')
             order_price = order.price / 100
             
             # Update if market has moved significantly
