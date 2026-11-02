@@ -222,10 +222,6 @@ def test_immediate_never_exceeds_cash_or_cap_with_ample_contracts(db):
     assert p.quantity * p.entry_price <= 1000 * settings.trading.max_single_position + 1e-6
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "shares = max(1, int(size / price)) forces one contract even when it costs "
-    "more than the position cap. $10 book, 3% cap = $0.30, YES at 45c: buys 1 "
-    "contract for $0.45 (4.5% of equity, 150% of the cap)."))
 def test_immediate_min_one_contract_respects_position_cap(db):
     kalshi = FakeKalshi(legacy_market(45, 55), balance_cents=1000)  # $10
     with Captured() as cap:

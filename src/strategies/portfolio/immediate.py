@@ -342,9 +342,13 @@ async def _evaluate_immediate_trade(
         if remaining_edge < 0.10:
             logger.info(f"⏭️ Skipping {opportunity.market_id} - live {side} ask {entry_price:.2f} leaves only {remaining_edge:.1%} edge")
             return
-        shares = max(1, int(position_size / entry_price))  # Minimum 1 contract
-        
-        # Verify we can afford at least 1 contract
+        shares = int(position_size / entry_price)
+        if shares < 1:
+            # One contract costs more than the position cap allows; never round up past it.
+            logger.info(f"⏭️ Skipping {opportunity.market_id} - position cap ${position_size:.2f} cannot buy 1 {side} contract @ ${entry_price:.2f}")
+            return
+
+        # Verify we can afford the position
         min_cost = shares * entry_price
         if min_cost > available_cash:
             logger.info(f"⏭️ Cannot afford minimum 1 contract: ${min_cost:.2f} > ${available_cash:.2f}")
