@@ -187,8 +187,7 @@ async def test_sell_limit_order_functionality():
             test_position,
             limit_price=0.70,  # Sell at 70¢ (10¢ profit)
             db_manager=db_manager,
-            kalshi_client=kalshi_client
-        )
+            kalshi_client=kalshi_client, live=True)
         
         # The test passes if the function runs without errors
         # Note: In test environment, orders may not actually execute
@@ -225,7 +224,8 @@ async def test_profit_taking_orders():
         results = await place_profit_taking_orders(
             db_manager=db_manager,
             kalshi_client=kalshi_client,
-            profit_threshold=0.15  # 15% profit threshold for testing
+            profit_threshold=0.15,  # 15% profit threshold for testing
+            live=True,
         )
         
         print(f"📊 Profit-taking test results:")

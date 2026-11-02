@@ -212,7 +212,7 @@ async def preview_exits(client: ReadOnlyClient, db: ReadOnlyDB) -> Dict[str, Any
          patch.object(execute_mod, "_sellable_contracts", sellable_spy), \
          patch.object(execute_mod, "place_sell_limit_order", sell_spy), \
          patch.object(track_mod, "should_exit_position", should_exit):
-        await track_mod.run_tracking(db)
+        await track_mod.run_tracking(db, live=True)  # previews the LIVE pass; client/db are read-only
     return {"exits": exits, "sellable": sellable, "attempts": attempts}
 
 

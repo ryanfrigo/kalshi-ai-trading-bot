@@ -341,14 +341,8 @@ async def _seed_live_row(tmp_path, ticker="T-PT"):
     return db
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "`python cli.py run`  (also `run --paper`, `run --beast`): BeastModeBot starts "
-    "_run_position_tracking -> run_tracking -> place_profit_taking_orders/place_stop_loss_orders, "
-    "which sell every DB row with live=1 on the REAL exchange with no paper check. Precondition: "
-    "an open live=1 position the account actually holds (any prior --live run, or a paper "
-    "'simulated' fill, which execute_position also stores as live=1)."))
 @pytest.mark.parametrize("argv", [["run"], ["run", "--paper"], ["run", "--beast"]])
-async def test_run_default_position_tracking_must_not_sell(wire, tmp_path, argv):
+async def test_run_default_position_tracking_sends_no_mutation(wire, tmp_path, argv):
     import beast_mode_bot
     await _seed_live_row(tmp_path)
     wire.held["T-PT"] = "4.00"
@@ -368,10 +362,17 @@ async def test_run_default_position_tracking_must_not_sell(wire, tmp_path, argv)
     with patch("beast_mode_bot.asyncio.sleep", stop_after_one):
         await bot._run_position_tracking(db, MagicMock())
     assert wire.mutations == [], f"paper-mode run sent {wire.mutations}"
+    assert wire.calls.n == {"place_order": 0, "cancel_order": 0}
+    import sqlite3
+    con = sqlite3.connect(str(tmp_path / "trading_system.db"))
+    # documented paper-exit DB writes: one trade_logs row + position closed
+    assert con.execute("select status from positions").fetchall() == [("closed",)]
+    rows = con.execute("select market_id, quantity, rationale from trade_logs").fetchall()
+    assert len(rows) == 1 and rows[0][:2] == ("T-PT", 4) and "EXIT: profit_take (PAPER)" in rows[0][2]
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "`LIVE_TRADING_ENABLED=true python scripts/test_quick_flip_strategy.py`: this script (and any "
+    "OWNER DECISION: script is live by default. `LIVE_TRADING_ENABLED=true python scripts/test_quick_flip_strategy.py`: this script (and any "
     "caller of experimental QuickFlip / strategies.market_making / portfolio.immediate that does "
     "not go through BeastModeBot) takes live mode from settings.trading.live_trading_enabled, "
     "which an env var alone sets. No --live is involved."))
@@ -414,7 +415,7 @@ def _run_script(path, *argv):
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "`python scripts/closeout_live.py` (no flag): the script is LIVE unless --dry is passed. "
+    "OWNER DECISION: script is live by default. `python scripts/closeout_live.py` (no flag): LIVE unless --dry. "
     "It buys 5 contracts per candidate with place_order."))
 def test_script_closeout_live_default_must_not_buy(wire, tmp_path):
     root, path = _script_sandbox(tmp_path, "closeout_live.py")
@@ -445,7 +446,7 @@ def _maker_market():
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "`python scripts/maker_closeout.py` (no flag): LIVE unless --dry is passed. "
+    "OWNER DECISION: script is live by default. `python scripts/maker_closeout.py` (no flag): LIVE unless --dry. "
     "It rests 15-contract buys with place_order."))
 def test_script_maker_closeout_default_must_not_buy(wire, tmp_path):
     root, path = _script_sandbox(tmp_path, "maker_closeout.py")
@@ -457,7 +458,7 @@ def test_script_maker_closeout_default_must_not_buy(wire, tmp_path):
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "`python scripts/ornn_stop_check.py` (no flag, no dry mode): sells the held ORNN position "
+    "OWNER DECISION: script is live by default. `python scripts/ornn_stop_check.py` (no flag, no dry mode): sells the held ORNN position "
     "with place_order whenever its print rules fire. Risk-reducing by design, but a real order "
     "with no --live."))
 def test_script_ornn_stop_check_default_must_not_sell(wire, tmp_path):
@@ -597,3 +598,66 @@ def test_inventory_only_run_daily_sh_opts_in_to_live_and_only_on_explicit_arg():
     assert re.search(r'if \[ "\$MODE" = "live" \]; then\s+FLAG="--live"', sh)
     # the wrapper's own switch is the KALSHI_DAILY_MODE env var, and its default is dry
     assert 'MODE="${KALSHI_DAILY_MODE:-dry}"' in sh, "default MODE changed: re-audit"
+
+
+# --------------------------------------------------------------------------
+# run_tracking / exit helpers: paper by default, live only with live=True
+# --------------------------------------------------------------------------
+
+_PT_MARKET = {"status": "active", "yes_price": 60, "yes_bid_dollars": 0.60,
+              "yes_ask_dollars": 0.62, "no_bid_dollars": 0.38, "no_ask_dollars": 0.40}
+
+
+async def _tracking_setup(wire, tmp_path):
+    from src.utils.database import DatabaseManager
+    await _seed_live_row(tmp_path)
+    wire.held["T-PT"] = "4.00"
+    wire.markets["T-PT"] = dict(_PT_MARKET)
+    return DatabaseManager(db_path=str(tmp_path / "trading_system.db"))
+
+
+async def test_run_tracking_default_sends_no_mutation_and_simulates_exit(wire, tmp_path):
+    from src.jobs.track import run_tracking
+    db = await _tracking_setup(wire, tmp_path)
+    await run_tracking(db)
+    assert wire.log and wire.mutations == []
+    assert wire.calls.n == {"place_order": 0, "cancel_order": 0}
+
+
+async def test_run_tracking_live_true_control_sells(wire, tmp_path):
+    from src.jobs.track import run_tracking
+    db = await _tracking_setup(wire, tmp_path)
+    await run_tracking(db, live=True)
+    assert [m for m, _ in wire.mutations] == ["POST"]
+
+
+async def test_place_sell_limit_order_refuses_without_live(wire, tmp_path):
+    """Lowest layer: a future caller that forgets the flag cannot send."""
+    from src.jobs.execute import place_sell_limit_order
+    from src.utils.database import Position
+    wire.held["T-A"] = "4.00"
+    c = KalshiClient()
+    pos = Position("T-A", "YES", 0.40, 4, datetime.now(), live=True, id=1)
+    order = {}
+    ok = await place_sell_limit_order(pos, 0.55, MagicMock(), c, order_out=order)
+    assert ok is False and order == {}
+    assert wire.log == [] and wire.mutations == []
+    ok = await place_sell_limit_order(pos, 0.55, MagicMock(), c, live=True)
+    assert ok is True and [m for m, _ in wire.mutations] == ["POST"]
+    await c.close()
+
+
+@pytest.mark.parametrize("helper,market", [
+    ("place_profit_taking_orders", _PT_MARKET),
+    ("place_stop_loss_orders", {"status": "active", "yes_bid_dollars": 0.20, "yes_ask_dollars": 0.22,
+                                "no_bid_dollars": 0.78, "no_ask_dollars": 0.80}),
+])
+async def test_profit_and_stop_helpers_default_paper(wire, tmp_path, helper, market):
+    import src.jobs.execute as ex_mod
+    db = await _tracking_setup(wire, tmp_path)
+    wire.markets["T-PT"] = dict(market)
+    c = KalshiClient()
+    res = await getattr(ex_mod, helper)(db, c)
+    await c.close()
+    assert res["simulated"] == 1 and res["orders_placed"] == 0
+    assert wire.mutations == [] and wire.calls.n["place_order"] == 0

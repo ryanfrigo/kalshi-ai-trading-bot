@@ -67,7 +67,7 @@ def test_late_full_fill_closes_with_no_settlement_log(tmp_path):
     async def go():
         db = await _db(tmp_path)
         with patch("src.jobs.track.KalshiClient", return_value=client):
-            await run_tracking(db_manager=db)
+            await run_tracking(db_manager=db, live=True)
         return await _row(db), await db.get_all_trade_logs()
     row, logs = asyncio.run(go())
     assert row == ("closed", 10, None, None)
@@ -104,11 +104,11 @@ def test_cancelled_exit_clears_the_id_so_a_new_exit_goes_out(tmp_path):
         client = FakeKalshi(fill=0)
         client.get_order = AsyncMock(return_value=_order(0, "canceled"))
         (pos,) = await db.get_open_live_positions()
-        blocked = await place_sell_limit_order(pos, 0.30, db, client)
+        blocked = await place_sell_limit_order(pos, 0.30, db, client, live=True)
         sent_while_tracked = list(client.sent)
         result = await reconcile_resting_exit(pos, client, db)
         (pos,) = await db.get_open_live_positions()
-        ok = await place_sell_limit_order(pos, 0.30, db, client)
+        ok = await place_sell_limit_order(pos, 0.30, db, client, live=True)
         return blocked, sent_while_tracked, result, ok, client.sent, await db.get_all_trade_logs()
     blocked, sent_while_tracked, result, ok, sent, logs = asyncio.run(go())
     assert blocked is False and sent_while_tracked == []
@@ -135,7 +135,7 @@ def test_unreadable_order_changes_nothing(tmp_path, get_order):
 def test_resting_exit_stores_its_order_id(tmp_path):
     async def go():
         db = await _db(tmp_path, exit_order=None)
-        await place_profit_taking_orders(db, FakeKalshi(fill=0, yes_cents=60))
+        await place_profit_taking_orders(db, FakeKalshi(fill=0, yes_cents=60), live=True)
         return await _row(db)
     assert asyncio.run(go()) == ("open", 10, "o1", 0.0)
 
@@ -143,7 +143,7 @@ def test_resting_exit_stores_its_order_id(tmp_path):
 def test_partly_filled_exit_stores_id_and_recorded_fill(tmp_path):
     async def go():
         db = await _db(tmp_path, exit_order=None)
-        await place_profit_taking_orders(db, FakeKalshi(fill=4, yes_cents=60))
+        await place_profit_taking_orders(db, FakeKalshi(fill=4, yes_cents=60), live=True)
         return await _row(db)
     assert asyncio.run(go()) == ("open", 6, "o1", 4.0)
 
@@ -159,7 +159,7 @@ def test_partly_filled_exit_is_atomic_when_the_id_write_fails(tmp_path):
             """)
             await conn.commit()
         try:
-            await place_profit_taking_orders(db, FakeKalshi(fill=4, yes_cents=60))
+            await place_profit_taking_orders(db, FakeKalshi(fill=4, yes_cents=60), live=True)
         except Exception:
             pass  # whether the caller swallows the error is not what this tests
         return await _row(db), await db.get_all_trade_logs()
@@ -215,7 +215,7 @@ def _cycles(tmp_path, replies):
             (pos,) = await db.get_open_live_positions()
             out.append((await reconcile_resting_exit(pos, client, db), await _failures(db)))
         (pos,) = await db.get_open_live_positions()
-        sent = await place_sell_limit_order(pos, 0.30, db, client)
+        sent = await place_sell_limit_order(pos, 0.30, db, client, live=True)
         return out, sent, client.sent
     return asyncio.run(go())
 

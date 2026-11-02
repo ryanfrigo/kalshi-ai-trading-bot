@@ -65,7 +65,7 @@ async def test_run_tracking_closes_position(mock_kalshi_client):
 
     try:
         # Act: Run the tracking job
-        await run_tracking(db_manager=db_manager)
+        await run_tracking(db_manager=db_manager, live=True)
 
         # Assert
         # 1. Check if the position is now 'closed'
@@ -144,7 +144,7 @@ async def test_non_resolution_exit_requires_successful_sell(
     mock_place_sell.return_value = False
 
     try:
-        await run_tracking(db_manager=db_manager)
+        await run_tracking(db_manager=db_manager, live=True)
 
         position_after = await get_position_by_market_id_any_status(db_manager, "TRACK-NO-RES-1")
         assert position_after is not None
@@ -217,7 +217,7 @@ async def test_non_resolution_exit_closes_after_successful_sell(
     mock_place_sell.side_effect = filled_sell
 
     try:
-        await run_tracking(db_manager=db_manager)
+        await run_tracking(db_manager=db_manager, live=True)
 
         position_after = await get_position_by_market_id_any_status(db_manager, "TRACK-NO-RES-2")
         assert position_after is not None
@@ -310,7 +310,7 @@ async def test_v2_dollar_bid_drives_take_profit_price(mock_kalshi_client, mock_p
     mock_place_sell.return_value = True
 
     try:
-        await run_tracking(db_manager=db_manager)
+        await run_tracking(db_manager=db_manager, live=True)
 
         mock_place_sell.assert_awaited_once()
         assert mock_place_sell.call_args.kwargs["limit_price"] == 0.46
