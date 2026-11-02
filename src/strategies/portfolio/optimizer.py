@@ -9,7 +9,6 @@ This module implements cutting-edge portfolio optimization techniques:
 5. Multi-objective optimization (return vs risk vs drawdown)
 
 Based on latest research:
-- Kelly Criterion Extension for dynamic markets (Kim, 2024)
 - Fractional Kelly strategies for risk management
 - Portfolio optimization for prediction markets
 

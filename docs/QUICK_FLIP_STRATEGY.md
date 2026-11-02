@@ -60,48 +60,12 @@ QuickFlipConfig(
 - **AI Confidence**: Filter trades by prediction confidence
 - **Time Limits**: Maximum hold time before cutting losses
 
-## Integration with Trading System
+## Status
 
-### Capital Allocation
-- **20%** of total portfolio allocated to quick flip strategy
-- Runs parallel with market making (30%) and directional trading (40%)
-- Independent risk management and position tracking
-
-### Risk Management
-- ✅ **Position Limits**: Maximum contracts and capital per trade
-- ✅ **Time Stops**: Automatic exit after 30 minutes
-- ✅ **Confidence Filtering**: Only high-confidence AI predictions
-- ✅ **Diversification**: Spread across multiple markets
-- ✅ **Capital Controls**: Limited allocation prevents overexposure
-
-## Usage
-
-### Testing the Strategy
-```bash
-# Test opportunity identification (no trades)
-python test_quick_flip_strategy.py
-
-# Run paper trading test
-python -c "
-from test_quick_flip_strategy import test_quick_flip_full_strategy
-import asyncio
-asyncio.run(test_quick_flip_full_strategy())
-"
-```
-
-### Running in Production
-The strategy is automatically included in the unified trading system:
+This code is not called by `cli.py` or the unified trading system. Nothing allocates capital to it. If you want to try it, import it yourself:
 
 ```python
-from src.strategies.unified_trading_system import run_unified_trading_system
-
-# Quick flip runs automatically as part of unified system
-results = await run_unified_trading_system(db_manager, kalshi_client, xai_client)
-```
-
-### Manual Execution
-```python
-from src.strategies.quick_flip_scalping import run_quick_flip_strategy, QuickFlipConfig
+from experimental.strategies.quick_flip_scalping import run_quick_flip_strategy, QuickFlipConfig
 
 config = QuickFlipConfig(
     min_entry_price=1,
@@ -111,12 +75,14 @@ config = QuickFlipConfig(
 
 results = await run_quick_flip_strategy(
     db_manager=db_manager,
-    kalshi_client=kalshi_client, 
+    kalshi_client=kalshi_client,
     xai_client=xai_client,
     available_capital=500.0,
     config=config
 )
 ```
+
+The test script is `scripts/test_quick_flip_strategy.py`.
 
 ## Strategy Advantages
 
@@ -161,13 +127,6 @@ results = await run_quick_flip_strategy(
 - **AI Accuracy**: Predictions may be incorrect
 - **Execution Risk**: Orders may not fill as expected
 
-### Mitigation Strategies
-- Conservative position sizing (≤$50 per trade)
-- Strict time limits (≤30 minutes)
-- High confidence thresholds (≥60%)
-- Diversification across markets
-- Continuous monitoring and adjustment
-
 ## Future Enhancements
 
 ### Planned Improvements
@@ -186,9 +145,6 @@ results = await run_quick_flip_strategy(
 
 ## Quick Start
 
-1. **Test the strategy**: `python test_quick_flip_strategy.py`
+1. **Test the strategy**: `python scripts/test_quick_flip_strategy.py`
 2. **Review configuration** in `QuickFlipConfig`
-3. **Start unified trading** - quick flip runs automatically
-4. **Monitor performance** through logs and analytics
-
-The quick flip strategy adds a new dimension to your trading system, targeting rapid profits on price movements while maintaining strict risk controls. 🚀 
+3. **Import it yourself** from `experimental.strategies.quick_flip_scalping`; nothing runs it for you. 

@@ -11,10 +11,9 @@ Allocation tiers:
   80-100 → 20% max position
   60-79  → 10% max position
   40-59  → 5%  max position
-  20-39  → 2%  max position
-  0-19   → 0%  (blocked)
-
-Categories scoring < 30 are auto-blocked.
+  30-39  → 2%  max position
+  0-29   → 0%  (flagged BLOCKED in `cli scores`; display only, nothing in the
+                order path reads it)
 """
 
 import asyncio

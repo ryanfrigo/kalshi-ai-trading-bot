@@ -36,7 +36,9 @@ This is the longshot bias / optimism tax, confirmed on 72M trades.
 Even in the last hour, taking YES at 98-99c is slightly -EV. The counterparty
 (maker) earns the mirror.
 
-## 4. Policy implications (adopted)
+## 4. What I take from this (not enforced in code)
+
+I trade by these rules by hand. The code does not enforce them.
 
 1. **Never take near-certain prices** — the level is priced. Enter certainty only
    as a maker, model-gated (fair − price > spread + fee), small clips.

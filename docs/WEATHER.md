@@ -1,6 +1,6 @@
 # Weather family (KXHIGH*) — build plan + calibration log
 
-_Built 2026-09-28. Status: PROBE ONLY, no trades, no size until forward-scored._
+_Built 2026-09-28. Capture runs daily from `scripts/run_morning.sh`. No trades, no size, and no forward score yet: the pricing and scoring steps below are not built._
 
 ## Why this family
 
@@ -30,7 +30,7 @@ becomes measurable (the ensemble may still win out-of-sample at longer leads).
 
 1. `scripts/weather_data.py`: daily capture (a) Open-Meteo GEFS + ECMWF-ensemble
    daily-max distributions per city, (b) NWS Climate Report actuals (settlement
-   source) -> data/weather/. Wire into run_morning.sh.
+   source) -> data/weather/. Runs from run_morning.sh.
 2. Bias-correct each ensemble against the NWS-station history (gridpoint-vs-station
    offset), blend by recent out-of-sample performance.
 3. Price ladders (above/below/bucket strikes) -> `data/weather/pricings/`,
