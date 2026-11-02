@@ -348,16 +348,15 @@ async def test_trade_side_is_case_insensitive(ex, side):
 
 @pytest.mark.parametrize("side", ["maybe", "", "yes ", "buy", "y", "sell"])
 async def test_trade_bad_side_never_reaches_the_wire_live(ex, side):
-    with pytest.raises(ValueError, match="side must be"):
-        await server.trade(ticker="T-A", side=side, count=1, confirm=True)
-    assert ex.posts == []
+    out = await server.trade(ticker="T-A", side=side, count=1, confirm=True)
+    assert out["ok"] is False and ex.posts == []
 
 
-@pytest.mark.xfail(strict=True, reason="D4: dry-run accepts side='maybe' and previews a YES "
-                   "buy (ok=True, 50c) that live refuses with ValueError")
-async def test_trade_bad_side_is_refused_in_dry_run(ex):
-    out = await server.trade(ticker="T-A", side="maybe", count=1)
-    assert out["ok"] is False
+@pytest.mark.parametrize("side", ["maybe", "", "yes ", "buy", "y", "sell"])
+async def test_trade_bad_side_is_refused_in_dry_run(ex, side):
+    """D4: refused up front, before the governor or any market read."""
+    out = await server.trade(ticker="T-A", side=side, count=1)
+    assert out == {"ok": False, "reason": "side must be 'yes' or 'no'"} and ex.log == []
 
 
 @pytest.mark.parametrize("ticker", [

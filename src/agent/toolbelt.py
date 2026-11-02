@@ -168,7 +168,9 @@ async def place_guarded_order(
     if not max_position_pct <= cap_pct:  # also catches NaN
         max_position_pct = cap_pct
 
-    side = side.lower()
+    side = side.lower() if isinstance(side, str) else ""
+    if side not in ("yes", "no"):
+        return {"ok": False, "reason": "side must be 'yes' or 'no'"}
     gov = governor or RiskGovernor(kalshi_client=kalshi_client)
     decision = await gov.check()
     if decision.halted:
