@@ -10,7 +10,7 @@ stub that records what it is asked to do; the DB is a temp SQLite file.
 
 Tests marked ``xfail(strict=True)`` pin REAL defects with a dollar example in
 the reason; when the bug is fixed the xfail flips to XPASS(strict) and fails,
-which is the signal to delete the marker. See /private/tmp/strategies-report.md.
+which is the signal to delete the marker.
 """
 import asyncio
 from datetime import datetime
