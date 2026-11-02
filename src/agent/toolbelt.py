@@ -306,9 +306,11 @@ async def close_position(
 ) -> Dict[str, Any]:
     """Sell (close) an existing position with a marketable limit at the bid.
 
-    Reads the live holding, sells the side held (capped to held count), at the
-    current bid for that side (or `price` if given). Journals the close. Selling
-    reduces risk, so it is allowed even when the governor is halted.
+    Reads the live holding, sells the side held (capped to held count net of our
+    resting orders; nothing if those can't be read), at the current bid for that
+    side (or `price` if given). Journals the close. Under a governor halt,
+    ``KalshiClient.place_order`` blocks the sell on MANUAL_HALT and allows a
+    reduce-only IOC sell up to held on DAILY_LOSS / DRAWDOWN.
     """
     from src.utils.market_prices import get_market_prices
     from src.agent.journal import make_decision_record, append_decision, DEFAULT_JOURNAL_PATH

@@ -12,8 +12,7 @@ Risk-governor state, the manual halt flag, the policy file and the decision
 journal are all relative paths under ``data/runtime``; each test chdirs into
 tmp_path so they live there.
 
-Tests marked ``xfail(strict=True)`` are real defects; each carries a dollar
-example. They flip to XPASS (and fail the suite) once fixed.
+Defects D1-D5 from the audit are fixed; each test that pinned one says which.
 """
 from __future__ import annotations
 
@@ -510,8 +509,7 @@ async def test_close_fails_closed_on_an_unreadable_resting_order(ex, bad, confir
 # ---------------------------------------------------------------------------
 
 async def test_close_under_manual_halt_is_blocked_live(ex):
-    """The MCP docstring says close is permitted when the governor is halted. The
-    client gate refuses every sell under MANUAL_HALT, so it fails closed."""
+    """The client gate refuses every sell under MANUAL_HALT."""
     _halt_flag()
     ex.positions["T-A"] = "10.00"
     with pytest.raises(KalshiAPIError, match="RISK_HALT: MANUAL_HALT"):
