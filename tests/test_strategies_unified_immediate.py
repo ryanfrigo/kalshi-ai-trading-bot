@@ -741,6 +741,13 @@ def test_mm_live_price_rounds_not_truncates():
     assert mm.kalshi_client.orders[0]["yes_price"] == 58
 
 
+def test_mm_live_no_price_rounds_not_truncates():
+    mm = _mm()
+    with patch.object(settings.trading, "live_trading_enabled", True):
+        run(mm._place_limit_order(LimitOrder("MM-1", "NO", 0.29 * 100, 10)))
+    assert mm.kalshi_client.orders[0]["no_price"] == 29
+
+
 def test_mm_refused_order_is_marked_failed():
     mm = _mm()
     mm.kalshi_client.place_order = AsyncMock(side_effect=KalshiAPIError("RISK_HALT: x"))
