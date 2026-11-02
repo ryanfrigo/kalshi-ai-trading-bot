@@ -160,6 +160,14 @@ async def place_guarded_order(
     from src.agent.policy import load_policy, apply_policy, DEFAULT_POLICY_PATH
     from src.agent.settle import series_category
 
+    from src.config.settings import settings
+
+    # The caller may only tighten the configured per-position cap, never widen it.
+    cap_pct = settings.trading.max_position_size_pct / 100.0
+    max_position_pct = float(max_position_pct)
+    if not max_position_pct <= cap_pct:  # also catches NaN
+        max_position_pct = cap_pct
+
     side = side.lower()
     gov = governor or RiskGovernor(kalshi_client=kalshi_client)
     decision = await gov.check()

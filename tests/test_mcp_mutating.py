@@ -248,21 +248,25 @@ async def test_trade_caps_to_cash_when_cash_is_the_tighter_limit(ex):
     assert out["count"] == 40 and "cash" in out["cap_reason"]
 
 
-async def test_raising_max_position_pct_is_refused_by_the_client_gate_live(ex):
-    """max_position_pct is an MCP argument. The toolbelt honors it, but the client
-    gate re-checks cost against settings (10%), so no live order goes out."""
-    with pytest.raises(KalshiAPIError, match="POSITION_CAP"):
-        await server.trade(ticker="T-A", side="yes", count=1000, max_position_pct=1.0,
-                           confirm=True)
-    assert ex.posts == []
+async def test_raising_max_position_pct_is_clamped_live(ex):
+    """max_position_pct is an MCP argument; asking for 100% still sends only the
+    10% size, which the client gate accepts."""
+    out = await server.trade(ticker="T-A", side="yes", count=1000, max_position_pct=1.0,
+                             confirm=True)
+    assert out["count"] == 200 and [p["count"] for p in ex.posts] == ["200.00"]
 
 
-@pytest.mark.xfail(strict=True, reason="D2: max_position_pct from the MCP caller is trusted "
-                   "by the dry-run; preview says 1000 contracts ($500) on $1,000 equity "
-                   "while live would refuse at $100")
-async def test_dry_run_does_not_report_a_size_above_the_ten_percent_cap(ex):
-    out = await server.trade(ticker="T-A", side="yes", count=1000, max_position_pct=1.0)
-    assert not out["ok"] or out["count"] * out["price_cents"] <= 10_000
+@pytest.mark.parametrize("pct", [1.0, 0.5, 0.11, math.inf, math.nan])
+async def test_dry_run_does_not_report_a_size_above_the_ten_percent_cap(ex, pct):
+    """D2: max_position_pct can only lower the configured 10% cap."""
+    out = await server.trade(ticker="T-A", side="yes", count=1000, max_position_pct=pct)
+    assert out["ok"] and out["count"] == 200  # $100 of $1,000 at 50c
+
+
+async def test_max_position_pct_can_lower_the_cap(ex):
+    out = await server.trade(ticker="T-A", side="yes", count=1000, max_position_pct=0.05,
+                             confirm=True)
+    assert out["count"] == 100 and ex.posts[0]["count"] == "100.00"
 
 
 async def test_cap_counts_what_is_already_held(ex):
