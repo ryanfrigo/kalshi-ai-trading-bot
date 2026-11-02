@@ -265,34 +265,65 @@ def test_immediate_skips_when_any_side_already_held(db):
     cap.execute.assert_not_awaited()
 
 
-def test_failed_execution_leaves_no_open_row(db):
-    kalshi = FakeKalshi(legacy_market(40, 60))
-    with Captured(execute_result=False):
-        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
-    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is None
+def _row_status(db, market_id="MKT-1"):
+    import sqlite3
+    c = sqlite3.connect(db.db_path)
+    try:
+        return c.execute("SELECT status, live FROM positions WHERE market_id=?", (market_id,)).fetchall()
+    finally:
+        c.close()
 
 
-def test_failed_execution_row_is_voided_and_retry_allowed(db):
+def _age_rows(db, minutes=11):
+    import sqlite3
+    from datetime import timedelta
+    c = sqlite3.connect(db.db_path)
+    try:
+        c.execute("UPDATE positions SET timestamp=?",
+                  ((datetime.now() - timedelta(minutes=minutes)).isoformat(),))
+        c.commit()
+    finally:
+        c.close()
+
+
+def test_failed_buy_leaves_row_open_and_next_cycle_does_not_rebuy(db):
     kalshi = FakeKalshi(legacy_market(40, 60))
     with Captured(execute_result=False) as cap:
         run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
         run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
-    assert cap.execute.await_count == 2  # the failed row did not block the retry
+    assert cap.execute.await_count == 1
+    assert _row_status(db) == [("open", 0)]
 
 
-def test_raising_execution_also_voids_row(db):
+def test_raising_buy_leaves_row_open_and_next_cycle_does_not_rebuy(db):
     kalshi = FakeKalshi(legacy_market(40, 60))
     with Captured() as cap:
         cap.execute.side_effect = RuntimeError("boom")
         run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
-    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is None
+        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
+    assert cap.execute.await_count == 1
+    assert _row_status(db) == [("open", 0)]
 
 
-def test_allocation_failed_execution_voids_row(db):
+def test_allocation_failed_buy_leaves_row_open_and_next_cycle_does_not_rebuy(db):
     s = make_system(db, FakeKalshi(legacy_market(40, 60)))
-    with Captured(execute_result=False):
+    with Captured(execute_result=False) as cap:
         run(s._execute_portfolio_allocations(alloc(), [make_opp(0.40, 0.60)]))
-    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is None
+        run(s._execute_portfolio_allocations(alloc(), [make_opp(0.40, 0.60)]))
+    assert cap.execute.await_count == 1
+    assert _row_status(db) == [("open", 0)]
+
+
+def test_stale_pass_voids_failed_row_after_ten_minutes_when_exchange_flat(db):
+    from src.jobs.execute import reconcile_stale_failed_rows
+    kalshi = FakeKalshi(legacy_market(40, 60))
+    with Captured(execute_result=False):
+        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
+    assert run(reconcile_stale_failed_rows(db, kalshi)) == 0  # too young
+    assert _row_status(db) == [("open", 0)]
+    _age_rows(db, 11)
+    assert run(reconcile_stale_failed_rows(db, kalshi)) == 1
+    assert _row_status(db) == [("voided", 0)]
 
 
 def test_halted_client_refuses_order_and_marks_nothing_live(db):
@@ -549,7 +580,7 @@ def test_allocation_blocked_when_resting_page_is_full(db):
     cap.execute.assert_not_awaited()
 
 
-# --- void-on-failure only when the exchange shows nothing (revision A)
+# --- accepted order whose call then fails: one order only
 
 def _accepted_then_4xx(kalshi):
     """place_order: the POST reaches the exchange (order rests), then the client raises."""
@@ -589,30 +620,6 @@ def test_allocation_keeps_row_open_when_order_reached_exchange_then_raised(db, m
         run(s._execute_portfolio_allocations(alloc(), [make_opp(0.40, 0.60)]))
         run(s._execute_portfolio_allocations(alloc(), [make_opp(0.40, 0.60)]))
     assert len(kalshi.orders) == 1
-    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is not None
-
-
-@pytest.mark.parametrize("kw", [
-    {"held": {"yes": 5.0}},
-    {"resting": [{"ticker": "MKT-1", "outcome_side": "yes", "remaining_count_fp": "5.00"}]},
-    {"positions_error": RuntimeError("503")},
-    {"position_rows": [{"ticker": "MKT-1", "position_fp": "x"}]},
-])
-def test_failed_execution_not_voided_unless_exchange_flat(db, kw):
-    kalshi = FakeKalshi(legacy_market(40, 60))
-    for k, v in kw.items():
-        setattr(kalshi, k, v)
-    with Captured(execute_result=False):
-        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
-    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is not None
-
-
-def test_raise_not_voided_when_orders_read_fails(db):
-    kalshi = FakeKalshi(legacy_market(40, 60))
-    kalshi.get_orders = AsyncMock(side_effect=RuntimeError("503"))
-    with Captured() as cap:
-        cap.execute.side_effect = RuntimeError("boom")
-        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
     assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is not None
 
 

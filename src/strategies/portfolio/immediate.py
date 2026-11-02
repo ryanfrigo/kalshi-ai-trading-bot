@@ -392,17 +392,10 @@ async def _evaluate_immediate_trade(
             
             # Execute the trade - respect the global trading mode setting
             live_mode = getattr(settings.trading, 'live_trading_enabled', False)
-            from src.jobs.execute import void_position_if_exchange_flat
-            try:
-                success = await execute_position(position, live_mode, db_manager, kalshi_client)
-            except Exception:
-                await void_position_if_exchange_flat(db_manager, kalshi_client, position_id,
-                                                     opportunity.market_id)
-                raise
-            if not success:
-                # No order is known to have gone out; void only if the exchange agrees.
-                await void_position_if_exchange_flat(db_manager, kalshi_client, position_id,
-                                                     opportunity.market_id)
+            # A failed buy leaves its row open (live=0): the order may have been accepted
+            # but not yet visible, so voiding here could allow a second buy. The
+            # stale-row pass voids it later only if the exchange is flat.
+            success = await execute_position(position, live_mode, db_manager, kalshi_client)
             if success:
                 logger.info(f"✅ IMMEDIATE TRADE EXECUTED: {opportunity.market_id} - ${position_size:.0f} position")
             else:

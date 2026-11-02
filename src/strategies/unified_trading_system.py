@@ -560,22 +560,15 @@ class UnifiedAdvancedTradingSystem:
                     live_mode = getattr(settings.trading, 'live_trading_enabled', False)
                     self.logger.info(f"🎛️ Trading mode check: live_mode={live_mode} for market {opportunity.market_id}")
                     
-                    from src.jobs.execute import void_position_if_exchange_flat
-                    try:
-                        success = await execute_position(
-                            position=position,
-                            live_mode=live_mode,
-                            db_manager=self.db_manager,
-                            kalshi_client=self.kalshi_client
-                        )
-                    except Exception:
-                        await void_position_if_exchange_flat(
-                            self.db_manager, self.kalshi_client, position_id, market_id)
-                        raise
-                    if not success:
-                        # No order is known to have gone out; void only if the exchange agrees.
-                        await void_position_if_exchange_flat(
-                            self.db_manager, self.kalshi_client, position_id, market_id)
+                    # A failed buy leaves its row open (live=0): the order may have been
+                    # accepted but not yet visible. The stale-row pass voids it later only
+                    # if the exchange is flat.
+                    success = await execute_position(
+                        position=position,
+                        live_mode=live_mode,
+                        db_manager=self.db_manager,
+                        kalshi_client=self.kalshi_client
+                    )
 
                     if success:
                         results['successful_executions'] += 1
