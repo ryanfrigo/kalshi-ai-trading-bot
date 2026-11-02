@@ -765,7 +765,7 @@ class SafeCompounder:
 
         # Convert price to cents for position calculation
         price_cents = int(price * 100)
-        contracts = max(1, position_value // price_cents)
+        contracts = position_value // price_cents  # 0 when one contract exceeds the cap
         contracts = min(contracts, 200)
         return contracts
 

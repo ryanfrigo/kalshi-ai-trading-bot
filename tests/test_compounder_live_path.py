@@ -189,10 +189,6 @@ def test_contract_count_is_hard_capped_at_200():
     assert c._calculate_position_size(_opp(price=0.89), portfolio=10_000_000, cash=10_000_000) == 200
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "safe_compounder.py:746 max(1, ...) floors every order at one contract. Portfolio $5.00 "
-    "(cap 50c), NO at $0.89: sizes 1 contract = 89c = 17.8% of the portfolio, over the 10% limit. "
-    "Fix: return 0 when position_value < price_cents."))
 def test_floor_of_one_contract_does_not_break_the_ten_percent_cap():
     c = _compounder(FakeClient(), use_kelly=False)
     n = c._calculate_position_size(_opp(price=0.89), portfolio=500, cash=500)
