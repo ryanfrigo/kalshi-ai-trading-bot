@@ -54,6 +54,7 @@ What it did do: confirm *absence* across thousands of transcripts and posts fast
 ## Commands and code
 
 - `python cli.py verify --ticker T --research-file r.json --jev` floors the skeptic's true-YES at Jev's independent P(YES). It can only make the gate stricter. In practice it vetoes almost every sound trade (because of the compression above), so I don't run it by default.
+- `--drex` instead of `--jev` sends the same request to [Drex](https://console.nace.ai/docs/drex) (`drex-max-finance`, needs `NACE_API_KEY`) and falls back to Jev if Drex errors. `src/agent/drex.py`, pinned by `tests/test_agent_drex.py`.
 - `src/agent/jev.py` holds the request builders and the batch classifier, and `tests/test_agent_jev.py` pins them.
 - Never put the market price in the state.
 
