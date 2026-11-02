@@ -234,8 +234,9 @@ async def place_sell_limit_order(
         import uuid
         client_order_id = str(uuid.uuid4())
         
-        # Convert price to cents for Kalshi API
-        limit_price_cents = int(limit_price * 100)
+        # Convert price to cents for Kalshi API; round, since int() truncates
+        # float error (0.29 * 100 == 28.999...) and would sell 1c low.
+        limit_price_cents = int(round(limit_price * 100))
         
         # For sell orders, we need to use the opposite side logic:
         # - If we have YES position, we sell YES shares (action="sell", side="yes")

@@ -75,10 +75,6 @@ async def test_sell_limit_swallows_api_error_and_reports_failure():
     assert await place_sell_limit_order(_pos(), 0.5, _db(), c) is False
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: src/jobs/execute.py place_sell_limit_order uses int(limit_price*100), which "
-    "truncates float error: 0.29*100 == 28.999999999999996 -> 28c. A sell is sent 1c "
-    "below the intended limit (round() is used on the buy path)."))
 async def test_sell_limit_price_does_not_truncate_float_error():
     c = _client()
     await place_sell_limit_order(_pos("YES"), 0.29, _db(), c)
@@ -155,7 +151,7 @@ async def test_stop_loss_triggers_and_prices_below_entry():
     c = _client(market={"yes_price": 40})  # entry .50 -> -20%
     res = await place_stop_loss_orders(_db([_pos("YES", 0.50)]), c, stop_loss_threshold=-0.10)
     assert res["orders_placed"] == 1
-    # entry*(1 + -0.10*1.1) = 0.445 -> int(44.5) = 44c
+    # entry*(1 + -0.10*1.1) = 0.445 -> round(44.5) = 44c (half to even)
     assert c.place_order.call_args.kwargs["yes_price"] == 44
 
 
