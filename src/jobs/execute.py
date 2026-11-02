@@ -218,6 +218,14 @@ async def place_sell_limit_order(
     logger = get_trading_logger("sell_limit_order")
     
     try:
+        # Convert price to cents for Kalshi API; round, since int() truncates
+        # float error (0.29 * 100 == 28.999...) and would sell 1c low.
+        limit_price_cents = int(round(limit_price * 100))
+        if not 1 <= limit_price_cents <= 99:
+            logger.warning(f"Not selling {position.market_id}: limit {limit_price_cents}c "
+                           f"is outside 1-99c.")
+            return False
+
         # Never sell more than we hold on the exchange, net of our resting sells:
         # a DB row can outlive the contracts, and an oversell opens the other side.
         sellable = await _sellable_contracts(kalshi_client, position.market_id, position.side)
@@ -233,10 +241,6 @@ async def place_sell_limit_order(
 
         import uuid
         client_order_id = str(uuid.uuid4())
-        
-        # Convert price to cents for Kalshi API; round, since int() truncates
-        # float error (0.29 * 100 == 28.999...) and would sell 1c low.
-        limit_price_cents = int(round(limit_price * 100))
         
         # For sell orders, we need to use the opposite side logic:
         # - If we have YES position, we sell YES shares (action="sell", side="yes")

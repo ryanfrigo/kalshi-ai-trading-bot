@@ -81,15 +81,13 @@ async def test_sell_limit_price_does_not_truncate_float_error():
     assert c.place_order.call_args.kwargs["yes_price"] == 29
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: src/jobs/execute.py place_sell_limit_order has no 1-99c range check; a "
-    "limit under 1c is sent as yes_price=0 (buy path rejects <=0 or >=100)."))
 @pytest.mark.parametrize("price", [0.004, 0.0, 1.0, 1.5])
 async def test_sell_limit_out_of_range_price_is_not_sent(price):
     c = _client()
     ok = await place_sell_limit_order(_pos("YES"), price, _db(), c)
     assert ok is False
     c.place_order.assert_not_called()
+    c._held_on_side.assert_not_called()  # rejected before any exchange read
 
 
 # -------------------------------------------------------------- profit taking
