@@ -148,7 +148,15 @@ async def make_decision_for_market(
 
                 if decision.side == "YES" and decision.confidence >= settings.trading.high_confidence_threshold:
                     logger.info(f"High-confidence YES opportunity found for {market.market_id}.")
-                    
+
+                    if decision.confidence <= market.yes_price:
+                        reason = f"No positive edge: confidence {decision.confidence:.2f} <= YES price {market.yes_price:.2f}"
+                        logger.info(f"❌ EDGE FILTER REJECTED: {market.market_id} - {reason}")
+                        await db_manager.record_market_analysis(
+                            market.market_id, "EDGE_FILTERED", decision.confidence, total_analysis_cost, reason
+                        )
+                        return None
+
                     decision_action = "BUY"
                     confidence = decision.confidence
                     
@@ -161,6 +169,31 @@ async def make_decision_for_market(
                     quantity = _calculate_dynamic_quantity(available_balance, market.yes_price, confidence_delta)
 
                     if quantity > 0:
+                        # Same portfolio limits and cash reserve as the standard path.
+                        from src.utils.position_limits import check_can_add_position
+                        from src.utils.cash_reserves import check_can_trade_with_cash_reserves
+
+                        trade_value = quantity * market.yes_price
+                        can_add, limit_reason = await check_can_add_position(
+                            trade_value, db_manager, kalshi_client
+                        )
+                        if not can_add:
+                            logger.info(f"❌ POSITION LIMITS: {market.market_id} - {limit_reason}")
+                            await db_manager.record_market_analysis(
+                                market.market_id, "POSITION_LIMITS", confidence, total_analysis_cost, limit_reason
+                            )
+                            return None
+
+                        can_trade_cash, cash_reason = await check_can_trade_with_cash_reserves(
+                            trade_value, db_manager, kalshi_client
+                        )
+                        if not can_trade_cash:
+                            logger.info(f"❌ CASH RESERVES INSUFFICIENT: {market.market_id} - {cash_reason}")
+                            await db_manager.record_market_analysis(
+                                market.market_id, "CASH_RESERVES", confidence, total_analysis_cost, cash_reason
+                            )
+                            return None
+
                         # Calculate exit strategy using Grok4 recommendations  
                         from src.utils.stop_loss_calculator import StopLossCalculator
                         

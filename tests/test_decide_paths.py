@@ -269,16 +269,20 @@ def test_near_expiry_branch_needs_the_market_odds_and_the_window():
     assert xai.get_trading_decision.await_count == 1
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "decide.py:128-192: the near-expiry branch returns a Position straight after sizing; it "
-    "skips the EdgeFilter, check_can_add_position and the cash-reserve check that the standard "
-    "path applies. With the position-count limit reached and cash below reserve, a $1000 "
-    "account still creates a 33-contract, $30.36 position. Fix: run the same limit and "
-    "reserve checks before returning."))
-def test_high_confidence_branch_honours_position_limits_and_cash_reserves():
-    pos, *_ = _run(_near(yes=0.92), _decision("YES", 0.96),
-                   limits=(False, "max positions"), cash=(False, "reserve"))
-    assert pos is None
+def test_high_confidence_branch_honours_position_limits():
+    pos, db, xai, _ = _run(_near(yes=0.92), _decision("YES", 0.96), limits=(False, "max positions"))
+    assert pos is None and "POSITION_LIMITS" in _actions(db)
+    assert xai.get_trading_decision.await_count == 1
+
+
+def test_high_confidence_branch_honours_cash_reserves():
+    pos, db, *_ = _run(_near(yes=0.92), _decision("YES", 0.96), cash=(False, "reserve"))
+    assert pos is None and "CASH_RESERVES" in _actions(db)
+
+
+def test_high_confidence_branch_refuses_confidence_at_or_below_the_yes_price():
+    pos, db, *_ = _run(_near(yes=0.97, no=0.03), _decision("YES", 0.96))
+    assert pos is None and "EDGE_FILTERED" in _actions(db)
 
 
 @pytest.mark.xfail(strict=True, reason=(
