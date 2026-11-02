@@ -455,14 +455,33 @@ async def test_close_injected_ticker_finds_no_position(ex):
     assert out["ok"] is False and ex.posts == []
 
 
-@pytest.mark.xfail(strict=True, reason="D3: close does not net resting sells. Holding 10 YES "
-                   "with a 10-lot sell already resting at 48c, a second close sends another "
-                   "10; if both fill the account flips to 10 NO, $5.20 of new exposure at 52c")
 async def test_close_nets_resting_sells_against_the_holding(ex):
+    """D3: holding 10 YES with a 10-lot sell resting, a second close sends nothing
+    (before the fix it sent another 10 and could flip the account to 10 NO)."""
     ex.positions["T-A"] = "10.00"
     await server.close(ticker="T-A", confirm=True)    # rests (fake exchange never fills)
     await server.close(ticker="T-A", confirm=True)
     assert sum(float(p["count"]) for p in ex.posts) <= 10
+
+
+async def test_close_sells_only_the_part_not_already_resting(ex):
+    ex.positions["T-A"] = "10.00"
+    ex.resting.append({"order_id": "R-1", "ticker": "T-A", "outcome_side": "no",
+                       "remaining_count_fp": "4.00", "status": "resting"})
+    out = await server.close(ticker="T-A", confirm=True)
+    assert out["count"] == 6 and [p["count"] for p in ex.posts] == ["6.00"]
+
+
+@pytest.mark.parametrize("bad", [
+    {"order_id": "R-1", "ticker": "T-A", "remaining_count_fp": "4.00"},       # no side
+    {"order_id": "R-1", "ticker": "T-A", "outcome_side": "no"},               # no count
+])
+@pytest.mark.parametrize("confirm", [False, True])
+async def test_close_fails_closed_on_an_unreadable_resting_order(ex, bad, confirm):
+    ex.positions["T-A"] = "10.00"
+    ex.resting.append(bad)
+    out = await server.close(ticker="T-A", confirm=confirm)
+    assert out["ok"] is False and out["reason"] == "sellable_unreadable" and ex.posts == []
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import math
 import uuid
 from typing import Any, Dict, Optional, Tuple
 
@@ -290,6 +291,17 @@ async def close_position(
     side, n = resolve_sell(fp, count)
     if not side or n < 1:
         return {"ok": False, "reason": "no position to close", "ticker": ticker}
+
+    # Net our resting orders against the holding (same rules as the exit jobs),
+    # so a repeated close cannot sell past the position. Unreadable -> sell nothing.
+    from src.jobs.execute import _sellable_contracts
+    sellable = await _sellable_contracts(kalshi_client, ticker, side)
+    if sellable is None:
+        return {"ok": False, "reason": "sellable_unreadable", "ticker": ticker, "side": side}
+    n = min(n, int(math.floor(sellable + 1e-9)))
+    if n < 1:
+        return {"ok": False, "reason": "nothing sellable (resting orders cover the holding)",
+                "ticker": ticker, "side": side}
 
     m = (await kalshi_client.get_market(ticker)).get("market", {})
     yb, ya, nb, na = get_market_prices(m)
