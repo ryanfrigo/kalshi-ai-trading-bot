@@ -274,6 +274,13 @@ def test_live_order_is_a_resting_limit_buy_on_the_no_side_in_cents():
     assert stats["placed"] == 1 and stats["errors"] == 0
 
 
+def test_bid_price_is_rounded_not_truncated_to_the_priced_cent():
+    assert int(0.29 * 100) == 28          # the float trap this guards against
+    client = FakeClient()
+    _place(client, [_opp("KXA", price=0.29)])
+    assert client.placed[0]["no_price"] == 29
+
+
 def test_rejected_order_counts_as_error_not_placed():
     client = FakeClient()
 

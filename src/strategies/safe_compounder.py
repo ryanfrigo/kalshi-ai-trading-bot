@@ -706,7 +706,7 @@ class SafeCompounder:
 
             try:
                 # Convert dollar price to cents for API call
-                price_cents = int(price * 100)
+                price_cents = int(round(price * 100))
                 client_order_id = str(uuid.uuid4())
                 r = await self.client.place_order(
                     ticker=ticker,
@@ -764,7 +764,7 @@ class SafeCompounder:
             position_value = max_position_value
 
         # Convert price to cents for position calculation
-        price_cents = int(price * 100)
+        price_cents = int(round(price * 100))
         contracts = position_value // price_cents  # 0 when one contract exceeds the cap
         contracts = min(contracts, 200)
         return contracts
