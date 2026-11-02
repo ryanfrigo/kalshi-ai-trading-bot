@@ -214,6 +214,10 @@ class UnifiedAdvancedTradingSystem:
         self.logger.info("🚀 Executing Unified Advanced Trading Strategy")
         
         try:
+            # Step -1: free slots held by stale failed rows the exchange shows flat (GET-only)
+            from src.jobs.execute import reconcile_stale_failed_rows
+            await reconcile_stale_failed_rows(self.db_manager, self.kalshi_client)
+
             # Step 0: Check and enforce position limits AND cash reserves
             from src.utils.position_limits import PositionLimitsManager
             from src.utils.cash_reserves import CashReservesManager, is_cash_emergency
