@@ -315,6 +315,12 @@ class KalshiClient(TradingLoggerMixin):
             params["order_id"] = order_id
         return await self._make_authenticated_request("GET", "/trade-api/v2/portfolio/fills", params=params)
     
+    async def get_order(self, order_id: str) -> Dict[str, Any]:
+        """One order by id: status, fill_count_fp, prices (GET only).
+        https://docs.kalshi.com/api-reference/orders/get-order"""
+        return await self._make_authenticated_request(
+            "GET", f"/trade-api/v2/portfolio/orders/{order_id}")
+
     async def get_orders(self, ticker: Optional[str] = None, status: Optional[str] = None) -> Dict[str, Any]:
         """Get orders."""
         params = {}

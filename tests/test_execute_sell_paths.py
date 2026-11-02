@@ -49,6 +49,7 @@ def _db(positions=()):
     d = MagicMock()
     d.get_open_live_positions = AsyncMock(return_value=list(positions))
     d.update_position_to_live = AsyncMock()
+    d.set_exit_order = AsyncMock()  # a resting exit sell stores its order id
     return d
 
 

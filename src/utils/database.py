@@ -44,6 +44,8 @@ class Position:
     take_profit_price: Optional[float] = None
     max_hold_hours: Optional[int] = None  # Maximum hours to hold position
     target_confidence_change: Optional[float] = None  # Exit if confidence drops by this amount
+    exit_order_id: Optional[str] = None  # exit sell resting on the book, reconciled each cycle
+    exit_order_filled: Optional[float] = None  # its fill count already recorded
 
 @dataclass
 class TradeLog:
@@ -253,6 +255,8 @@ class DatabaseManager(TradingLoggerMixin):
                 take_profit_price REAL,
                 max_hold_hours INTEGER,
                 target_confidence_change REAL,
+                exit_order_id TEXT,
+                exit_order_filled REAL,
                 UNIQUE(market_id, side)
             )
         """)
@@ -358,6 +362,11 @@ class DatabaseManager(TradingLoggerMixin):
             if 'target_confidence_change' not in column_names:
                 await db.execute("ALTER TABLE positions ADD COLUMN target_confidence_change REAL")
                 self.logger.info("Added target_confidence_change column to positions table")
+
+            for col, typ in (("exit_order_id", "TEXT"), ("exit_order_filled", "REAL")):
+                if col not in column_names:
+                    await db.execute(f"ALTER TABLE positions ADD COLUMN {col} {typ}")
+                    self.logger.info(f"Added {col} column to positions table")
                 
             await db.commit()
             
@@ -510,8 +519,22 @@ class DatabaseManager(TradingLoggerMixin):
             await db.commit()
             self.logger.info(f"Updated position {position_id} status to {status}.")
 
-    async def record_partial_exit(self, position_id: int, trade_log: TradeLog, remaining: float):
-        """Log the sold part of a position and shrink it to what remains, in one transaction."""
+    async def set_exit_order(self, position_id: int, order_id: Optional[str],
+                             filled: Optional[float]):
+        """Store (or clear, with None) the exit sell resting for a position."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE positions SET exit_order_id = ?, exit_order_filled = ? "
+                             "WHERE id = ?", (order_id, filled, position_id))
+            await db.commit()
+
+    async def record_partial_exit(self, position_id: int, trade_log: TradeLog, remaining: float,
+                                  **columns):
+        """Log the sold part of a position and shrink it to what remains, in one transaction.
+
+        ``columns`` (status, exit_order_id, exit_order_filled) are set in the same update.
+        """
+        if set(columns) - {"status", "exit_order_id", "exit_order_filled"}:
+            raise ValueError(f"record_partial_exit cannot set {sorted(columns)}")
         trade_dict = asdict(trade_log)
         trade_dict['entry_timestamp'] = trade_log.entry_timestamp.isoformat()
         trade_dict['exit_timestamp'] = trade_log.exit_timestamp.isoformat()
@@ -520,9 +543,9 @@ class DatabaseManager(TradingLoggerMixin):
                 INSERT INTO trade_logs (market_id, side, entry_price, exit_price, quantity, pnl, entry_timestamp, exit_timestamp, rationale, strategy)
                 VALUES (:market_id, :side, :entry_price, :exit_price, :quantity, :pnl, :entry_timestamp, :exit_timestamp, :rationale, :strategy)
             """, trade_dict)
-            await db.execute("""
-                UPDATE positions SET quantity = ? WHERE id = ?
-            """, (remaining, position_id))
+            sets = "".join(f", {c} = ?" for c in columns)
+            await db.execute(f"UPDATE positions SET quantity = ?{sets} WHERE id = ?",
+                             (remaining, *columns.values(), position_id))
             await db.commit()
             self.logger.info(f"Partial exit for position {position_id}: {remaining} left open.")
 

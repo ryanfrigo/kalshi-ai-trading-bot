@@ -225,6 +225,10 @@ async def place_sell_limit_order(
             logger.warning(f"Not selling {position.market_id}: limit {limit_price_cents}c "
                            f"is outside 1-99c.")
             return False
+        if position.exit_order_id:
+            logger.warning(f"Not selling {position.market_id}: exit order "
+                           f"{position.exit_order_id} is still being tracked.")
+            return False
 
         # Never sell more than we hold on the exchange, net of our resting sells:
         # a DB row can outlive the contracts, and an oversell opens the other side.
@@ -387,9 +391,12 @@ async def reconcile_exit_fill(position: Position, response: Dict, sell_ok: bool,
     elif _filled_count(order) > 0:
         full = await _record_ioc_exit(position, order, limit_price, db_manager, logger,
                                       reason=f"partial fill ({reason})")
+        if not full:
+            await _track_resting_exit(position, order, db_manager, logger)
     else:
         logger.info(f"{reason} sell for {position.market_id} is resting; "
                     f"not recorded as sold until it fills.")
+        await _track_resting_exit(position, order, db_manager, logger)
         return "resting"
     if full:
         await db_manager.add_trade_log(TradeLog(
@@ -408,6 +415,62 @@ async def reconcile_exit_fill(position: Position, response: Dict, sell_ok: bool,
         return "partial"
     logger.info(f"{reason} sell for {position.market_id} filled nothing; position unchanged.")
     return "none"
+
+
+async def _track_resting_exit(position: Position, order: Dict, db_manager: DatabaseManager,
+                              logger) -> None:
+    """Store a GTC exit's order id and recorded fill count so later fills get booked."""
+    if not order.get("order_id"):
+        logger.warning(f"Exit sell for {position.market_id} has no order_id; "
+                       f"a later fill cannot be reconciled.")
+        return
+    await db_manager.set_exit_order(position.id, order["order_id"], _filled_count(order))
+
+
+async def reconcile_resting_exit(position: Position, kalshi_client: KalshiClient,
+                                 db_manager: DatabaseManager) -> str:
+    """Book fills of the position's stored exit order since we last looked.
+
+    Returns "closed", "shrunk", "cleared" (order done, nothing new filled) or
+    "unchanged". Any read or field problem changes nothing.
+    """
+    logger = get_trading_logger("exit_fill")
+    oid, ticker = position.exit_order_id, position.market_id
+    try:
+        order = (await kalshi_client.get_order(oid)).get("order")
+        filled = float(order["fill_count_fp"])
+        price = float(order[f"{position.side.lower()}_price_dollars"])
+        status = order["status"]
+    except Exception as e:
+        logger.error(f"Exit order {oid} on {ticker} unreadable ({e!r}); position unchanged.")
+        return "unchanged"
+    new = round(min(filled - (position.exit_order_filled or 0), position.quantity), 2)
+    if (order.get("ticker") != ticker or status not in ("resting", "canceled", "executed")
+            or not math.isfinite(filled) or not math.isfinite(price) or new < 0):
+        logger.error(f"Exit order {oid} on {ticker} inconsistent (ticker={order.get('ticker')}, "
+                     f"status={status}, filled={filled}); position unchanged.")
+        return "unchanged"
+    done = status != "resting"
+    if new == 0:
+        if done:
+            await db_manager.set_exit_order(position.id, None, None)
+            logger.info(f"Exit order {oid} on {ticker} {status} with no new fill; cleared.")
+            return "cleared"
+        return "unchanged"
+    log = TradeLog(market_id=ticker, side=position.side, entry_price=position.entry_price,
+                   exit_price=price, quantity=new, pnl=(price - position.entry_price) * new,
+                   entry_timestamp=position.timestamp, exit_timestamp=datetime.now(),
+                   rationale=f"{position.rationale} | EXIT: resting exit {oid} filled later")
+    if new >= round(position.quantity, 2):
+        await db_manager.record_partial_exit(position.id, log, position.quantity, status="closed",
+                                             exit_order_id=None, exit_order_filled=None)
+        logger.info(f"Exit order {oid} on {ticker} filled; position closed.")
+        return "closed"
+    await db_manager.record_partial_exit(position.id, log, round(position.quantity - new, 2),
+                                         exit_order_id=None if done else oid,
+                                         exit_order_filled=None if done else filled)
+    logger.info(f"Exit order {oid} on {ticker} filled {new} more; position shrunk.")
+    return "shrunk"
 
 
 # Threshold compares allow float error: (0.45 - 0.50) / 0.50 is
