@@ -148,6 +148,25 @@ def test_partly_filled_exit_stores_id_and_recorded_fill(tmp_path):
     assert asyncio.run(go()) == ("open", 6, "o1", 4.0)
 
 
+def test_partly_filled_exit_is_atomic_when_the_id_write_fails(tmp_path):
+    """The sold part, the shrink and the stored id land together or not at all."""
+    async def go():
+        db = await _db(tmp_path, exit_order=None)
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("""
+                CREATE TRIGGER fail_id BEFORE UPDATE OF exit_order_id ON positions
+                BEGIN SELECT RAISE(ABORT, 'injected'); END
+            """)
+            await conn.commit()
+        try:
+            await place_profit_taking_orders(db, FakeKalshi(fill=4, yes_cents=60))
+        except Exception:
+            pass  # whether the caller swallows the error is not what this tests
+        return await _row(db), await db.get_all_trade_logs()
+    row, logs = asyncio.run(go())
+    assert row == ("open", 10, None, None) and logs == []
+
+
 def test_old_db_without_exit_columns_migrates(tmp_path):
     path = str(tmp_path / "old.db")
 

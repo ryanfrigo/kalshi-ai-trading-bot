@@ -171,23 +171,29 @@ def _filled_count(order: Dict) -> float:
 
 async def _record_ioc_exit(position: Position, order: Dict, limit_price: float,
                            db_manager: DatabaseManager, logger,
-                           reason: str = "partial IOC fill under risk halt") -> bool:
+                           reason: str = "partial IOC fill under risk halt",
+                           track: bool = False) -> bool:
     """True only when the IOC sell filled the whole position.
 
     A partial fill logs the sold part and shrinks the open position to what is
     left; no fill leaves it untouched. Either way the caller keeps it open.
+    With ``track`` the rest is a resting GTC order: its id is stored in the same
+    transaction as the partial exit.
     """
     filled = round(min(_filled_count(order), position.quantity), 2)
     if filled >= round(position.quantity, 2):
         return True
     if filled > 0:
+        columns = _resting_exit_columns(position, order, logger) if track else {}
         await db_manager.record_partial_exit(position.id, TradeLog(
             market_id=position.market_id, side=position.side,
             entry_price=position.entry_price, exit_price=limit_price,
             quantity=filled, pnl=(limit_price - position.entry_price) * filled,
             entry_timestamp=position.timestamp, exit_timestamp=datetime.now(),
             rationale=f"{position.rationale} | EXIT: {reason}"),
-            round(position.quantity - filled, 2))
+            round(position.quantity - filled, 2), **columns)
+    elif track:
+        await _track_resting_exit(position, order, db_manager, logger)
     logger.warning(
         f"Exit sell for {position.market_id} filled {filled} of {position.quantity} "
         f"({reason}); the rest stays open.")
@@ -390,9 +396,7 @@ async def reconcile_exit_fill(position: Position, response: Dict, sell_ok: bool,
         full = sell_ok
     elif _filled_count(order) > 0:
         full = await _record_ioc_exit(position, order, limit_price, db_manager, logger,
-                                      reason=f"partial fill ({reason})")
-        if not full:
-            await _track_resting_exit(position, order, db_manager, logger)
+                                      reason=f"partial fill ({reason})", track=True)
     else:
         logger.info(f"{reason} sell for {position.market_id} is resting; "
                     f"not recorded as sold until it fills.")
@@ -420,11 +424,20 @@ async def reconcile_exit_fill(position: Position, response: Dict, sell_ok: bool,
 async def _track_resting_exit(position: Position, order: Dict, db_manager: DatabaseManager,
                               logger) -> None:
     """Store a GTC exit's order id and recorded fill count so later fills get booked."""
+    columns = _resting_exit_columns(position, order, logger)
+    if columns:
+        await db_manager.set_exit_order(position.id, columns["exit_order_id"],
+                                        columns["exit_order_filled"])
+
+
+def _resting_exit_columns(position: Position, order: Dict, logger) -> Dict:
+    """The exit_order_* columns that track a resting GTC exit; {} without an order_id."""
     if not order.get("order_id"):
         logger.warning(f"Exit sell for {position.market_id} has no order_id; "
                        f"a later fill cannot be reconciled.")
-        return
-    await db_manager.set_exit_order(position.id, order["order_id"], _filled_count(order))
+        return {}
+    return {"exit_order_id": order["order_id"], "exit_order_filled": _filled_count(order),
+            "exit_order_read_failures": 0}
 
 
 _MAX_EXIT_READ_FAILURES = 3
