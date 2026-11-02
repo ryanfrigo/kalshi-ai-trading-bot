@@ -255,7 +255,9 @@ class OpenRouterClient(TradingLoggerMixin):
         """Wait for pending DB spend writes, so a short job's last cost is not lost
         when asyncio.run cancels unfinished tasks."""
         if self._db_cost_tasks:
-            await asyncio.gather(*list(self._db_cost_tasks), return_exceptions=True)
+            # shield: a cancelled caller must not cancel the pending writes themselves
+            await asyncio.shield(
+                asyncio.gather(*list(self._db_cost_tasks), return_exceptions=True))
 
     async def _upsert_db_cost(self, cost: float) -> None:
         try:
