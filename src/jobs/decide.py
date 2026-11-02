@@ -299,7 +299,18 @@ async def make_decision_for_market(
             # Calculate market probabilities and AI confidence
             market_prob = market.yes_price if decision.side == "YES" else market.no_price
             ai_prob = decision.confidence
-            
+
+            # EdgeFilter measures |ai_prob - market_prob|, so it cannot tell a
+            # positive edge from a negative one. Only buy when our probability
+            # for the chosen side is above its price.
+            if ai_prob <= market_prob:
+                reason = f"No positive edge: confidence {ai_prob:.2f} <= {decision.side} price {market_prob:.2f}"
+                logger.info(f"❌ EDGE FILTER REJECTED: {market.market_id} - {reason}")
+                await db_manager.record_market_analysis(
+                    market.market_id, "EDGE_FILTERED", decision.confidence, total_analysis_cost, reason
+                )
+                return None
+
             # Check edge filter
             should_trade, trade_reason, edge_result = EdgeFilter.should_trade_market(
                 ai_probability=ai_prob,

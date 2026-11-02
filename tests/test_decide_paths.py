@@ -167,19 +167,11 @@ def test_edge_filter_rejects_thin_edge_low_volume_and_far_expiry():
     assert pos is None and "EDGE_FILTERED" in _actions(db)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "decide.py:306-310 feeds EdgeFilter |ai_prob - price|, which is direction-blind, and "
-    "ignores the side it computes. BUY YES at 0.80 with confidence 0.50 shows a 30c 'edge' and "
-    "passes: EV is 0.50 - 0.80 = -30c per contract. Balance $1000 -> 26 contracts, expected "
-    "loss $7.80 per trade. Fix: require ai_prob > market_prob for the chosen side."))
 def test_buy_is_refused_when_confidence_is_below_the_price_paid():
     pos, *_ = _run(_market(yes=0.80, no=0.20), _decision("YES", 0.50))
     assert pos is None
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Same direction-blind edge check on the NO side: BUY NO at 0.70 with confidence 0.45 "
-    "(-25c EV per contract) is approved. Balance $1000 -> 32 contracts, expected loss $8.00."))
 def test_no_buy_is_refused_when_confidence_is_below_the_no_price():
     pos, *_ = _run(_market(yes=0.30, no=0.70), _decision("NO", 0.45))
     assert pos is None
