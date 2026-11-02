@@ -127,7 +127,7 @@ async def make_decision_for_market(
         hours_to_expiry = (market.expiration_ts - time.time()) / 3600
         if (
             settings.trading.enable_high_confidence_strategy and
-            hours_to_expiry <= settings.trading.high_confidence_expiry_hours
+            0 < hours_to_expiry <= settings.trading.high_confidence_expiry_hours
         ):
             logger.info("Market is near expiry, evaluating for high-confidence strategy.")
             

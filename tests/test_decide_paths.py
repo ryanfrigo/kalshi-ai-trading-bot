@@ -285,11 +285,6 @@ def test_high_confidence_branch_refuses_confidence_at_or_below_the_yes_price():
     assert pos is None and "EDGE_FILTERED" in _actions(db)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "decide.py:127-131: hours_to_expiry is never required to be > 0, so an already-expired "
-    "market (expiration_ts 2h ago, YES 0.95) enters the near-expiry branch and a 32-contract "
-    "$30.40 YES position is created on a market that can no longer be traded. Fix: skip when "
-    "hours_to_expiry <= 0."))
 def test_expired_market_does_not_create_a_position():
     m = _market(yes=0.95, no=0.05, days=-2 / 24)
     pos, *_ = _run(m, _decision("YES", 0.97))
