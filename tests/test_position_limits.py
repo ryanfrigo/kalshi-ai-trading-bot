@@ -34,6 +34,7 @@ class FakeClient:
         self.positions_exc = positions_exc
         self.balance_resp = balance_resp
         self.calls = []
+        self.page_requests = []
 
     async def get_balance(self):
         self.calls.append("get_balance")
@@ -47,10 +48,19 @@ class FakeClient:
         self.calls.append("get_positions")
         if self.positions_exc:
             raise self.positions_exc
+        if self.pages is not None:
+            self.page_requests.append(dict(k))
+            out = self.pages[k.get("cursor")]
+            if isinstance(out, Exception):
+                raise out
+            return out
         return self.positions_resp()
 
     def positions_resp(self):
         return {"market_positions": self.positions}
+
+    # Optional cursor paging: pages = {cursor_or_None: response | Exception}
+    pages = None
 
     def __getattr__(self, name):  # any other client method is a recorded call
         if name.startswith("_"):
@@ -156,10 +166,10 @@ async def test_balance_error_blocks_even_with_explicit_portfolio_value():
     assert r.can_trade is False
 
 
-async def test_positions_read_error_still_blocks_a_trade_over_fallback_cap():
+async def test_positions_read_error_blocks_even_a_small_trade():
     # _get_portfolio_value falls back to $100 -> $5 cap; $20 must not pass.
     m, _, _ = _mgr(client=FakeClient(balance_cents=100_000, positions_exc=RuntimeError("x")))
-    r = await m.check_position_limits(20.0)
+    r = await m.check_position_limits(0.01)
     assert r.can_trade is False
 
 
@@ -241,12 +251,14 @@ async def test_portfolio_value_estimates_from_position_fp_without_exposure():
     assert await m._get_portfolio_value() == pytest.approx(100.0 + 20.0)
 
 
-async def test_portfolio_value_ignores_legacy_positions_key():
+async def test_legacy_positions_key_is_unreadable_and_blocks_the_gate():
     class LegacyKeyClient(FakeClient):
         def positions_resp(self):
             return {"positions": [{"quantity": -10}]}
     m, _, _ = _mgr(client=LegacyKeyClient(balance_cents=10_000))
-    assert await m._get_portfolio_value() == pytest.approx(100.0)
+    with pytest.raises(RuntimeError):
+        await m._get_portfolio_value()
+    assert (await m.check_position_limits(1.0)).can_trade is False
 
 
 async def test_portfolio_value_skips_malformed_rows_and_keeps_real_cash():
@@ -260,6 +272,61 @@ async def test_portfolio_value_bad_exposure_falls_back_to_estimate():
     row = {"position_fp": "10.00", "market_exposure_dollars": "oops"}
     m, _, _ = _mgr(client=FakeClient(balance_cents=10_000, positions=[row]))
     assert await m._get_portfolio_value() == pytest.approx(105.0)
+
+
+def _paged(n_pages, *, fail_at=None, repeat=False):
+    """n_pages pages of one $36 position each, chained by cursor c1..c{n-1}."""
+    row = {"ticker": "KX-A", "position_fp": "-40.00", "market_exposure_dollars": "36.00"}
+    pages = {}
+    for i in range(n_pages):
+        key = None if i == 0 else f"c{i}"
+        nxt = f"c{i + 1}" if i < n_pages - 1 else None
+        if repeat:
+            nxt = "c1"
+        pages[key] = RuntimeError("page failed") if i == fail_at else \
+            {"market_positions": [row], "cursor": nxt}
+    c = FakeClient(balance_cents=10_000)
+    c.pages = pages
+    return c
+
+
+async def test_two_pages_are_summed_and_cursor_is_followed():
+    c = _paged(2)
+    m, _, _ = _mgr(client=c)
+    assert await m._get_portfolio_value() == pytest.approx(100.0 + 72.0)
+    assert [r["cursor"] for r in c.page_requests] == [None, "c1"]
+    assert all(r["limit"] == 200 for r in c.page_requests)
+
+
+async def test_exactly_the_page_cap_is_still_readable():
+    m, _, _ = _mgr(client=_paged(PositionLimitsManager.POSITIONS_MAX_PAGES))
+    assert await m._get_portfolio_value() == pytest.approx(100.0 + 36.0 * 20)
+
+
+async def test_page_cap_exceeded_fails_closed_not_partial():
+    c = _paged(PositionLimitsManager.POSITIONS_MAX_PAGES + 1)
+    m, _, _ = _mgr(client=c)
+    with pytest.raises(RuntimeError, match="pages"):
+        await m._get_portfolio_value()
+    assert len(c.page_requests) == 20
+    r = await m.check_position_limits(0.01)
+    assert r.can_trade is False
+    assert (await m.get_position_limits_status())["status"] == "ERROR"
+
+
+async def test_failure_on_page_two_fails_closed_not_partial():
+    m, _, _ = _mgr(client=_paged(3, fail_at=1))
+    with pytest.raises(RuntimeError, match="page failed"):
+        await m._get_portfolio_value()
+    r = await m.check_position_limits(0.01)
+    assert r.can_trade is False and "page failed" in r.reason
+    assert (await m.get_position_limits_status())["status"] == "ERROR"
+
+
+async def test_repeated_cursor_fails_closed():
+    m, _, _ = _mgr(client=_paged(3, repeat=True))
+    with pytest.raises(RuntimeError, match="repeated cursor"):
+        await m._get_portfolio_value()
 
 
 async def test_held_positions_raise_the_size_cap():

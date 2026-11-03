@@ -278,31 +278,55 @@ class PositionLimitsManager:
         positions = await self.db_manager.get_open_positions()
         return len(positions)
     
+    POSITIONS_PAGE_LIMIT = 200
+    POSITIONS_MAX_PAGES = 20
+
+    async def _fetch_all_positions(self) -> List[Any]:
+        """Every ``market_positions`` row, following the cursor.
+
+        Raises on a failed or malformed page, a repeated cursor, or more than
+        POSITIONS_MAX_PAGES pages: a partial sum would understate exposure."""
+        rows: List[Any] = []
+        seen = set()
+        cursor = None
+        for _ in range(self.POSITIONS_MAX_PAGES):
+            resp = await self.kalshi_client.get_positions(
+                limit=self.POSITIONS_PAGE_LIMIT, cursor=cursor)
+            if (not isinstance(resp, dict) or 'market_positions' not in resp
+                    or not isinstance(resp['market_positions'] or [], list)):
+                raise RuntimeError("malformed market_positions page")
+            rows.extend(resp['market_positions'] or [])
+            cursor = resp.get('cursor')
+            if not cursor:
+                return rows
+            if cursor in seen:
+                raise RuntimeError("repeated cursor while paging market_positions")
+            seen.add(cursor)
+        raise RuntimeError(f"more than {self.POSITIONS_MAX_PAGES} pages of market_positions")
+
     async def _get_portfolio_value(self) -> float:
-        """Calculate total portfolio value (cash + positions)."""
+        """Calculate total portfolio value (cash + positions).
+
+        An unreadable balance falls back to $100 (the cash check then blocks).
+        An unreadable positions list RAISES: callers (check_position_limits,
+        get_position_limits_status) turn that into can_trade=False / ERROR."""
         try:
-            # Get available cash
             balance_response = await self.kalshi_client.get_balance()
             available_cash = balance_response.get('balance', 0) / 100
-            
-            # Get current positions value (v2: wrapped in 'market_positions',
-            # signed string 'position_fp', dollar 'market_exposure_dollars')
-            positions_response = await self.kalshi_client.get_positions()
-            rows = (positions_response.get('market_positions')
-                    if isinstance(positions_response, dict) else None) or []
-            total_position_value = 0.0
-
-            for position in rows:
-                value = self._position_value(position)
-                if value is not None:
-                    total_position_value += value
-
-            return available_cash + total_position_value
-            
         except Exception as e:
             self.logger.error(f"Error calculating portfolio value: {e}")
             return 100.0  # Conservative fallback
-    
+
+        # v2: wrapped in 'market_positions', signed string 'position_fp',
+        # dollar 'market_exposure_dollars'. Not swallowed: fail closed.
+        total_position_value = 0.0
+        for position in await self._fetch_all_positions():
+            value = self._position_value(position)
+            if value is not None:
+                total_position_value += value
+
+        return available_cash + total_position_value
+
     @staticmethod
     def _position_value(row: Any) -> Optional[float]:
         """Dollar value of one v2 position row, or None if the row is unusable.
