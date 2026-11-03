@@ -41,8 +41,13 @@ def _client(order_resp=_DEFAULT, market=None, balance=1_000_000):
 
 
 def _bids(yes=0, no=0):
-    """A v2 market object: *_dollars fixed-point strings only, bids given in cents."""
-    return {"yes_bid_dollars": f"{yes / 100:.4f}", "no_bid_dollars": f"{no / 100:.4f}"}
+    """A v2 market object: *_dollars fixed-point strings only, bids given in cents.
+    Each side with a bid gets an ask 1c above it (a tight book)."""
+    m = {"yes_bid_dollars": f"{yes / 100:.4f}", "no_bid_dollars": f"{no / 100:.4f}"}
+    for side, bid in (("yes", yes), ("no", no)):
+        if bid:
+            m[f"{side}_ask_dollars"] = f"{(bid + 1) / 100:.4f}"
+    return m
 
 
 def _db(positions=()):
@@ -204,12 +209,12 @@ async def test_stop_loss_exactly_at_threshold_triggers():
     assert res["orders_placed"] == 1
 
 
-async def test_stop_loss_price_floors_at_one_cent():
+async def test_stop_loss_one_cent_bid_holds_under_the_floor():
     c = _client(market=_bids(yes=1))
-    # threshold -0.9 -> stop = entry*(1-0.99) = 0.005 -> clamped to 0.01
+    # A 1c bid on a 50c entry is under the floor max(5c, 12.5c): the stop holds.
     res = await place_stop_loss_orders(_db([_pos("YES", 0.50)]), c, stop_loss_threshold=-0.9, live=True)
-    assert res["orders_placed"] == 1
-    assert c.place_order.call_args.kwargs["yes_price"] == 1
+    assert res["orders_placed"] == 0
+    c.place_order.assert_not_called()
 
 
 async def test_stop_loss_no_side_sells_no_contract():
