@@ -568,3 +568,15 @@ async def test_event_bus_failure_does_not_drop_the_connection(ws, transport, bus
     ws.on_trade(cb)  # ticker does not close; only the second frame does
     await asyncio.wait_for(ws.run(), 5)
     assert len(transport.calls) == 1
+
+
+async def test_cancellation_during_bus_publish_propagates(ws, bus, monkeypatch):
+    """The bus guard must contain errors, not cancellation: a CancelledError
+    raised inside publish has to escape _dispatch so task.cancel() still works."""
+
+    async def cancelled(event_type, data):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(bus, "publish", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        await ws._dispatch(json.dumps({"type": "ticker"}))
