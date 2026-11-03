@@ -1,4 +1,5 @@
 """README "Configuration" block must match src/config/settings.py."""
+import dataclasses
 import re
 from pathlib import Path
 
@@ -57,8 +58,12 @@ def test_max_daily_loss_pct():
     assert float(_value(r"^max_daily_loss_pct\s*=\s*([\d.]+)")) == cfg.settings.trading.max_daily_loss_pct
 
 
-def test_daily_ai_cost_limit():
-    assert float(_value(r"^daily_ai_cost_limit\s*=\s*([\d.]+)")) == cfg.settings.trading.daily_ai_cost_limit
+def test_daily_ai_cost_limit(monkeypatch):
+    monkeypatch.delenv("DAILY_AI_COST_LIMIT", raising=False)
+    field = next(
+        f for f in dataclasses.fields(cfg.TradingConfig) if f.name == "daily_ai_cost_limit"
+    )
+    assert float(_value(r"^daily_ai_cost_limit\s*=\s*([\d.]+)")) == field.default_factory()
 
 
 def test_daily_ai_cost_limit_env_var_is_read():
