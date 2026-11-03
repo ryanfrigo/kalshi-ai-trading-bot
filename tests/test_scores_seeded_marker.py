@@ -20,3 +20,26 @@ def test_changed_counts_not_marked_and_no_footer(tmp_path):
     assert not is_seeded_row(row)
     out = CategoryScorer(db_path=str(tmp_path / "x.db")).format_scores_table([row])
     assert "*" not in out
+
+
+def _seed_row(**override):
+    d = KNOWN_DATA["FED"]
+    row = _row("FED", d["wins"], d["total"], d["total_pnl"])
+    row.update(override)
+    return row
+
+
+def test_seed_row_itself_is_marked():
+    assert is_seeded_row(_seed_row())
+
+
+def test_only_wins_differs_not_marked():
+    assert not is_seeded_row(_seed_row(win_count=KNOWN_DATA["FED"]["wins"] + 1))
+
+
+def test_only_total_differs_not_marked():
+    assert not is_seeded_row(_seed_row(total_count=KNOWN_DATA["FED"]["total"] + 1))
+
+
+def test_only_total_pnl_differs_not_marked():
+    assert not is_seeded_row(_seed_row(total_pnl=KNOWN_DATA["FED"]["total_pnl"] + 1.0))

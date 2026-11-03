@@ -1552,7 +1552,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Launch one of the example trading strategies. Default is the AI "
             "directional strategy: a single LLM call per market via OpenRouter "
-            "(fallback chain on error), with a 3%% position cap, a 15%% drawdown "
+            "(fallback chain on error), with a 3% position cap, a 15% drawdown "
             "halt and quarter-Kelly sizing. Use --safe-compounder for the "
             "conservative math-only NO-side strategy. Use --beast for looser "
             "settings (not recommended). All three are starting "

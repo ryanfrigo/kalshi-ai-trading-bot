@@ -19,3 +19,16 @@ def test_help_renders_for_top_parser_and_every_subparser():
     assert len(parsers) > 1
     for p in parsers:
         assert p.format_help()
+
+
+def test_run_help_renders_percent_literally():
+    top = cli.build_parser()
+    sub = next(a for a in top._actions if isinstance(a, argparse._SubParsersAction))
+    out = sub.choices["run"].format_help()
+    assert "3% position cap" in out
+    assert "3% max position" in out
+
+
+def test_no_rendered_help_contains_doubled_percent():
+    for p in _all_parsers(cli.build_parser()):
+        assert "%%" not in p.format_help()
