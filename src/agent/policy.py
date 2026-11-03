@@ -29,6 +29,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.agent.journal import is_pending
 from src.agent.learnings import reconcile_outcomes
 from src.agent.settle import settlement_to_record
 
@@ -258,7 +259,9 @@ def merge_settlement_records(
     ``cli improve``, which reconciles once for the journal write-back) pass their
     reconciled list here to avoid reconciling twice. PURE.
     """
-    journaled = {r.get("ticker") for r in reconciled}
+    # A pending record (order outcome unknown) holds no settled result, so it must
+    # not hide the authoritative settlement on its ticker.
+    journaled = {r.get("ticker") for r in reconciled if not is_pending(r)}
     extra: List[Dict[str, Any]] = []
     for s in settlements:
         rec = settlement_to_record(s)

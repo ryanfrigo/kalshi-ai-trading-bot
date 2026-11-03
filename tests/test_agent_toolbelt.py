@@ -396,4 +396,13 @@ def test_outcome_unknown_is_reported_not_raised(tmp_path):
         assert len(client.placed) == 1  # sent once, never resent
         assert res["client_order_id"] == client.placed[0]["client_order_id"]
     assert sell["action"] == "sell"
-    assert not journal.exists()  # non-ok results are not journaled
+    # journaled as pending, so the order is never invisible to the record
+    recs = [json.loads(line) for line in journal.read_text().splitlines()]
+    assert len(recs) == 2
+    for rec, res, action in zip(recs, (buy, sell), ("buy", "sell")):
+        assert rec["status"] == "pending" and rec["order_outcome"] == "outcome_unknown"
+        assert rec["client_order_id"] == res["client_order_id"]
+        assert rec["action"] == action and rec["ticker"] == "KXX-1"
+        assert rec["order_id"] is None and rec["outcome"] is None
+    assert recs[0]["count"] == 5 and recs[0]["price"] == 0.60 and recs[0]["est_prob"] == 0.80
+    assert recs[1]["count"] == sell["count"] and recs[1]["price"] == sell["price_cents"] / 100

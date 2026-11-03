@@ -217,7 +217,8 @@ async def place_guarded_order(
     """
     from src.risk.risk_governor import RiskGovernor
     from src.utils.market_prices import get_market_prices, is_tradeable_market
-    from src.agent.journal import make_decision_record, append_decision, DEFAULT_JOURNAL_PATH
+    from src.agent.journal import (make_decision_record, append_decision,
+                                   mark_outcome_unknown, DEFAULT_JOURNAL_PATH)
     from src.agent.policy import load_policy, apply_policy, DEFAULT_POLICY_PATH
     from src.agent.settle import series_category
 
@@ -311,9 +312,14 @@ async def place_guarded_order(
         try:
             resp = await kalshi_client.place_order(**kwargs)
         except KalshiOrderOutcomeUnknown:
-            # The order may be live: report it by client_order_id, never resend.
+            # The order may be live: journal it as pending, report it, never resend.
+            append_decision(mark_outcome_unknown(make_decision_record(
+                ticker=ticker, side=side, count=n, price=price_cents / 100.0,
+                est_prob=est_prob, edge=edge, rationale=rationale, category=category,
+                strategy="claude", order_id=None, policy_note=policy_note,
+            ), coid), journal_path or DEFAULT_JOURNAL_PATH)
             return {"ok": False, "reason": "outcome_unknown", "ticker": ticker,
-                    "side": side, "count": n, "client_order_id": coid}
+                    "side": side, "count": n, "client_order_id": coid, "journaled": True}
         order = resp.get("order", resp) if isinstance(resp, dict) else {}
         result = {
             "ok": True, "dry": False, "ticker": ticker, "side": side, "count": n,
@@ -365,7 +371,8 @@ async def close_position(
     reduce-only IOC sell up to held on DAILY_LOSS / DRAWDOWN.
     """
     from src.utils.market_prices import get_market_prices
-    from src.agent.journal import make_decision_record, append_decision, DEFAULT_JOURNAL_PATH
+    from src.agent.journal import (make_decision_record, append_decision,
+                                   mark_outcome_unknown, DEFAULT_JOURNAL_PATH)
 
     clean = _normalize_ticker(ticker)
     if clean is None:
@@ -411,9 +418,14 @@ async def close_position(
         try:
             resp = await kalshi_client.place_order(**kwargs)
         except KalshiOrderOutcomeUnknown:
-            # The sell may be live: report it by client_order_id, never resend.
+            # The sell may be live: journal it as pending, report it, never resend.
+            append_decision(mark_outcome_unknown(make_decision_record(
+                ticker=ticker, side=side, count=n, price=price_cents / 100.0,
+                rationale=rationale, strategy="claude", order_id=None, action="sell",
+            ), coid), journal_path or DEFAULT_JOURNAL_PATH)
             return {"ok": False, "reason": "outcome_unknown", "ticker": ticker,
-                    "side": side, "action": "sell", "count": n, "client_order_id": coid}
+                    "side": side, "action": "sell", "count": n, "client_order_id": coid,
+                    "price_cents": price_cents, "journaled": True}
         order = resp.get("order", resp) if isinstance(resp, dict) else {}
         result = {"ok": True, "dry": False, "ticker": ticker, "side": side,
                   "action": "sell", "count": n, "price_cents": price_cents,
