@@ -22,7 +22,7 @@ from src.clients.xai_client import XAIClient
 from src.jobs.decide import make_decision_for_market
 from tests.test_decide_paths import CASH, LIMITS, Db, Kalshi, LimitsManager, _market
 
-DUMMY_KEY = "test-dummy-key"
+DUMMY_KEY = "test-dummy-key"  # secret-scan:allow
 TODAY = lambda: datetime.now().strftime("%Y-%m-%d")  # noqa: E731
 
 

@@ -21,7 +21,7 @@ from src.clients.llm_types import DailyUsageTracker
 from src.clients.openrouter_client import (
     DEFAULT_FALLBACK_ORDER, MODEL_PRICING, OpenRouterClient)
 
-DUMMY_KEY = "test-dummy-key"
+DUMMY_KEY = "test-dummy-key"  # secret-scan:allow
 SONNET = "anthropic/claude-sonnet-4"       # $0.003 in / $0.015 out per 1k
 GPT = "openai/gpt-4.1"                      # $0.002 / $0.008
 GEMINI = "google/gemini-2.5-pro-preview"    # $0.00125 / $0.01
