@@ -9,12 +9,15 @@
 """
 from __future__ import annotations
 
+import logging
 import math
 import re
 import uuid
 from typing import Any, Dict, Optional, Tuple
 
 from src.clients.kalshi_client import KalshiOrderOutcomeUnknown
+
+logger = logging.getLogger(__name__)
 
 
 _TICKER_RE = re.compile(r"[A-Z0-9][A-Z0-9._-]{0,99}")
@@ -313,13 +316,18 @@ async def place_guarded_order(
             resp = await kalshi_client.place_order(**kwargs)
         except KalshiOrderOutcomeUnknown:
             # The order may be live: journal it as pending, report it, never resend.
-            append_decision(mark_outcome_unknown(make_decision_record(
-                ticker=ticker, side=side, count=n, price=price_cents / 100.0,
-                est_prob=est_prob, edge=edge, rationale=rationale, category=category,
-                strategy="claude", order_id=None, policy_note=policy_note,
-            ), coid), journal_path or DEFAULT_JOURNAL_PATH)
-            return {"ok": False, "reason": "outcome_unknown", "ticker": ticker,
-                    "side": side, "count": n, "client_order_id": coid, "journaled": True}
+            unknown = {"ok": False, "reason": "outcome_unknown", "ticker": ticker,
+                       "side": side, "count": n, "client_order_id": coid, "journaled": True}
+            try:
+                append_decision(mark_outcome_unknown(make_decision_record(
+                    ticker=ticker, side=side, count=n, price=price_cents / 100.0,
+                    est_prob=est_prob, edge=edge, rationale=rationale, category=category,
+                    strategy="claude", order_id=None, policy_note=policy_note,
+                ), coid), journal_path or DEFAULT_JOURNAL_PATH)
+            except Exception as e:  # never lose the client_order_id to a journal error
+                logger.warning("outcome_unknown buy %s not journaled: %s", coid, e)
+                unknown.update(journaled=False, journal_error=str(e))
+            return unknown
         order = resp.get("order", resp) if isinstance(resp, dict) else {}
         result = {
             "ok": True, "dry": False, "ticker": ticker, "side": side, "count": n,
@@ -419,13 +427,18 @@ async def close_position(
             resp = await kalshi_client.place_order(**kwargs)
         except KalshiOrderOutcomeUnknown:
             # The sell may be live: journal it as pending, report it, never resend.
-            append_decision(mark_outcome_unknown(make_decision_record(
-                ticker=ticker, side=side, count=n, price=price_cents / 100.0,
-                rationale=rationale, strategy="claude", order_id=None, action="sell",
-            ), coid), journal_path or DEFAULT_JOURNAL_PATH)
-            return {"ok": False, "reason": "outcome_unknown", "ticker": ticker,
-                    "side": side, "action": "sell", "count": n, "client_order_id": coid,
-                    "price_cents": price_cents, "journaled": True}
+            unknown = {"ok": False, "reason": "outcome_unknown", "ticker": ticker,
+                       "side": side, "action": "sell", "count": n, "client_order_id": coid,
+                       "price_cents": price_cents, "journaled": True}
+            try:
+                append_decision(mark_outcome_unknown(make_decision_record(
+                    ticker=ticker, side=side, count=n, price=price_cents / 100.0,
+                    rationale=rationale, strategy="claude", order_id=None, action="sell",
+                ), coid), journal_path or DEFAULT_JOURNAL_PATH)
+            except Exception as e:  # never lose the client_order_id to a journal error
+                logger.warning("outcome_unknown sell %s not journaled: %s", coid, e)
+                unknown.update(journaled=False, journal_error=str(e))
+            return unknown
         order = resp.get("order", resp) if isinstance(resp, dict) else {}
         result = {"ok": True, "dry": False, "ticker": ticker, "side": side,
                   "action": "sell", "count": n, "price_cents": price_cents,
