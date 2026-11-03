@@ -56,6 +56,9 @@ async def _stop(entry, bid, ask):
     (0.60, 30, 40, True),    # spread 10c sells
     (0.60, 30, 41, False),   # spread 11c skips
     (0.60, 30, None, False), # no ask: spread unknown, skip
+    (0.28, 7, 8, True),      # 0.28*25 = 7.000000000000001: exactly 25% sells
+    (0.60, 29, 39, True),    # 0.29*100 = 28.999...: a 10c spread sells
+    (0.60, 46, 57, False),   # 0.57*100 = 56.999...: an 11c spread holds
 ])
 async def test_floor_and_spread_boundaries(entry, bid, ask, sells):
     res, c = await _stop(entry, bid, ask)
@@ -129,7 +132,7 @@ async def test_step2_stop_above_the_floor_sells():
     assert sell.call_args.kwargs["limit_price"] == 0.30
 
 
-async def test_step2_time_exit_on_gutted_bid_still_sells():
+async def test_step2_time_exit_with_untriggered_stop_on_gutted_bid_still_sells():
     from datetime import timedelta
     # Stop at 5c is not hit by a 10c bid; held 2h past a 1h limit: a time exit.
     pos = _track_pos(stop_loss_price=0.05, max_hold_hours=1,
@@ -137,3 +140,14 @@ async def test_step2_time_exit_on_gutted_bid_still_sells():
     sell = await _track(pos, 10, 11)
     sell.assert_awaited_once()
     assert sell.call_args.kwargs["limit_price"] == 0.10
+
+
+async def test_step2_triggered_stop_under_floor_holds_even_past_max_hold(capsys, caplog):
+    from datetime import timedelta
+    # Stop at 40c is hit by a 10c bid and the position is 2h past a 1h limit.
+    # should_exit_position returns the stop reason before max_hold, so the floor holds it.
+    pos = _track_pos(stop_loss_price=0.40, max_hold_hours=1,
+                     timestamp=datetime.now() - timedelta(hours=2))
+    sell = await _track(pos, 10, 11)
+    sell.assert_not_called()
+    assert "stop skipped: bid 10c vs floor 12.5c / spread 1c" in _logged(capsys, caplog)
