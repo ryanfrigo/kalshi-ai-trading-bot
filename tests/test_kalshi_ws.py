@@ -538,12 +538,6 @@ async def test_no_sequence_gap_tracking_exists():
     assert "seq" not in inspect.getsource(kalshi_ws.KalshiWebSocket)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="kalshi_ws.py:372 msg.get() assumes a JSON object; a valid non-object frame "
-    "(e.g. '[1]') raises AttributeError, which run() treats as a dead connection "
-    "and tears down + reconnects instead of dropping the one bad frame.",
-)
 async def test_valid_json_non_object_frame_does_not_drop_the_connection(ws, transport, delays):
     await _connected(ws, transport, FakeWS(["[1, 2, 3]", json.dumps({"type": "ticker"})]))
     transport.sockets.append(FakeWS([json.dumps({"type": "ticker"})]))  # only reached by a (wrong) reconnect
@@ -556,11 +550,6 @@ async def test_valid_json_non_object_frame_does_not_drop_the_connection(ws, tran
     assert len(transport.calls) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="kalshi_ws.py:412-413 an EventBus.publish error propagates out of "
-    "_dispatch (only user callbacks are guarded), so run() reconnects a healthy socket.",
-)
 async def test_event_bus_failure_does_not_drop_the_connection(ws, transport, bus, delays, monkeypatch):
     await _connected(ws, transport, FakeWS([json.dumps({"type": "ticker"}), json.dumps({"type": "trade"})]))
     transport.sockets.append(FakeWS([json.dumps({"type": "trade"})]))  # only reached by a (wrong) reconnect

@@ -369,6 +369,10 @@ class KalshiWebSocket(TradingLoggerMixin):
             self.logger.warning("Received non-JSON message", raw=raw[:200])
             return
 
+        if not isinstance(msg, dict):
+            self.logger.debug("Dropping non-object message", raw=raw[:200])
+            return
+
         msg_type = msg.get("type", "")
 
         # Map Kalshi message types to our internal channel keys and EventBus event types
@@ -409,8 +413,15 @@ class KalshiWebSocket(TradingLoggerMixin):
         if self.publish_to_event_bus:
             event_type = event_bus_map.get(msg_type)
             if event_type:
-                bus = EventBus.get_instance()
-                await bus.publish(event_type, msg)
+                try:
+                    bus = EventBus.get_instance()
+                    await bus.publish(event_type, msg)
+                except Exception as exc:
+                    self.logger.warning(
+                        "EventBus publish error",
+                        event_type=event_type,
+                        error=str(exc),
+                    )
 
     # ------------------------------------------------------------------
     # Main event loop
