@@ -71,6 +71,9 @@ class _SubscriptionState:
     """Tracks which tickers/channels are actively subscribed."""
     tickers: Set[str] = field(default_factory=set)
     channels: Set[str] = field(default_factory=set)
+    # Exact (channel -> tickers) pairs, so a reconnect restores what was
+    # subscribed rather than the tickers x channels cross product.
+    by_channel: Dict[str, Set[str]] = field(default_factory=dict)
 
 
 class KalshiWebSocket(TradingLoggerMixin):
@@ -126,6 +129,11 @@ class KalshiWebSocket(TradingLoggerMixin):
 
         # Subscription tracking (for resubscription after reconnect)
         self._sub_state = _SubscriptionState()
+
+        # Sequence tracking, per subscription id (sid). seq is only comparable
+        # within one sid on one connection, so both are cleared on reconnect.
+        self._last_seq: Dict[int, int] = {}
+        self._awaiting_snapshot: Dict[int, bool] = {}  # sid -> resync request sent?
 
         # Per-channel user callbacks
         self._callbacks: Dict[str, List[MessageCallback]] = {
@@ -245,12 +253,18 @@ class KalshiWebSocket(TradingLoggerMixin):
             try:
                 await self.connect()
 
-                # Resubscribe to previously active subscriptions
-                if self._sub_state.tickers and self._sub_state.channels:
-                    await self.subscribe(
-                        list(self._sub_state.tickers),
-                        list(self._sub_state.channels),
-                    )
+                # New connection => new sids and fresh snapshots.
+                self._last_seq.clear()
+                self._awaiting_snapshot.clear()
+
+                # Resubscribe to exactly the (channel, tickers) pairs that were
+                # active, grouping channels that share the same ticker set.
+                groups: Dict[tuple, List[str]] = {}
+                for channel, tickers in self._sub_state.by_channel.items():
+                    if tickers:
+                        groups.setdefault(tuple(sorted(tickers)), []).append(channel)
+                for tickers, channels in groups.items():
+                    await self.subscribe(list(tickers), sorted(channels))
                 self.logger.info("Reconnected and resubscribed successfully")
                 return
             except Exception as exc:
@@ -302,6 +316,8 @@ class KalshiWebSocket(TradingLoggerMixin):
         # Track state for reconnection
         self._sub_state.tickers.update(tickers)
         self._sub_state.channels.update(channels)
+        for channel in channels:
+            self._sub_state.by_channel.setdefault(channel, set()).update(tickers)
 
         self.logger.info(
             "Subscribed",
@@ -330,6 +346,8 @@ class KalshiWebSocket(TradingLoggerMixin):
         }
         await self._ws.send(json.dumps(msg))
         self._sub_state.tickers.difference_update(tickers)
+        for subscribed in self._sub_state.by_channel.values():
+            subscribed.difference_update(tickers)
 
         self.logger.info("Unsubscribed", tickers=tickers)
 
@@ -356,6 +374,71 @@ class KalshiWebSocket(TradingLoggerMixin):
         """Register (or use as decorator) a callback for fill channel messages."""
         self._callbacks[CHANNEL_FILL].append(callback)
         return callback
+
+    # ------------------------------------------------------------------
+    # Sequence-gap detection
+    # ------------------------------------------------------------------
+
+    async def _accept_sequence(self, msg: Dict[str, Any], msg_type: str) -> bool:
+        """
+        Return True if ``msg`` should be dispatched, False if it must be dropped.
+
+        Per https://docs.kalshi.com/websockets/orderbook-updates every message
+        carries ``sid`` and a per-subscription ``seq``; deltas must be applied
+        in seq order, and on a gap the local book must be replaced by a fresh
+        snapshot ("Always replace your local book with a received snapshot
+        before applying subsequent deltas"). A repeated ``subscribe`` alone does
+        not resync, so we request ``update_subscription`` / ``get_snapshot``
+        (https://docs.kalshi.com/websockets/websocket-connection, which lists
+        the action but gives no example; the payload below follows its schema).
+
+        Duplicate or older seq -> dropped. Gap -> the out-of-order message is
+        dropped, a snapshot is requested, and deltas for that sid stay dropped
+        until a snapshot arrives. Messages without an integer sid and seq are
+        passed through untouched.
+        """
+        sid, seq = msg.get("sid"), msg.get("seq")
+        if not all(isinstance(v, int) and not isinstance(v, bool) for v in (sid, seq)):
+            return True
+
+        if sid in self._awaiting_snapshot:
+            if msg_type == "orderbook_snapshot":
+                del self._awaiting_snapshot[sid]
+                self._last_seq[sid] = seq
+                return True
+            if not self._awaiting_snapshot[sid]:
+                await self._request_snapshot(sid)  # earlier request failed; retry
+            return False
+
+        last = self._last_seq.get(sid)
+        if last is not None and seq <= last:
+            self.logger.debug("Dropping duplicate/old message", sid=sid, seq=seq, last_seq=last)
+            return False
+        if last is not None and seq != last + 1:
+            self.logger.warning(
+                "Sequence gap detected; requesting fresh snapshot",
+                sid=sid,
+                expected_seq=last + 1,
+                received_seq=seq,
+            )
+            self._awaiting_snapshot[sid] = False
+            await self._request_snapshot(sid)
+            return False
+
+        self._last_seq[sid] = seq
+        return True
+
+    async def _request_snapshot(self, sid: int) -> None:
+        """Ask the server to resend an orderbook_snapshot for every market on ``sid``."""
+        try:
+            await self._ws.send(json.dumps({
+                "id": self._next_msg_id(),
+                "cmd": "update_subscription",
+                "params": {"sid": sid, "action": "get_snapshot"},
+            }))
+            self._awaiting_snapshot[sid] = True
+        except Exception as exc:
+            self.logger.warning("Snapshot request failed", sid=sid, error=str(exc))
 
     # ------------------------------------------------------------------
     # Message dispatch
@@ -396,6 +479,9 @@ class KalshiWebSocket(TradingLoggerMixin):
         if channel is None:
             # Subscription confirmations, errors, etc. -- log and skip
             self.logger.debug("Unhandled message type", msg_type=msg_type)
+            return
+
+        if not await self._accept_sequence(msg, msg_type):
             return
 
         # Fan out to registered per-channel callbacks
