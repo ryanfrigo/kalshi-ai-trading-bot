@@ -61,15 +61,51 @@ def cap_count(
     return max(0, n), "; ".join(reasons)
 
 
+_EXPOSURE_MAX_PAGES = 20
+
+
+def _contracts(row: Dict[str, Any], fp_key: str, legacy_key: str) -> float:
+    """Contract count of ``row``: the v2 ``*_fp`` field, else the legacy int field.
+    Raises ValueError if neither is present and finite, so the caller fails closed."""
+    for key in (fp_key, legacy_key):
+        v = row.get(key)
+        if v is None or v == "" or isinstance(v, bool):
+            continue
+        try:
+            n = float(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"unparseable {key}={v!r}")
+        if not math.isfinite(n):
+            raise ValueError(f"non-finite {key}={v!r}")
+        return abs(n)
+    raise ValueError(f"no {fp_key}/{legacy_key} on row for {row.get('ticker')}")
+
+
+async def _sum_pages(fetch, list_key: str, ticker: str, fp_key: str, legacy_key: str) -> float:
+    """Sum contracts on ``ticker`` across every page of ``fetch``. Raises on a bad
+    list shape, an unreadable count, or more than _EXPOSURE_MAX_PAGES pages."""
+    total, cursor = 0.0, None
+    for _ in range(_EXPOSURE_MAX_PAGES):
+        resp = await (fetch(ticker=ticker, cursor=cursor) if cursor else fetch(ticker=ticker))
+        rows = resp.get(list_key) if isinstance(resp, dict) else None
+        if not isinstance(rows, list):
+            raise ValueError(f"{list_key} missing or not a list")
+        total += sum(_contracts(r, fp_key, legacy_key)
+                     for r in rows if isinstance(r, dict) and r.get("ticker") == ticker)
+        cursor = resp.get("cursor")
+        if not cursor:
+            return total
+    raise ValueError(f"more than {_EXPOSURE_MAX_PAGES} pages of {list_key}")
+
+
 async def _committed_cents(kalshi_client, ticker: str, price_cents: int) -> int:
     """Cost already tied up in ``ticker`` (held + resting), valued at ``price_cents``.
-    Raises if either read fails, so the caller can fail closed."""
-    pos = await kalshi_client.get_positions(ticker=ticker)
-    held = sum(abs(float(p.get("position_fp", 0) or 0))
-               for p in pos.get("market_positions", []) if p.get("ticker") == ticker)
-    orders = (await kalshi_client.get_orders(ticker=ticker, status="resting")).get("orders", [])
-    resting = sum(abs(float(o.get("remaining_count_fp", 0) or 0))
-                  for o in orders if o.get("ticker") == ticker)
+    Raises if either read fails or is unreadable, so the caller can fail closed."""
+    held = await _sum_pages(kalshi_client.get_positions, "market_positions", ticker,
+                            "position_fp", "position")
+    resting = await _sum_pages(
+        lambda **kw: kalshi_client.get_orders(status="resting", **kw),
+        "orders", ticker, "remaining_count_fp", "remaining_count")
     return int(round((held + resting) * price_cents))
 
 
