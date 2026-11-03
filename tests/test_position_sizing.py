@@ -22,6 +22,9 @@ from src.strategies.portfolio_optimization import (
 from src.utils import position_sizing
 from src.utils.position_sizing import binary_market_payout_odds
 
+NAN = float("nan")
+INF = float("inf")
+
 
 def make_opportunity(**overrides) -> MarketOpportunity:
     """A fully-populated MarketOpportunity with neutral defaults."""
@@ -240,6 +243,59 @@ class TestKellyFractionsKCE:
         )
         result = opt._calculate_kelly_fractions([opp])
         assert result["TEST-MKT"] == pytest.approx(0.25)
+
+
+# ---------------------------------------------------------------------------
+# Kernel & odds: bad-value inputs (NaN, inf, > 1, None)
+# ---------------------------------------------------------------------------
+
+class TestKellyBadInputs:
+    def test_none_invalid_but_safely_raises(self):
+        with pytest.raises(TypeError):
+            kelly_fraction(None, 1.0)
+        with pytest.raises(TypeError):
+            kelly_fraction(0.6, None)
+
+    def test_nan_inputs_fail_closed_to_zero(self):
+        # Docstring contract: invalid input returns 0.0 rather than raising,
+        # and above all must not propagate NaN into a sizing decision.
+        assert kelly_fraction(NAN, 1.0) == 0.0
+        assert kelly_fraction(0.6, NAN) == 0.0
+        assert kelly_fraction(NAN, NAN) == 0.0
+
+    def test_infinite_payout_fails_closed_to_zero(self):
+        assert kelly_fraction(0.6, INF) == 0.0
+        assert kelly_fraction(0.6, -INF) == 0.0
+
+    def test_zero_payout_boundary(self):
+        assert kelly_fraction(0.6, 0.0) == 0.0
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "src/utils/position_sizing.py:30 the guard rejects prob_win <= 0 but "
+            "never prob_win > 1, so a 150% 'probability' sizes a 200%-of-bankroll "
+            "bet (f* = 2.0) and an infinite probability sizes an infinite bet, "
+            "instead of the documented invalid-input answer 0.0"
+        ),
+    )
+    def test_probability_above_one_or_infinite_must_fail_closed(self):
+        assert kelly_fraction(1.5, 1.0) == 0.0
+        assert kelly_fraction(INF, 1.0) == 0.0
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "src/utils/position_sizing.py:46 market_probability outside [0,1] (or "
+            "NaN) silently returns negative/NaN odds instead of raising like the "
+            "documented degenerate prices 0 and 1 do"
+        ),
+    )
+    def test_out_of_range_or_nan_probability_must_raise(self):
+        with pytest.raises(ValueError):
+            binary_market_payout_odds(1.5, bet_yes=True)
+        with pytest.raises(ValueError):
+            binary_market_payout_odds(NAN, bet_yes=False)
 
 
 # ---------------------------------------------------------------------------
