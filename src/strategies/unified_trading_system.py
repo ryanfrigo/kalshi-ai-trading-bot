@@ -218,11 +218,11 @@ class UnifiedAdvancedTradingSystem:
             
             # Check cash reserves
             cash_status = await cash_manager.get_cash_status()
-            self.logger.info(f"💰 CASH RESERVES STATUS: {cash_status['status']} ({cash_status['reserve_percentage']:.1f}%)")
+            self.logger.info(f"💰 CASH RESERVES STATUS: {cash_status.get('status')} ({cash_status.get('reserve_percentage', 0.0):.1f}%)")
             
             # Handle cash emergency first (higher priority)
-            if cash_status['emergency_status']:
-                self.logger.warning(f"🚨 CASH EMERGENCY: {cash_status['recommendations']}")
+            if cash_status.get('emergency_status', True):  # missing key (ERROR status) = emergency
+                self.logger.warning(f"🚨 CASH EMERGENCY: {cash_status.get('recommendations', cash_status.get('message'))}")
                 emergency_action = await cash_manager.handle_cash_emergency()
                 if emergency_action.action_type == 'halt_trading':
                     self.logger.critical(f"🛑 TRADING HALTED DUE TO CASH EMERGENCY: {emergency_action.reason}")

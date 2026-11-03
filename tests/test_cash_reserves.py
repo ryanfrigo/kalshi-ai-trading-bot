@@ -3,8 +3,8 @@
 No network, no credentials: the Kalshi client and DB are fakes. The fake client
 records every call so we can prove the gate never sells, cancels or orders.
 
-Known bugs are pinned with xfail(strict=True); fixing one turns it into an
-XPASS failure so the marker gets removed.
+The five bugs found in the first pass (v2 positions, non-finite/<=0 trade value,
+is_cash_emergency on ERROR, unified KeyError, stale 15% text) are fixed and covered.
 """
 import math
 
@@ -156,7 +156,7 @@ async def test_zero_or_negative_balance_blocks(bal):
 
 @pytest.mark.asyncio
 async def test_zero_balance_with_zero_trade_still_blocks():
-    r = await mgr(FakeClient(balance=0)).check_cash_reserves(0.0)
+    r = await mgr(FakeClient(balance=0)).check_cash_reserves()
     assert r.can_trade is False
     assert r.emergency_status is True
 
@@ -217,35 +217,35 @@ async def _check(cash_dollars, trade, pv=PV):
 @pytest.mark.asyncio
 async def test_exactly_critical_threshold_is_emergency_not_critical():
     # 0.05% of 10k = $5.00 -> not < critical, but < emergency(0.2%)
-    r = await _check(5.00, 0.0)
+    r = await _check(5.00, None)
     assert r.can_trade is False and r.emergency_status is True
     assert "EMERGENCY" in r.reason and "CRITICAL" not in r.reason
 
 
 @pytest.mark.asyncio
 async def test_just_below_critical_says_critical():
-    r = await _check(4.99, 0.0)
+    r = await _check(4.99, None)
     assert r.can_trade is False and "CRITICAL" in r.reason
 
 
 @pytest.mark.asyncio
 async def test_exactly_emergency_threshold_falls_to_minimum_check():
     # 0.2% = $20.00: not emergency, but below minimum 0.5% -> blocked, non-emergency
-    r = await _check(20.00, 0.0)
+    r = await _check(20.00, None)
     assert r.can_trade is False and r.emergency_status is False
     assert "below minimum" in r.reason
 
 
 @pytest.mark.asyncio
 async def test_just_below_emergency_threshold_is_emergency():
-    r = await _check(19.99, 0.0)
+    r = await _check(19.99, None)
     assert r.emergency_status is True and "EMERGENCY" in r.reason
 
 
 @pytest.mark.asyncio
 async def test_exactly_minimum_reserve_with_zero_trade_is_allowed():
     # 0.5% = $50.00
-    r = await _check(50.00, 0.0)
+    r = await _check(50.00, None)
     assert r.can_trade is True and r.emergency_status is False
 
 
@@ -327,16 +327,44 @@ async def test_explicit_portfolio_value_overrides_fetch():
 # ---------------------------------------------------- portfolio value maths
 
 @pytest.mark.asyncio
-async def test_portfolio_value_is_cash_plus_half_dollar_per_contract():
-    c = FakeClient(balance=10_000, positions={"positions": [{"quantity": 10}, {"quantity": -4}, {"quantity": 0}]})
+async def test_portfolio_value_is_cash_plus_half_dollar_per_contract_without_exposure():
+    c = FakeClient(balance=10_000, positions={"market_positions": [
+        {"position_fp": "10.00"}, {"position_fp": "-4.00"}, {"position_fp": "0.00"}]})
     assert await mgr(c)._get_portfolio_value() == pytest.approx(100.0 + 7.0)
 
 
 @pytest.mark.asyncio
-async def test_portfolio_value_ignores_non_dict_rows_and_response():
-    c = FakeClient(balance=10_000, positions={"positions": ["x", None, {"quantity": 2}]})
+async def test_malformed_rows_are_skipped_not_zeroing_the_portfolio():
+    rows = ["x", None, {"position_fp": "abc"}, {"position_fp": None}, {"position_fp": "nan"},
+            {"position_fp": "inf", "market_exposure_dollars": "5"},  # non-finite contracts: skipped
+            {"position_fp": "2.00"}]
+    c = FakeClient(balance=10_000, positions={"market_positions": rows})
     assert await mgr(c)._get_portfolio_value() == pytest.approx(101.0)
-    c = FakeClient(balance=10_000, positions=[1, 2])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resp", [[1, 2], {"positions": [{"quantity": 5}]}, {"market_positions": None}, {}])
+async def test_unreadable_positions_shape_falls_back_not_to_cash_only(resp):
+    # Missing/legacy shape must not be read as "no positions" (that would
+    # overstate the reserve); it takes the $100 conservative fallback.
+    c = FakeClient(balance=500_000, positions=resp)
+    assert await mgr(c)._get_portfolio_value() == 100.0
+
+
+@pytest.mark.asyncio
+async def test_exposure_dollars_preferred_over_estimate():
+    rows = [{"position_fp": "-40.00", "market_exposure_dollars": "12.34"},
+            {"position_fp": "10.00", "market_exposure_dollars": "garbage"},   # -> $0.50 estimate
+            {"position_fp": "10.00", "market_exposure_dollars": "-3"},        # negative -> estimate
+            {"position_fp": "10.00"}]                                          # absent -> estimate
+    c = FakeClient(balance=10_000, positions={"market_positions": rows})
+    assert await mgr(c)._get_portfolio_value() == pytest.approx(100.0 + 12.34 + 5.0 * 3)
+
+
+@pytest.mark.asyncio
+async def test_flat_position_with_exposure_is_not_counted():
+    rows = [{"position_fp": "0.00", "market_exposure_dollars": "9.99"}]
+    c = FakeClient(balance=10_000, positions={"market_positions": rows})
     assert await mgr(c)._get_portfolio_value() == pytest.approx(100.0)
 
 
@@ -354,54 +382,63 @@ V2_POSITIONS = {"market_positions": [
 ]}
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG src/utils/cash_reserves.py:289-298 — _get_portfolio_value reads response key "
-    "'positions' (v2 returns 'market_positions') and row field 'quantity' (v2 rows carry "
-    "signed string 'position_fp'), so held contracts are valued at $0 and portfolio == cash. "
-    "Same drift as #101; see market_prices.signed_position."))
 @pytest.mark.asyncio
 async def test_portfolio_value_counts_v2_market_positions():
     c = FakeClient(balance=10_000, positions=V2_POSITIONS)
     assert await mgr(c)._get_portfolio_value() == pytest.approx(100.0 + 50 * 0.5)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG cash_reserves.py:289-298 — consequence of v2 drift: with $20 cash and 50 contracts "
-    "held, portfolio is read as $20 so reserve is 100%, not ~44%; the reserve tiers can "
-    "never trigger on a live account because the denominator excludes every position."))
 @pytest.mark.asyncio
 async def test_reserve_pct_reflects_v2_held_positions():
     c = FakeClient(balance=2_000, positions=V2_POSITIONS)
-    r = await mgr(c).check_cash_reserves(0.0)
+    r = await mgr(c).check_cash_reserves()
     assert r.cash_reserve_pct == pytest.approx(20 / 45 * 100, rel=1e-3)
 
 
 @pytest.mark.asyncio
-async def test_v2_positions_currently_read_as_zero_value():
-    """Characterisation of the bug above (passes today, flips when fixed)."""
-    c = FakeClient(balance=10_000, positions=V2_POSITIONS)
-    assert await mgr(c)._get_portfolio_value() == pytest.approx(100.0)
+async def test_v2_reserve_tiers_now_bind():
+    """$20 cash + 50 contracts held ($25 est.): 44% reserve, and a $10 trade
+    (22% of the book) is refused by the 5% impact cap, which in the old
+    cash-only reading it would have been judged against $20 instead of $45."""
+    c = FakeClient(balance=2_000, positions=V2_POSITIONS)
+    r = await mgr(c).check_cash_reserves(2.0)   # 4.4% of $45
+    assert r.portfolio_value == pytest.approx(45.0) and r.can_trade is True
+    r = await mgr(c).check_cash_reserves(3.0)   # 6.7% of $45
+    assert r.can_trade is False and "exceeds maximum" in r.reason
+
+
+@pytest.mark.asyncio
+async def test_big_book_small_cash_trips_emergency_tier():
+    """$4 cash vs 2,000 contracts ($1000 est.) = 0.4% -> below minimum and blocked.
+    Before the fix portfolio==cash, reserve read 100% and this passed."""
+    rows = {"market_positions": [{"position_fp": "2000.00"}]}
+    r = await mgr(FakeClient(balance=400, positions=rows)).check_cash_reserves(0.01)
+    assert r.can_trade is False
+    assert r.cash_reserve_pct == pytest.approx(0.4, rel=1e-2)
 
 
 # ------------------------------------------------- NaN / negative trade value
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG cash_reserves.py:72-158 — every check is a '<'/'>' comparison; a NaN proposed trade "
-    "value makes them all False, so the gate returns can_trade=True. Fails OPEN."))
 @pytest.mark.asyncio
-async def test_nan_trade_value_is_refused():
-    r = await mgr(FakeClient(balance=1_000_000)).check_cash_reserves(math.nan, portfolio_value=10_000.0)
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf, -500.0, -0.01, 0.0, "abc", [1]])
+async def test_invalid_trade_value_is_refused(bad):
+    c = FakeClient(balance=1_000_000)
+    r = await mgr(c).check_cash_reserves(bad, portfolio_value=10_000.0)
     assert r.can_trade is False
+    assert "Invalid proposed trade value" in r.reason
+    assert c.calls == []          # refused before touching the exchange
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG cash_reserves.py:72-158 — negative trade value is not rejected; it 'adds' cash "
-    "and passes every check, including when current reserves are fine. A sign error upstream "
-    "sails through."))
 @pytest.mark.asyncio
-async def test_negative_trade_value_is_refused():
-    r = await mgr(FakeClient(balance=1_000_000)).check_cash_reserves(-500.0, portfolio_value=10_000.0)
-    assert r.can_trade is False
+async def test_invalid_trade_value_refused_through_convenience_fn():
+    ok, reason = await check_can_trade_with_cash_reserves(math.nan, FakeDB(), FakeClient(balance=1_000_000))
+    assert ok is False and "Invalid" in reason
+
+
+@pytest.mark.asyncio
+async def test_smallest_positive_trade_is_still_valid():
+    r = await _check(2_000.00, 0.01)
+    assert r.can_trade is True
 
 
 @pytest.mark.asyncio
@@ -495,16 +532,52 @@ async def test_is_cash_emergency_true_on_unreadable_balance():
     assert await is_cash_emergency(FakeDB(), FakeClient(balance_exc=RuntimeError("x"))) is True
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG cash_reserves.py:363-370 — is_cash_emergency does status.get('emergency_status', False); "
-    "when get_cash_status hits its outer except it returns {'status':'ERROR'} with no such key, "
-    "so an error reads as 'no emergency'. Fails OPEN. (unified_trading_system.py:~226 indexes "
-    "cash_status['emergency_status'] directly and would KeyError instead.)"))
 @pytest.mark.asyncio
 async def test_is_cash_emergency_true_when_status_errors(monkeypatch):
     async def boom(self): raise ValueError("x")
     monkeypatch.setattr(CashReservesManager, "_get_portfolio_value", boom)
     assert await is_cash_emergency(FakeDB(), FakeClient()) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [{"status": "ERROR", "message": "x"}, {"status": "GOOD"}, {}])
+async def test_is_cash_emergency_true_on_error_or_missing_key(monkeypatch, status):
+    async def fake(self): return status
+    monkeypatch.setattr(CashReservesManager, "get_cash_status", fake)
+    assert await is_cash_emergency(FakeDB(), FakeClient()) is True
+
+
+@pytest.mark.asyncio
+async def test_is_cash_emergency_honours_explicit_false(monkeypatch):
+    async def fake(self): return {"status": "GOOD", "emergency_status": False}
+    monkeypatch.setattr(CashReservesManager, "get_cash_status", fake)
+    assert await is_cash_emergency(FakeDB(), FakeClient()) is False
+
+
+# ---- unified_trading_system consumes get_cash_status
+
+def test_unified_system_halts_instead_of_keyerror_on_error_status():
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from src.strategies.unified_trading_system import UnifiedAdvancedTradingSystem
+
+    db = MagicMock()
+    db.get_eligible_markets = AsyncMock(return_value=[])
+    sysm = UnifiedAdvancedTradingSystem(db, MagicMock(), MagicMock())
+    limits = MagicMock()
+    limits.get_position_limits_status = AsyncMock(return_value={"status": "OK", "position_utilization": "0/1"})
+    cash = MagicMock()
+    cash.get_cash_status = AsyncMock(return_value={"status": "ERROR", "message": "boom"})
+    cash.handle_cash_emergency = AsyncMock(return_value=SimpleNamespace(
+        action_type="halt_trading", reason="r", positions_to_close=0))
+    with patch("src.jobs.execute.reconcile_stale_failed_rows", AsyncMock()), \
+         patch("src.utils.position_limits.PositionLimitsManager", return_value=limits), \
+         patch("src.utils.cash_reserves.CashReservesManager", return_value=cash):
+        res = asyncio.run(sysm.execute_unified_trading_strategy())
+    cash.handle_cash_emergency.assert_awaited_once()       # treated as an emergency
+    db.get_eligible_markets.assert_not_awaited()           # and halted before scanning
+    assert res.total_positions == 0
 
 
 @pytest.mark.asyncio
@@ -597,12 +670,15 @@ async def test_full_gate_surface_never_touches_orders():
 
 # ------------------------------------------------------------ message drift
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG(doc, low) cash_reserves.py:4,8,117,327,330,333 — module docstring and operator-facing "
-    "messages say 'above 15%' / '20% optimal', but minimum is 0.5% and optimal 1.0%. Misleads "
-    "whoever reads the emergency alert about how much cash is needed."))
 @pytest.mark.asyncio
 async def test_emergency_messages_quote_the_real_threshold():
-    r = await _check(10.00, 0.0)  # emergency tier
-    text = " ".join(r.recommended_actions)
-    assert "15%" not in text
+    r = await _check(10.00, None)  # emergency tier
+    assert "Suspend new trading until above 0.5%" in r.recommended_actions
+    text = " ".join(r.recommended_actions + mgr()._get_cash_recommendations(0.1)
+                    + mgr()._get_cash_recommendations(0.3) + mgr()._get_cash_recommendations(0.7))
+    assert "15%" not in text and "20%" not in text
+    assert "above 0.5%" in text and "toward 1.0% optimal" in text
+
+
+def test_module_docstring_matches_thresholds():
+    assert "15%" not in cr.__doc__
