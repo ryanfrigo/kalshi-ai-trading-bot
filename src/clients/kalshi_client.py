@@ -30,6 +30,15 @@ class KalshiAPIError(Exception):
     pass
 
 
+class KalshiOrderOutcomeUnknown(KalshiAPIError):
+    """An order-creating POST may have landed but could not be confirmed.
+
+    Do NOT assume the order failed: check the exchange (orders/positions) for
+    ``client_order_id`` before acting. Subclasses KalshiAPIError so existing
+    callers keep treating it as "not confirmed placed" and do not retry.
+    """
+
+
 def build_order_v2_payload(
     ticker: str,
     client_order_id: str,
@@ -194,7 +203,8 @@ class KalshiClient(TradingLoggerMixin):
         endpoint: str,
         params: Optional[Dict] = None,
         json_data: Optional[Dict] = None,
-        require_auth: bool = True
+        require_auth: bool = True,
+        ambiguous_order_create: bool = False
     ) -> Dict[str, Any]:
         """
         Make authenticated request to Kalshi API with retry logic.
@@ -205,6 +215,9 @@ class KalshiClient(TradingLoggerMixin):
             params: Query parameters
             json_data: JSON request body
             require_auth: Whether authentication is required
+            ambiguous_order_create: Set only by place_order. The request creates
+                an order carrying json_data["client_order_id"]; after an unclear
+                failure it is looked up by that id, never resent.
         
         Returns:
             API response data
@@ -240,6 +253,8 @@ class KalshiClient(TradingLoggerMixin):
             query_string = urlencode(params)
             url = f"{url}?{query_string}"
         
+        order_create = ambiguous_order_create and bool((json_data or {}).get("client_order_id"))
+
         last_exception = None
         for attempt in range(self.max_retries):
             try:
@@ -270,6 +285,10 @@ class KalshiClient(TradingLoggerMixin):
                 
             except httpx.HTTPStatusError as e:
                 last_exception = e
+                if order_create and (e.response.status_code == 409
+                                     or e.response.status_code >= 500):
+                    # 409 = likely duplicate client_order_id; 5xx = outcome unknown.
+                    return await self._resolve_order_create(json_data, e)
                 # Rate limit (429) or server errors (5xx) are worth retrying
                 if e.response.status_code == 429 or e.response.status_code >= 500:
                     sleep_time = self.backoff_factor * (2 ** attempt)
@@ -286,12 +305,52 @@ class KalshiClient(TradingLoggerMixin):
                     raise KalshiAPIError(error_msg)
             except Exception as e:
                 last_exception = e
+                if order_create and not isinstance(
+                        e, (httpx.ConnectError, httpx.ConnectTimeout)):
+                    # Timeout / reset / bad body: the POST may have landed. Never resend.
+                    return await self._resolve_order_create(json_data, e)
                 self.logger.warning(f"Request failed with general exception. Retrying...", error=str(e), endpoint=endpoint)
                 sleep_time = self.backoff_factor * (2 ** attempt)
                 await asyncio.sleep(sleep_time)
         
         raise KalshiAPIError(f"API request failed after {self.max_retries} retries: {last_exception}")
     
+    async def _resolve_order_create(self, json_data: Dict, cause: Exception) -> Dict[str, Any]:
+        """After an ambiguous order POST, find the order by client_order_id.
+
+        The docs (docs.kalshi.com get-orders) offer no client_order_id filter, so
+        list the ticker's orders and match locally. Found -> return it; not found
+        or unreadable -> KalshiOrderOutcomeUnknown (no resend).
+        https://docs.kalshi.com/api-reference/orders/get-orders
+        """
+        coid = json_data["client_order_id"]
+        ticker = json_data.get("ticker")
+        self.logger.warning("Order POST outcome unclear; looking up by client_order_id",
+                            client_order_id=coid, error=str(cause))
+        try:
+            cursor = None
+            for _ in range(10):
+                params: Dict[str, Any] = {"limit": 200}
+                if ticker:
+                    params["ticker"] = ticker
+                if cursor:
+                    params["cursor"] = cursor
+                page = await self._make_authenticated_request(
+                    "GET", "/trade-api/v2/portfolio/orders", params=params)
+                for o in page.get("orders") or []:
+                    if o.get("client_order_id") == coid:
+                        return {**o, "recovered_by_client_order_id": True}
+                cursor = page.get("cursor")
+                if not cursor:
+                    break
+        except Exception as lookup_exc:
+            raise KalshiOrderOutcomeUnknown(
+                f"order client_order_id={coid} outcome unknown ({cause}); "
+                f"lookup failed: {lookup_exc}") from cause
+        raise KalshiOrderOutcomeUnknown(
+            f"order client_order_id={coid} outcome unknown ({cause}); "
+            f"not found in orders for {ticker}; not resent")
+
     async def get_balance(self) -> Dict[str, Any]:
         """Get account balance."""
         return await self._make_authenticated_request("GET", "/trade-api/v2/portfolio/balance")
@@ -535,7 +594,8 @@ class KalshiClient(TradingLoggerMixin):
         # ----------------------------------------------------------------------
 
         resp = await self._make_authenticated_request(
-            "POST", "/trade-api/v2/portfolio/events/orders", json_data=payload
+            "POST", "/trade-api/v2/portfolio/events/orders", json_data=payload,
+            ambiguous_order_create=True,
         )
         # Backward-compat: legacy callers read resp["order"]["order_id"]. The v2
         # response is flat ({order_id, fill_count, ...}), so expose it both ways.
