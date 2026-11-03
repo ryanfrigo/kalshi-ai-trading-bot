@@ -12,6 +12,8 @@ here without updating those characterization tests deliberately.
 
 from __future__ import annotations
 
+import math
+
 
 def kelly_fraction(prob_win: float, payout_ratio: float) -> float:
     """Kelly fraction for a binary bet: f* = (p*b - q) / b.
@@ -29,6 +31,10 @@ def kelly_fraction(prob_win: float, payout_ratio: float) -> float:
     """
     if payout_ratio <= 0 or prob_win <= 0:
         return 0.0
+    # Fail closed on a non-finite or out-of-range probability (> 1 would size
+    # a bet larger than the bankroll). Valid inputs are untouched.
+    if not math.isfinite(prob_win) or prob_win > 1.0:
+        return 0.0
     prob_lose = 1.0 - prob_win
     f = (prob_win * payout_ratio - prob_lose) / payout_ratio
     return max(0.0, f)
@@ -41,8 +47,11 @@ def binary_market_payout_odds(market_probability: float, bet_yes: bool = True) -
     For a NO  bet at price P: profit is P on (1-P) staked  -> b = P/(1-P).
 
     Degenerate prices (P=0 for YES, P=1 for NO) raise ZeroDivisionError;
-    callers decide their own fallback for untradeable prices.
+    callers decide their own fallback for untradeable prices. A NaN or
+    out-of-[0,1] price raises ValueError.
     """
+    if not (0.0 <= market_probability <= 1.0):  # also False for NaN
+        raise ValueError(f"market_probability must be in [0, 1], got {market_probability!r}")
     if bet_yes:
         return (1 - market_probability) / market_probability
     return market_probability / (1 - market_probability)
