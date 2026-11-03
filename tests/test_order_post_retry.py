@@ -26,8 +26,9 @@ def _patches():
         yield
 
 
-def _router(post_behaviors, orders):
+def _router(post_behaviors, orders, pages=None, get_behavior=None):
     log = []
+    queries = []
 
     def handle(req):
         log.append((req.method, req.url.path))
@@ -37,7 +38,13 @@ def _router(post_behaviors, orders):
                 raise b
             return b
         assert req.url.path == ORDERS_PATH
+        queries.append(dict(req.url.params))
+        if get_behavior is not None:
+            return get_behavior()
+        if pages is not None:
+            return httpx.Response(200, json=pages[req.url.params.get("cursor")])
         return httpx.Response(200, json={"orders": orders, "cursor": ""})
+    handle.queries = queries
     return handle, log
 
 
@@ -91,3 +98,52 @@ async def test_get_still_retries_on_5xx():
         return httpx.Response(503) if n["i"] < 3 else httpx.Response(200, json={"ok": 1})
     r = await _client(handle)._make_authenticated_request("GET", "/trade-api/v2/portfolio/balance")
     assert r == {"ok": 1} and n["i"] == 3
+
+
+class _OkGovernor:
+    def __init__(self, *a, **k):
+        pass
+
+    async def check(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(halted=False, reasons=[], current_equity_cents=10_000_000)
+
+
+async def test_place_order_end_to_end_recovers_after_timeout():
+    h, log = _router([httpx.ReadTimeout("t")],
+                     [{"order_id": "rec-7", "client_order_id": "coid-1"}])
+    with patch("src.risk.risk_governor.RiskGovernor", _OkGovernor):
+        resp = await _client(h).place_order(
+            "T", "coid-1", side="no", action="buy", count=1, type_="limit", no_price=90)
+    assert [m for m, _ in log].count("POST") == 1
+    assert resp["order"]["order_id"] == "rec-7"
+
+
+@pytest.mark.parametrize("failure", [
+    lambda: httpx.Response(400, json={"error": "bad"}),
+    lambda: (_ for _ in ()).throw(httpx.ReadError("boom")),
+])
+async def test_lookup_failure_raises_unknown_with_one_post(failure):
+    h, log = _router([httpx.ReadTimeout("t")], [], get_behavior=failure)
+    with pytest.raises(KalshiOrderOutcomeUnknown):
+        await _client(h)._make_authenticated_request(
+            "POST", POST_PATH, json_data=BODY, ambiguous_order_create=True)
+    assert [m for m, _ in log].count("POST") == 1
+
+
+async def test_lookup_query_carries_ticker_and_limit():
+    h, _ = _router([httpx.ReadTimeout("t")],
+                   [{"order_id": "o", "client_order_id": "coid-1"}])
+    await _client(h)._make_authenticated_request(
+        "POST", POST_PATH, json_data=BODY, ambiguous_order_create=True)
+    assert h.queries[0]["ticker"] == "T" and h.queries[0]["limit"] == "200"
+
+
+async def test_lookup_follows_cursor_to_page_two():
+    pages = {None: {"orders": [{"order_id": "a", "client_order_id": "x"}], "cursor": "c2"},
+             "c2": {"orders": [{"order_id": "p2", "client_order_id": "coid-1"}], "cursor": ""}}
+    h, log = _router([httpx.ReadTimeout("t")], [], pages=pages)
+    r = await _client(h)._make_authenticated_request(
+        "POST", POST_PATH, json_data=BODY, ambiguous_order_create=True)
+    assert r["order_id"] == "p2"
+    assert [m for m, _ in log].count("POST") == 1
