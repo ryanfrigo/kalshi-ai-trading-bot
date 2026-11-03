@@ -153,3 +153,10 @@ def test_cli_fills_resolves_pending_and_persists(tmp_path, monkeypatch, capsys):
     (r,) = load_journal()
     assert r["order_id"] == "oid-9" and not is_pending(r)
     assert json.loads(capsys.readouterr().out)["written"] is True
+
+
+def test_fractional_fill_keeps_the_float_count():
+    (r,), _ = _run([_rec()], FakeClient(live=[_order("2.50", "canceled")]))
+    assert r["count"] == 2.5 and r["original_count"] == 10
+    (r,), _ = _run([_rec()], FakeClient(live=[_order("10.00", "executed")]))
+    assert r["count"] == 10 and isinstance(r["count"], int)

@@ -20,9 +20,10 @@ _TERMINAL = ("executed",) + _TERMINAL_UNFILLED
 def _avg_fill_price(order: Dict[str, Any], filled: float) -> float:
     """(taker+maker fill cost)/filled in dollars, or 0.0 to fall back to the limit price.
 
-    UNVERIFIED field names: taker_fill_cost_dollars / maker_fill_cost_dollars come
-    from the Kalshi v2 order object per the reviewer; no fixture or code in this
-    repo references them. If either is absent or not finite we use the limit price.
+    taker_fill_cost_dollars / maker_fill_cost_dollars are required fixed-point dollar
+    strings in Kalshi's GetOrder spec
+    (https://docs.kalshi.com/api-reference/orders/get-order). If either fails to
+    parse as a finite number we fall back to the limit price.
     """
     try:
         cost = float(order["taker_fill_cost_dollars"]) + float(order["maker_fill_cost_dollars"])
@@ -59,10 +60,12 @@ def _resolve_one(rec: Dict[str, Any], found: Any) -> Tuple[Dict[str, Any], str]:
         if not oid or not math.isfinite(price):
             return rec, ""
         out = {k: v for k, v in rec.items() if k not in ("status", "order_outcome")}
-        out.update(order_id=oid, count=int(filled), price=price)
-        if int(filled) != int(rec.get("count", 0)):
-            out["original_count"] = int(rec.get("count", 0))
-        return out, f"filled {int(filled)} (order {oid})"
+        # fill_count_fp may be fractional ("2.50"): int only when integral.
+        count = int(filled) if filled == int(filled) else filled
+        out.update(order_id=oid, count=count, price=price)
+        if count != rec.get("count", 0):
+            out["original_count"] = rec.get("count", 0)
+        return out, f"filled {count} (order {oid})"
     if found.get("status") in _TERMINAL_UNFILLED:
         return dict(rec, voided=True, voided_reason=f"order {found['status']} with zero fills"), \
             f"voided ({found['status']})"
