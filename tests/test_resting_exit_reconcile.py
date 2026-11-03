@@ -3,7 +3,7 @@
 The exit's order id is stored on the position row when it rests; each
 run_tracking cycle reads that order (GET /portfolio/orders/{id}) and logs and
 closes or shrinks the row by what newly filled. A bad read books nothing; the
-third in a row drops the stored id.
+id stays stored and is retried every pass (loud error from the third).
 Kalshi is faked (no network); the DB is a temp SQLite file.
 """
 import asyncio
@@ -235,12 +235,33 @@ def test_two_bad_reads_keep_the_id_and_block_a_new_exit(tmp_path):
 
 
 @pytest.mark.parametrize("bad", BAD_READS.values(), ids=BAD_READS.keys())
-def test_third_bad_read_drops_the_id_and_falls_back_to_the_guard(tmp_path, bad, capsys,
-                                                                 caplog):
-    out, sent, sent_counts = _cycles(tmp_path, [RuntimeError("x"), RuntimeError("y"), bad])
-    assert out[-1] == ("abandoned", (None, 0))
-    assert "late fills of o1 will not be booked; check the trade log" in _logged(capsys, caplog)
-    assert sent is True and sent_counts == [10]  # the sellable guard decides now
+def test_bad_reads_never_drop_the_id_or_the_baseline(tmp_path, bad, capsys, caplog):
+    # Replaces test_third_bad_read_drops_the_id_and_falls_back_to_the_guard, which pinned
+    # the bug: dropping the id let an already-sold exit be booked again as settlement P&L.
+    out, sent, sent_counts = _cycles(tmp_path, [RuntimeError("x"), RuntimeError("y"), bad,
+                                                bad, bad, bad])
+    assert [o[1] for o in out] == [("o1", n) for n in range(1, 7)]
+    assert all(o[0] == "unchanged" for o in out)
+    assert "late fills of o1 are NOT booked yet" in _logged(capsys, caplog)
+    assert sent is False and sent_counts == []  # fail closed while the order is unreadable
+
+
+def test_exit_that_fills_during_unreadable_reads_is_booked_once_readable(tmp_path):
+    """10 contracts fill while three reads 503: the id survives and the fill is booked."""
+    async def go():
+        db = await _db(tmp_path)
+        client = FakeKalshi(fill=0)
+        client.get_order = AsyncMock(side_effect=[RuntimeError("HTTP 503")] * 3
+                                     + [_order(10, "executed")])
+        results = []
+        for _ in range(4):
+            (pos,) = await db.get_open_live_positions()
+            results.append(await reconcile_resting_exit(pos, client, db))
+        return results, await _row(db), await db.get_all_trade_logs()
+    results, row, logs = asyncio.run(go())
+    assert results == ["unchanged", "unchanged", "unchanged", "closed"]
+    assert row == ("closed", 10, None, None)
+    assert len(logs) == 1 and logs[0].quantity == 10 and logs[0].pnl == pytest.approx(2.0)
 
 
 def test_a_good_read_resets_the_count(tmp_path):

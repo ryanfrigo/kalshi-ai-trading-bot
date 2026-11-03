@@ -595,19 +595,23 @@ def _resting_exit_columns(position: Position, order: Dict, logger) -> Dict:
             "exit_order_read_failures": 0}
 
 
-_MAX_EXIT_READ_FAILURES = 3
+_EXIT_READ_ALERT_EVERY = 3
 
 
 async def _exit_read_failed(position: Position, db_manager: DatabaseManager, logger) -> str:
-    """Count one bad read of the stored exit order; drop the id on the third in a row."""
+    """Count one bad read of the stored exit order. The id and fill baseline are kept.
+
+    Dropping the id on failed reads would lose a fill that happened meanwhile (the DB
+    still shows the contracts open and settlement would book them again). So the id is
+    only cleared by a good read; here we retry next pass and shout every 3rd failure.
+    """
     oid = position.exit_order_id
     failures = (position.exit_order_read_failures or 0) + 1
-    if failures >= _MAX_EXIT_READ_FAILURES:
-        await db_manager.set_exit_order(position.id, None, None)
-        logger.error(f"Exit order {oid} on {position.market_id} unreadable {failures} times "
-                     f"in a row: late fills of {oid} will not be booked; check the trade log.")
-        return "abandoned"
     await db_manager.set_exit_order(position.id, oid, position.exit_order_filled, failures)
+    if failures % _EXIT_READ_ALERT_EVERY == 0:
+        logger.error(f"Exit order {oid} on {position.market_id} unreadable {failures} times "
+                     f"in a row: late fills of {oid} are NOT booked yet and new exits are "
+                     f"blocked; still retrying, check the order on Kalshi.")
     return "unchanged"
 
 
@@ -616,9 +620,8 @@ async def reconcile_resting_exit(position: Position, kalshi_client: KalshiClient
     """Book fills of the position's stored exit order since we last looked.
 
     Returns "closed", "shrunk", "cleared" (order done, nothing new filled),
-    "unchanged" or "abandoned". A read or field problem books nothing and counts
-    one failure; a good read resets the count. The third failure in a row drops
-    the stored id, so the row falls back to the sellable guard.
+    or "unchanged". A read or field problem books nothing, counts one failure and
+    keeps the stored id and baseline for the next pass; only a good read clears it.
     """
     logger = get_trading_logger("exit_fill")
     oid, ticker = position.exit_order_id, position.market_id
