@@ -312,7 +312,7 @@ def test_kelly_no_side_uses_no_probability_and_is_capped():
 
 
 def test_kelly_degenerate_no_price_falls_back_to_five_percent():
-    opp = make_opp(0.0, -0.3)  # NO side, YES at 0 -> NO costs a full dollar
+    opp = make_opp(0.0, 0.0)  # NO side, YES at 0 -> NO costs a full dollar
     opp.edge = -0.3
     assert _calculate_simple_kelly(opp) == 0.05
 
@@ -1008,3 +1008,78 @@ def test_capital_efficiency_is_zero_when_total_capital_is_zero(db):
     res = s._compile_unified_results({}, pa, {})
     assert res.capital_efficiency == 0.0
     assert res.total_capital_used == 0.5
+
+
+# ------------------------- non-finite / out-of-range inputs: fail closed, never 5%
+
+NAN = float("nan")
+INF = float("inf")
+
+
+@pytest.mark.parametrize("market_prob,predicted", [
+    (NAN, 0.6), (INF, 0.6), (-INF, 0.6), (-0.1, 0.6), (1.1, 0.6),
+    (0.4, NAN), (0.4, INF), (0.4, -0.3), (0.4, 1.5),
+    (NAN, NAN),
+])
+@pytest.mark.parametrize("edge", [0.2, -0.2])
+def test_kelly_bad_probability_sizes_zero_never_five_percent(market_prob, predicted, edge):
+    opp = make_opp(0.5, 0.5)
+    opp.market_probability = market_prob
+    opp.predicted_probability = predicted
+    opp.edge = edge  # both the YES and the NO branch
+    assert _calculate_simple_kelly(opp) == 0.0
+
+
+def test_kelly_valid_inputs_unchanged_by_the_guard():
+    assert 0 < _calculate_simple_kelly(make_opp(0.40, 0.60)) <= 0.2
+    assert _calculate_simple_kelly(make_opp(0.0, 0.0)) == _calculate_simple_kelly(make_opp(0.0, 0.0))
+
+
+# ------------------- NaN entry price: this market is skipped, the run goes on
+
+class PerTickerKalshi(FakeKalshi):
+    """FakeKalshi that serves a different market object per ticker."""
+
+    def __init__(self, markets, **kw):
+        super().__init__(next(iter(markets.values())), **kw)
+        self.markets = markets
+
+    async def get_market(self, ticker):
+        return self.markets[ticker]
+
+
+def test_immediate_nan_ask_places_nothing_and_does_not_raise(db):
+    kalshi = FakeKalshi(v2_market(NAN, NAN, NAN, NAN))
+    with Captured() as cap:
+        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
+    cap.execute.assert_not_awaited()
+    assert kalshi.orders == []
+
+
+def test_immediate_nan_prices_from_price_reader_place_nothing_and_stop_calc_rejects_nan(db):
+    """NaN prices from the reader place nothing; the stop calc itself also rejects NaN."""
+    kalshi = FakeKalshi(legacy_market(40, 60))
+    real = __import__("src.utils.stop_loss_calculator", fromlist=["x"]).StopLossCalculator
+    with Captured() as cap, patch("src.strategies.portfolio.immediate.get_market_prices",
+                                  return_value=(NAN, NAN, NAN, NAN)):
+        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
+    cap.execute.assert_not_awaited()
+    with pytest.raises(ValueError):
+        real.calculate_stop_loss_levels(NAN, "YES")
+
+
+def test_allocation_nan_ask_skips_that_market_and_run_continues(db):
+    markets = {"BAD-1": v2_market(NAN, NAN, NAN, NAN),
+               "MKT-2": v2_market(0.38, 0.40, 0.58, 0.60)}
+    s = make_system(db, PerTickerKalshi(markets))
+    allocation = PortfolioAllocation(
+        allocations={"BAD-1": 0.10, "MKT-2": 0.10}, total_capital_used=0.2,
+        expected_portfolio_return=0, portfolio_volatility=0, portfolio_sharpe=0,
+        max_portfolio_drawdown=0, diversification_ratio=1, portfolio_var_95=0,
+        portfolio_cvar_95=0, aggregate_kelly_fraction=0, portfolio_growth_rate=0)
+    opps = [make_opp(0.40, 0.60, market_id="BAD-1"), make_opp(0.40, 0.60, market_id="MKT-2")]
+    with Captured() as cap:
+        res = run(s._execute_portfolio_allocations(allocation, opps))
+    assert cap.execute.await_count == 1
+    assert cap.position.market_id == "MKT-2"
+    assert res["failed_executions"] >= 1 and res["successful_executions"] == 1

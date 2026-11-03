@@ -428,6 +428,12 @@ def _calculate_simple_kelly(opportunity: MarketOpportunity) -> float:
     the legacy 5% fallback for degenerate market prices.
     """
     try:
+        # A NaN/inf/out-of-[0,1] price or probability is corrupt data, not a
+        # degenerate price: size 0, never the 5% fallback.
+        for v in (opportunity.market_probability, opportunity.predicted_probability):
+            if not (math.isfinite(v) and 0.0 <= v <= 1.0):
+                return 0.0
+
         if opportunity.edge > 0:  # Betting YES
             p = opportunity.predicted_probability
             b = binary_market_payout_odds(opportunity.market_probability, bet_yes=True)
