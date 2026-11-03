@@ -34,12 +34,15 @@ async def should_exit_position(
     current_price = current_yes_price if position.side == "YES" else current_no_price
     
     # 1. Market resolution (original logic)
-    if market_status == 'closed':
+    if str(market_status or '').lower() in ('closed', 'determined', 'finalized'):
         # If market resolved, use the result to determine exit price
         if market_result:
             exit_price = 1.0 if str(market_result).upper() == str(position.side).upper() else 0.0
         else:
-            # Fallback to current price if no result available
+            # Fallback to current price if no result available; with no usable
+            # price either, book nothing and retry next cycle.
+            if current_price is None:
+                return False, "", 0.0
             exit_price = current_price
         return True, "market_resolution", exit_price
     
