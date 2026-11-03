@@ -54,6 +54,7 @@ dependencies = [
     "ratelimit==2.2.1",
     "pyyaml==6.0.1",
     "sentry-sdk==1.39.2",
+    "feedparser==6.0.14",
     "xai_sdk>=1.0.0",
     "uvicorn",
     "json-repair",

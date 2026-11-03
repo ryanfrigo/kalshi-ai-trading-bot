@@ -9,13 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 
-# feedparser is imported by the module but not declared in pyproject.toml (see
-# tests/test_news_aggregator_deps.py). Skip rather than error where it is absent.
-pytest.importorskip("feedparser")
-
-from src.config.settings import settings  # noqa: E402
-from src.data import news_aggregator as na  # noqa: E402
-from src.data.news_aggregator import NewsAggregator, NewsArticle  # noqa: E402
+from src.config.settings import settings
+from src.data import news_aggregator as na
+from src.data.news_aggregator import NewsAggregator, NewsArticle
 
 _real_parse = na.feedparser.parse
 
@@ -41,7 +37,7 @@ def item(title, desc="", link="http://x/1", date=None, cat=None):
 
 class Clock:
     def __init__(self):
-        self.t = 100_000.0  # host up ~28h; see the early-uptime xfail below
+        self.t = 100_000.0  # host up ~28h; see test_fetch_feed_works_shortly_after_boot
 
     def monotonic(self):
         return self.t
@@ -309,16 +305,47 @@ async def test_end_to_end_fetch_then_relevance(world):
     assert [a.title for a, _ in got] == ["Fed holds interest rates"]
 
 
-# ----------------------------------------------------- suspected real bugs
-# Each is pinned strict-xfail with the behaviour a correct implementation has.
-
-
-@pytest.mark.xfail(strict=True, reason=(
-    "news_aggregator.py:268 uses substring `kw in article_text`, so 'fed' matches "
-    "'federal', 'war' matches 'software'; unrelated articles score as relevant"))
-def test_relevance_matches_whole_words_not_substrings():
+def test_whole_word_match_scores_zero_for_substring_only():
     a = art("Software company ships federal compliance update")
     assert NewsAggregator._score_relevance(a, ["war", "fed"]) == 0.0
+
+
+def test_whole_word_match_still_finds_real_words_and_punctuation_edges():
+    a = art("Fed, again: rates hold.", "(war) ends")
+    assert NewsAggregator._score_relevance(a, ["fed", "rates", "war"]) == 1.0
+
+
+def test_regex_metacharacters_in_keywords_are_literal():
+    assert NewsAggregator._score_relevance(art("plain text"), ["a+b"]) == 0.0
+
+
+
+
+def test_distinct_untitled_articles_are_not_merged():
+    a = NewsArticle("", "story about oil", "s", None, "http://a")
+    b = NewsArticle("", "story about gas", "s", None, "http://b")
+    assert len(NewsAggregator._deduplicate([a, b])) == 2
+
+
+def test_articles_with_neither_title_nor_link_are_never_merged():
+    a = NewsArticle("", "story about oil", "s", None, "")
+    b = NewsArticle("  ", "story about gas", "s", None, "")
+    assert len(NewsAggregator._deduplicate([a, b])) == 2
+
+
+def test_untitled_articles_sharing_a_link_are_merged():
+    a = NewsArticle("", "x", "s", None, "http://same")
+    b = NewsArticle("", "y", "s", None, "http://same")
+    assert len(NewsAggregator._deduplicate([a, b])) == 1
+
+
+async def test_fetch_feed_works_shortly_after_boot(world):
+    world.clock.t = 120.0
+    world.feeds["f1"] = rss([item("first ever fetch")])
+    assert [a.title for a in await world.make("f1").fetch_feed("f1")] == ["first ever fetch"]
+
+# ------------------------------------------------- known open bugs (not fixed)
+# Pinned strict-xfail with the behaviour a correct implementation has.
 
 
 @pytest.mark.xfail(strict=True, reason=(
@@ -338,15 +365,6 @@ def test_repeated_query_word_counts_once():
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "news_aggregator.py:225-227 dedupes on title only, so distinct untitled items "
-    "(empty title) collapse into one article"))
-def test_distinct_untitled_articles_are_not_merged():
-    a = NewsArticle("", "story about oil", "s", None, "http://a")
-    b = NewsArticle("", "story about gas", "s", None, "http://b")
-    assert len(NewsAggregator._deduplicate([a, b])) == 2
-
-
-@pytest.mark.xfail(strict=True, reason=(
     "news_aggregator.py:67,95 a partially failed fetch_all caches the survivors for "
     "the whole TTL, so a transiently failed feed is not retried for 30 minutes"))
 async def test_partial_failure_does_not_pin_cache_for_full_ttl(world):
@@ -357,13 +375,3 @@ async def test_partial_failure_does_not_pin_cache_for_full_ttl(world):
     world.feeds["bad"] = rss([item("from bad, recovered")])
     world.clock.t += 60
     assert "from bad, recovered" in [a.title for a in await agg.fetch_all()]
-
-
-@pytest.mark.xfail(strict=True, reason=(
-    "news_aggregator.py:110,112 a never-fetched feed defaults to last_fetch=0.0, so "
-    "while time.monotonic() < cache_ttl (host/container up under 30 min) fetch_feed "
-    "treats it as rate limited and returns []"))
-async def test_fetch_feed_works_shortly_after_boot(world):
-    world.clock.t = 120.0
-    world.feeds["f1"] = rss([item("first ever fetch")])
-    assert [a.title for a in await world.make("f1").fetch_feed("f1")] == ["first ever fetch"]
