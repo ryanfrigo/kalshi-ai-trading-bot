@@ -616,3 +616,40 @@ def test_parse_buy_without_limit_price_is_rejected(parse):
 def test_parse_skip_without_price_still_parses(parse):
     d = parse('{"action":"SKIP","confidence":0.3}')
     assert d is not None and d.action == "SKIP" and d.limit_price is None
+
+
+# --------------------------------------------------------------------------- security-review pins
+async def test_get_completion_budget_rechecked_between_fallback_models(make, sleeps):
+    # Empty-but-billed reply is non-retryable, so only the per-fallback guard can stop model 2.
+    c = make({SONNET: [resp("", 1000, 500)], GPT: [resp("ok")]}, limit=0.01)
+    assert await c.get_completion("hi", model=SONNET) is None
+    assert calls(c).models == [SONNET]
+    assert c.total_cost == pytest.approx(0.0105)
+
+
+async def test_billed_empty_reply_is_booked_exactly_once_per_attempt(make, sleeps, monkeypatch):
+    c = make({SONNET: [resp("", 1000, 500)]})
+    monkeypatch.setattr(c, "_build_fallback_chain", lambda model: [SONNET])
+    booked = []
+    real = c._record_spend
+
+    async def spy(model, i, o, cost):
+        booked.append((model, i, o, cost))
+        await real(model, i, o, cost)
+    monkeypatch.setattr(c, "_record_spend", spy)
+
+    assert await c.get_completion("hi", model=SONNET) is None
+    # "Empty response" is not a retryable error, so exactly one attempt reached the API.
+    attempts = len(calls(c).calls)
+    assert attempts == 1
+    assert len(booked) == attempts
+    assert booked[0][:3] == (SONNET, 1000, 500) and booked[0][3] == pytest.approx(0.0105)
+    assert c.total_cost == pytest.approx(attempts * 0.0105)
+    assert c.daily_tracker.total_cost == pytest.approx(attempts * 0.0105)
+    assert c.model_costs[SONNET].request_count == attempts
+
+
+@pytest.mark.parametrize("body", ['"side":"maybe","limit_price":55', '"side":"YES","limit_price":0',
+                                  '"side":"YES","limit_price":150'])
+def test_parse_sell_with_bad_side_or_price_is_rejected(parse, body):
+    assert parse('{"action":"SELL",%s,"confidence":0.9}' % body) is None

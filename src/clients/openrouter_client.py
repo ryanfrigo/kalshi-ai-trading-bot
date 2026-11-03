@@ -494,8 +494,6 @@ class OpenRouterClient(TradingLoggerMixin):
 
                 return content, cost, input_tokens, output_tokens
 
-            except _BudgetExhausted:
-                raise
             except Exception as exc:
                 last_exc = exc
 
