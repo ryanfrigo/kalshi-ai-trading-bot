@@ -1155,6 +1155,15 @@ def cmd_history(args: argparse.Namespace) -> None:
         async with aiosqlite.connect(str(db_path)) as db:
             db.row_factory = aiosqlite.Row
 
+            # Fresh installs lack these tables; don't create them, just say so.
+            cur = await db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name IN ('trade_logs', 'blocked_trades')"
+            )
+            if {r[0] for r in await cur.fetchall()} != {"trade_logs", "blocked_trades"}:
+                print("No trade history yet.")
+                return
+
             # Overall stats
             cursor = await db.execute("""
                 SELECT
