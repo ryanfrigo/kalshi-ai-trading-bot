@@ -184,6 +184,42 @@ def test_volume_flows_from_market_to_opportunity_and_none_becomes_nan():
     assert math.isnan(opp.volume)
 
 
+def test_opportunity_built_without_volume_is_nan_and_places_nothing(db):
+    import math
+    o = make_opp(0.40, 0.60)
+    kw = {f: getattr(o, f) for f in MarketOpportunity.__dataclass_fields__ if f != "volume"}
+    bare = MarketOpportunity(**kw)
+    assert math.isnan(bare.volume)
+    bare.edge_percentage, bare.recommended_side = o.edge_percentage, o.recommended_side
+    kalshi = FakeKalshi(legacy_market(40, 60))
+    with Captured() as cap:
+        run(_evaluate_immediate_trade(bare, db, kalshi, 1000))
+    assert cap.execute.await_count == 0
+
+
+def test_optimizer_rebuild_keeps_source_volume():
+    import math
+    from src.strategies.portfolio.optimizer import AdvancedPortfolioOptimizer
+
+    opt = object.__new__(AdvancedPortfolioOptimizer)
+    opt.logger = MagicMock()
+    with_vol = lambda v: make_opp(0.40, 0.60, volume=v)
+    novol = SimpleNamespace(**{f: getattr(make_opp(0.40, 0.60), f)
+                               for f in MarketOpportunity.__dataclass_fields__ if f != "volume"})
+    assert not hasattr(novol, "volume")
+    out = run(opt._enhance_opportunities_with_metrics([with_vol(600), with_vol(100), novol]))
+    assert len(out) == 3
+    assert out[0].volume == 600 and out[1].volume == 100
+    assert math.isnan(out[2].volume)
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf")])
+def test_coerce_volume_maps_infinities_to_nan(bad):
+    import math
+    from src.strategies.portfolio.immediate import _coerce_volume
+    assert math.isnan(_coerce_volume(bad))
+    assert _coerce_volume("600") == 600.0
+
 # ------------------------------------------- immediate trade: side & price
 
 def test_immediate_yes_edge_buys_yes_at_yes_price(db):

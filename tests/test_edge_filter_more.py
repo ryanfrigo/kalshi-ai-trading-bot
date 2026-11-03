@@ -474,3 +474,10 @@ def test_valid_grid_inputs_never_produce_nan():
     for ai, mkt, conf in GRID:
         r = EF.calculate_edge(ai, mkt, conf)
         assert not math.isnan(r.edge_percentage) and not math.isnan(r.confidence_adjusted_edge)
+
+
+@pytest.mark.parametrize("mkt", [NAN, float("inf"), -0.1, 1.5])
+def test_non_finite_or_out_of_range_market_price_is_no_quote(mkt):
+    r = EF.calculate_edge(0.7, mkt, 0.9)
+    assert r.passes_filter is False
+    assert "No valid market quote" in r.reason
