@@ -23,19 +23,26 @@ MAX_PAGES = 20
 def _parse_quotes(market_data: dict):
     """Return (yes_bid, yes_ask, no_bid, no_ask) in dollars, or raise ValueError.
 
-    A missing/None quote reads as 0 (same as get_market_prices). Non-finite
-    values are rejected. The caller decides what a 0 quote means.
+    All four fields must be present, non-None, parseable and finite; a missing
+    field is a malformed row, not a 0 quote. An explicit 0 is a real quote.
     """
     if "yes_bid_dollars" in market_data:
         keys = ("yes_bid_dollars", "yes_ask_dollars", "no_bid_dollars", "no_ask_dollars")
-        quotes = tuple(float(market_data.get(k, 0) or 0) for k in keys)
+        scale = 1.0
     else:
         # Legacy API: values in cents (0-100)
         keys = ("yes_bid", "yes_ask", "no_bid", "no_ask")
-        quotes = tuple((market_data.get(k, 0) or 0) / 100 for k in keys)
-    if not all(math.isfinite(q) for q in quotes):
-        raise ValueError(f"non-finite quote in {dict(zip(keys, quotes))}")
-    return quotes
+        scale = 100.0
+    quotes = []
+    for k in keys:
+        raw = market_data.get(k)
+        if raw is None:
+            raise ValueError(f"missing price field {k}")
+        quote = float(raw) / scale
+        if not math.isfinite(quote):
+            raise ValueError(f"non-finite {k}={raw!r}")
+        quotes.append(quote)
+    return tuple(quotes)
 
 
 def _build_market(market_data: dict, existing_position_market_ids: set, logger):
@@ -45,10 +52,11 @@ def _build_market(market_data: dict, existing_position_market_ids: set, logger):
     """
     yes_bid, yes_ask, no_bid, no_ask = _parse_quotes(market_data)
 
-    # Mid-prices are only meaningful with a two-sided quote on both legs. A missing
-    # or zero bid/ask (one-sided book, empty book, or absent price fields) would
-    # make the mid half of the real quote, so skip instead of inventing a price.
-    if min(yes_bid, yes_ask, no_bid, no_ask) <= 0:
+    # A zero ask with a bid (or an empty book) would make the mid half the real
+    # quote, so skip instead of inventing a price. A zero bid with a positive ask
+    # (typical longshot, e.g. bid 0 / ask 0.03) is a real state and keeps the
+    # bid/ask mid.
+    if yes_ask <= 0 or no_ask <= 0 or yes_bid < 0 or no_bid < 0:
         logger.warning(
             f"Skipping {market_data['ticker']}: no two-sided quote "
             f"(yes {yes_bid:.4f}/{yes_ask:.4f}, no {no_bid:.4f}/{no_ask:.4f})"

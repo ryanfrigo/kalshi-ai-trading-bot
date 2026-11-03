@@ -149,10 +149,15 @@ async def test_volume_fp_parsing(db, fp, legacy, expected):
     assert r["volume"] == expected
 
 
-@pytest.mark.parametrize("field,value", [("no_ask_dollars", "__missing__"), ("yes_bid_dollars", None),
-                                         ("yes_ask_dollars", "0.0000"), ("no_bid_dollars", "")])
-async def test_missing_or_zero_quote_skips_row_with_warning(db, field, value):
-    """No two-sided quote on a leg: skip with a warning, never store half a quote as a price."""
+@pytest.mark.parametrize("field,value,warning", [
+    ("no_ask_dollars", "__missing__", "malformed"),
+    ("yes_bid_dollars", None, "malformed"),
+    ("no_bid_dollars", "", "malformed"),
+    ("yes_ask_dollars", "0.0000", "two-sided"),   # ask == 0 with a bid: half-the-bid fabrication
+    ("no_ask_dollars", "0", "two-sided"),
+    ("yes_bid_dollars", "-0.0100", "two-sided"),
+])
+async def test_missing_none_or_zero_ask_skips_row_with_warning(db, field, value, warning):
     row = mk()
     if value == "__missing__":
         del row[field]
@@ -161,7 +166,7 @@ async def test_missing_or_zero_quote_skips_row_with_warning(db, field, value):
     q, log = await process([row, mk("KXOK-1")], db)
     assert [m.market_id for m in drain(q)] == ["KXOK-1"]
     assert [r["market_id"] for r in await rows(db)] == ["KXOK-1"]
-    assert any("KXA-1" in m and "two-sided" in m for m in log.messages("warning"))
+    assert any("KXA-1" in m and warning in m for m in log.messages("warning"))
 
 
 async def test_expiration_z_suffix_parsed_as_utc(db):
@@ -271,9 +276,9 @@ async def test_legacy_none_cent_field_does_not_crash(db):
     row = {"ticker": "KXL-1", "title": "t", "yes_bid": None, "yes_ask": 44, "no_bid": 56,
            "no_ask": 60, "volume": 300, "expiration_time": EXPIRY, "status": "active"}
     q, log = await process([row, mk("KXOK-1")], db)
-    # None reads as 0 (as get_market_prices does): no two-sided quote -> skipped, not a crash
+    # a None field is a malformed row: skipped with a warning, never read as 0
     assert [m.market_id for m in drain(q)] == ["KXOK-1"]
-    assert any("two-sided" in m for m in log.messages("warning"))
+    assert any("malformed" in m and "yes_bid" in m for m in log.messages("warning"))
 
 
 @pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
@@ -287,7 +292,7 @@ async def test_nonfinite_price_is_not_stored_or_queued(db, field, bad):
 
 @pytest.mark.parametrize("quotes", [
     dict(yes_bid="0.6000", yes_ask="0", no_bid="0", no_ask="0.4500"),      # bid only on YES leg
-    dict(yes_bid="0", yes_ask="0.0500", no_bid="0.9500", no_ask="0"),      # ask only on YES leg
+    dict(yes_bid="0", yes_ask="0.0500", no_bid="0.9500", no_ask="0"),      # NO leg: bid, ask 0
     dict(yes_bid="0", yes_ask="0", no_bid="0", no_ask="0"),                # empty book
 ])
 async def test_one_sided_book_is_skipped_not_half_priced(db, quotes):
@@ -296,12 +301,39 @@ async def test_one_sided_book_is_skipped_not_half_priced(db, quotes):
     assert any("two-sided" in m for m in log.messages("warning"))
 
 
+async def test_longshot_zero_bid_keeps_old_bid_ask_mid_and_is_ingested(db):
+    """bid == 0 with ask > 0 is a real state (no bids on a longshot): same pricing as before."""
+    q, log = await process([mk(yes_bid="0.0000", yes_ask="0.0300", no_bid="0.9700", no_ask="1.0000",
+                               volume_fp="500")], db)
+    (m,) = drain(q)
+    assert m.yes_price == pytest.approx(0.015)   # (0 + 0.03) / 2, unchanged from before
+    assert m.no_price == pytest.approx(0.985)    # (0.97 + 1.00) / 2
+    (r,) = await rows(db)
+    assert r["yes_price"] == pytest.approx(0.015) and r["no_price"] == pytest.approx(0.985)
+    assert not log.messages("warning")
+
+
+async def test_near_certain_zero_no_bid_is_ingested_at_old_price(db):
+    q, _ = await process([mk(yes_bid="0.9700", yes_ask="1.0000", no_bid="0.0000", no_ask="0.0300",
+                             volume_fp="500")], db)
+    (m,) = drain(q)
+    assert m.yes_price == pytest.approx(0.985) and m.no_price == pytest.approx(0.015)
+
+
+async def test_legacy_cents_zero_bid_longshot_is_ingested(db):
+    row = {"ticker": "KXL-2", "title": "t", "yes_bid": 0, "yes_ask": 3, "no_bid": 97, "no_ask": 100,
+           "volume": 300, "expiration_time": EXPIRY, "status": "active"}
+    q, _ = await process([row], db)
+    (m,) = drain(q)
+    assert m.yes_price == pytest.approx(0.015)
+
+
 async def test_row_with_no_price_fields_at_all_is_not_ingested_as_zero(db):
     row = {"ticker": "KXZ-1", "title": "t", "volume_fp": "500.00", "expiration_time": EXPIRY,
            "status": "active"}
     q, log = await process([row], db)
     assert drain(q) == [] and await rows(db) == []
-    assert any("two-sided" in m for m in log.messages("warning"))
+    assert any("malformed" in m and "missing price field" in m for m in log.messages("warning"))
 
 
 # --------------------------------------------------------------------------- run_ingestion
