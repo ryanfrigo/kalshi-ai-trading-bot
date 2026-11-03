@@ -257,7 +257,7 @@ def test_immediate_path_passes_settings_liquidity_and_expiry_limits_to_the_filte
 
     kalshi = RecordingKalshi()
     opp = SimpleNamespace(predicted_probability=0.7, market_probability=0.5, confidence=0.8,
-                          expected_return=0.16, time_to_expiry=30.0, market_id="KXT-1")
+                          expected_return=0.16, time_to_expiry=30.0, market_id="KXT-1", volume=600.0)
     asyncio.run(immediate._evaluate_immediate_trade(opp, db_manager=None, kalshi_client=kalshi,
                                                     total_capital=1000))
     assert kalshi.calls == []

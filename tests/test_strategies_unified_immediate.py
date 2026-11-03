@@ -91,7 +91,7 @@ class FakeKalshi:
         return {"order": {"order_id": "o1"}}
 
 
-def make_opp(market_prob, predicted, conf=0.8, market_id="MKT-1"):
+def make_opp(market_prob, predicted, conf=0.8, market_id="MKT-1", volume=10_000):
     edge = predicted - market_prob
     o = MarketOpportunity(
         market_id=market_id, market_title="t", predicted_probability=predicted,
@@ -99,8 +99,7 @@ def make_opp(market_prob, predicted, conf=0.8, market_id="MKT-1"):
         expected_return=abs(edge) * conf, max_loss=0.5, time_to_expiry=10.0,  # inside settings' 14-day horizon
         correlation_score=0.0, kelly_fraction=0.0, fractional_kelly=0.0,
         risk_adjusted_fraction=0.0, sharpe_ratio=0.0, sortino_ratio=0.0,
-        max_drawdown_contribution=0.0)
-    o.volume = 10_000  # MarketOpportunity has no volume field; the liquidity gate fails closed without it
+        max_drawdown_contribution=0.0, volume=volume)
     o.edge_percentage = abs(edge)
     o.recommended_side = "YES" if edge > 0 else "NO"
     return o
@@ -146,6 +145,43 @@ class Captured:
     def position(self) -> Position:
         call = self.execute.await_args
         return call.args[0] if call.args else call.kwargs["position"]
+
+
+# ------------------------------------------- immediate trade: liquidity gate
+
+def test_volume_600_at_10_days_passes_the_liquidity_gate(db):
+    kalshi = FakeKalshi(legacy_market(40, 60))
+    with Captured() as cap:
+        run(_evaluate_immediate_trade(make_opp(0.40, 0.60, volume=600), db, kalshi, 1000))
+    assert cap.execute.await_count == 1
+
+
+@pytest.mark.parametrize("volume", [400, float("nan")])
+def test_thin_or_unknown_volume_fails_the_liquidity_gate(db, volume):
+    kalshi = FakeKalshi(legacy_market(40, 60))
+    with Captured() as cap:
+        run(_evaluate_immediate_trade(make_opp(0.40, 0.60, volume=volume), db, kalshi, 1000))
+    assert cap.execute.await_count == 0
+
+
+def test_volume_flows_from_market_to_opportunity_and_none_becomes_nan():
+    import math
+    import time
+    from src.utils.database import Market
+
+    def build(volume):
+        m = Market(market_id="MKT-1", title="t", yes_price=0.4, no_price=0.6, volume=volume,
+                   expiration_ts=int(time.time()) + 10 * 86400, category="x", status="open",
+                   last_updated=datetime.now(), has_position=False)
+        with patch("src.strategies.portfolio.immediate._get_fast_ai_prediction",
+                   new=AsyncMock(return_value=(0.60, 0.80))):
+            return run(create_market_opportunities_from_markets(
+                [m], MagicMock(), FakeKalshi(legacy_market(40, 60)), None, 1000))
+
+    (opp,) = build(600)
+    assert opp.volume == 600.0 and opp.time_to_expiry == pytest.approx(10, abs=0.01)
+    (opp,) = build(None)
+    assert math.isnan(opp.volume)
 
 
 # ------------------------------------------- immediate trade: side & price
