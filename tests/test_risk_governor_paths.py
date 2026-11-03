@@ -141,3 +141,27 @@ def test_cli_report_reads_audit_from_anchor_when_cwd_elsewhere(tmp_path, monkeyp
 
     cli.cmd_report(argparse.Namespace(stdout=True))
     assert seen["equity"]["rebase"] == {"date": "2026-09-25", "prior_peak_cents": 123456}
+
+
+def test_env_var_tilde_expands_under_home(monkeypatch):
+    from src.risk import risk_governor as rg
+
+    monkeypatch.setenv("KALSHI_RUNTIME_DIR", "~/x")
+    assert rg.resolve_halt_flag_path() == Path.home() / "x" / "TRADING_HALTED"
+
+
+@pytest.mark.parametrize("name", ["resolve_state_path", "resolve_halt_flag_path", "resolve_audit_path"])
+def test_relative_env_var_raises(monkeypatch, name):
+    from src.risk import risk_governor as rg
+
+    monkeypatch.setenv("KALSHI_RUNTIME_DIR", "rel")
+    with pytest.raises(ValueError, match="absolute"):
+        getattr(rg, name)()
+
+
+def test_governor_with_relative_env_var_raises(monkeypatch):
+    from src.risk import risk_governor as rg
+
+    monkeypatch.setenv("KALSHI_RUNTIME_DIR", "rel")
+    with pytest.raises(ValueError):
+        rg.RiskGovernor()

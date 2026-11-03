@@ -195,7 +195,7 @@ This repo gives you the building blocks. The example strategies use them — you
 | **Streamlit dashboard** | Real-time portfolio, positions, P&L, decision logs | `scripts/trading_dashboard.py` (`python cli.py dashboard`) |
 | **Risk helpers** | Quarter-Kelly sizing, stop-loss math, and the drawdown circuit breaker | `src/risk/`, `src/strategies/` |
 
-The governor's state file, the `TRADING_HALTED` kill-switch flag and `governor_audit.jsonl` live in `data/runtime/` under the repo root; set `KALSHI_RUNTIME_DIR` to move all three to another directory (wheel installs should set it, since there is no repo root to anchor to).
+The governor's state file, the `TRADING_HALTED` kill-switch flag and `governor_audit.jsonl` live in `data/runtime/` under the repo root; set `KALSHI_RUNTIME_DIR` (an absolute path; `~` is expanded, a relative path is rejected) to move all three to another directory (wheel installs should set it, since there is no repo root to anchor to).
 
 ---
 

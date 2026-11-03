@@ -41,7 +41,14 @@ RUNTIME_DIR_ENV = "KALSHI_RUNTIME_DIR"
 def _env_runtime_dir() -> Optional[Path]:
     """The KALSHI_RUNTIME_DIR override, read at call time (never import time)."""
     raw = os.environ.get(RUNTIME_DIR_ENV, "").strip()
-    return Path(raw) if raw else None
+    if not raw:
+        return None
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        # A relative dir would resolve against the cwd: the halt flag would go
+        # unseen and the state would reset. Fail closed instead.
+        raise ValueError(f"{RUNTIME_DIR_ENV} must be an absolute path, got {raw!r}")
+    return p
 
 
 def resolve_state_path() -> Path:
