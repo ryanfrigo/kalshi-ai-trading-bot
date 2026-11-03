@@ -309,3 +309,25 @@ def test_endless_cursor_fails_closed(tmp_path):
 def test_empty_exposure_still_allows_the_buy(tmp_path):
     res = _buy(_ExposureClient(), tmp_path)
     assert res["ok"] is True and res["count"] == 88
+
+
+@pytest.mark.parametrize("kind,row", [
+    ("positions", {"ticker": "KXT", "position_fp": "nan"}),
+    ("positions", {"ticker": "KXT", "position_fp": "inf"}),
+    ("orders", {"ticker": "KXT", "remaining_count_fp": "nan"}),
+])
+def test_non_finite_count_fails_closed(tmp_path, kind, row):
+    if kind == "positions":
+        client = _ExposureClient(positions={None: {"market_positions": [row]}})
+    else:
+        client = _ExposureClient(orders={None: {"orders": [row]}})
+    res = _buy(client, tmp_path)
+    assert res["ok"] is False and "exposure_unreadable" in res["reason"]
+
+
+def test_position_fp_wins_over_legacy_position(tmp_path):
+    # fp says 1 contract held, legacy says 88: at 90c the cap leaves room for 87.
+    client = _ExposureClient(positions={None: {"market_positions": [
+        {"ticker": "KXT", "position_fp": "-1.00", "position": -88}]}})
+    res = _buy(client, tmp_path)
+    assert res["ok"] is True and res["count"] == 87
