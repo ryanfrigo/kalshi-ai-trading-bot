@@ -41,7 +41,7 @@ async def should_exit_position(
         else:
             # Fallback to current price if no result available; with no usable
             # price either, book nothing and retry next cycle.
-            if current_price is None:
+            if current_price is None or current_price <= 0:
                 return False, "", 0.0
             exit_price = current_price
         return True, "market_resolution", exit_price
