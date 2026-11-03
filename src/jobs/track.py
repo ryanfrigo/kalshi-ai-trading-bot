@@ -18,12 +18,36 @@ from src.utils.logging_setup import setup_logging, get_trading_logger
 from src.clients.kalshi_client import KalshiClient
 from src.utils.market_prices import get_market_prices
 
+_warned_unresolved: set = set()
+
+
+def _settlement_price(side: str, result, settlement_value) -> Optional[float]:
+    """The held side's settlement price from get-market, or None if undetermined.
+
+    `result` 'yes'/'no' (any case) is authoritative; otherwise
+    `settlement_value_dollars` (the YES side's value, populated only after
+    determination; https://docs.kalshi.com/api-reference/market/get-market) covers
+    scalar markets. Anything else, including '' and 'scalar' alone, is None.
+    """
+    r = str(result or '').strip().lower()
+    if r in ('yes', 'no'):
+        return 1.0 if r == str(side).lower() else 0.0
+    try:
+        yes_value = float(settlement_value)
+    except (TypeError, ValueError):
+        return None
+    if not 0.0 <= yes_value <= 1.0:
+        return None
+    return yes_value if str(side).upper() == "YES" else 1.0 - yes_value
+
+
 async def should_exit_position(
     position: Position, 
     current_yes_price: Optional[float], 
     current_no_price: Optional[float], 
     market_status: str,
-    market_result: str = None
+    market_result: str = None,
+    settlement_value: Optional[object] = None,
 ) -> tuple[bool, str, float]:
     """
     Determine if position should be exited based on smart exit strategies.
@@ -33,19 +57,24 @@ async def should_exit_position(
     """
     current_price = current_yes_price if position.side == "YES" else current_no_price
     
-    # 1. Market resolution (original logic)
+    # 1. Market resolution: only an authoritative outcome settles a row. A bid on
+    # a closed/determined/finalized book is stale, and the market may still settle
+    # the other way, so with no outcome book nothing and retry next cycle. Closed
+    # markets take no orders, so the stop/time/profit exits cannot run either.
     if str(market_status or '').lower() in ('closed', 'determined', 'finalized'):
-        # If market resolved, use the result to determine exit price
-        if market_result:
-            exit_price = 1.0 if str(market_result).upper() == str(position.side).upper() else 0.0
-        else:
-            # Fallback to current price if no result available; with no usable
-            # price either, book nothing and retry next cycle.
-            if current_price is None or current_price <= 0:
-                return False, "", 0.0
-            exit_price = current_price
-        return True, "market_resolution", exit_price
-    
+        settled = _settlement_price(position.side, market_result, settlement_value)
+        if settled is None:
+            key = (position.market_id, position.side)
+            if key not in _warned_unresolved:
+                _warned_unresolved.add(key)
+                get_trading_logger("track_positions").warning(
+                    f"{position.market_id} is {market_status} with no authoritative "
+                    f"result (result={market_result!r}, settlement_value_dollars="
+                    f"{settlement_value!r}); leaving {position.side} row open."
+                )
+            return False, "", 0.0
+        return True, "market_resolution", settled
+
     # No usable price (empty book reads as 0 / None): every price-based exit
     # below would act on a false price, so do nothing and retry next cycle.
     if current_price is None or current_price <= 0:
@@ -222,6 +251,7 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None, live: bool 
                 current_no_price = no_bid
                 market_status = market_data.get('status', 'unknown')
                 market_result = market_data.get('result')  # Market resolution result
+                settlement_value = market_data.get('settlement_value_dollars')
                 
                 # If position doesn't have exit strategy set, calculate defaults
                 if not position.stop_loss_price and not position.take_profit_price:
@@ -237,7 +267,8 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None, live: bool 
 
                 # Check if position should be exited (market resolution, time-based, etc.)
                 should_exit, exit_reason, exit_price = await should_exit_position(
-                    position, current_yes_price, current_no_price, market_status, market_result
+                    position, current_yes_price, current_no_price, market_status, market_result,
+                    settlement_value
                 )
 
                 if should_exit:
