@@ -70,8 +70,8 @@ async def test_skip_logs_bid_floor_and_spread(capsys, caplog):
     await _stop(0.60, 14, 15)
     await _stop(0.60, 30, None)
     out = _logged(capsys, caplog)
-    assert "stop skipped: bid 14c under floor 15c / spread 1c" in out
-    assert "stop skipped: bid 30c under floor 15c / spread unknown" in out
+    assert "stop skipped: bid 14c vs floor 15c / spread 1c" in out
+    assert "stop skipped: bid 30c vs floor 15c / spread unknown" in out
 
 
 async def test_paper_mode_skip_sends_nothing():
@@ -79,3 +79,61 @@ async def test_paper_mode_skip_sends_nothing():
     res = await place_stop_loss_orders(_db(0.60), c, stop_loss_threshold=-0.15, live=False)
     assert res.get("simulated", 0) == 0
     c.place_order.assert_not_called()
+
+
+# ---- run_tracking step 2: should_exit_position's stop exits use the same floor
+def _track_pos(**kw):
+    base = dict(market_id="FL-2", side="YES", entry_price=0.50, quantity=5,
+                timestamp=datetime.now(), live=True, status="open", id=8,
+                stop_loss_price=0.40, take_profit_price=0.99)
+    base.update(kw)
+    return Position(**base)
+
+
+async def _track(pos, bid_c, ask_c):
+    from unittest.mock import patch
+    from src.jobs.track import run_tracking
+    db = MagicMock()
+    db.get_open_live_positions = AsyncMock(return_value=[pos])
+    db.add_trade_log = AsyncMock()
+    db.update_position_status = AsyncMock()
+    market = {"status": "active", "yes_bid_dollars": f"{bid_c / 100:.4f}",
+              "yes_ask_dollars": f"{ask_c / 100:.4f}", "no_bid_dollars": "0.0000"}
+    sell = AsyncMock(return_value=False)
+    with patch("src.jobs.track.KalshiClient") as client, \
+         patch("src.jobs.execute.place_sell_limit_order", sell), \
+         patch("src.jobs.execute.place_profit_taking_orders",
+               AsyncMock(return_value={"orders_placed": 0})), \
+         patch("src.jobs.execute.place_stop_loss_orders",
+               AsyncMock(return_value={"orders_placed": 0})):
+        client.return_value.get_market = AsyncMock(return_value={"market": market})
+        client.return_value.close = AsyncMock()
+        await run_tracking(db, live=True)
+    return sell
+
+
+@pytest.mark.parametrize("pos", [
+    _track_pos(),                                         # stop_loss_triggered_pnl_*
+    _track_pos(stop_loss_price=None),                     # emergency_stop_loss_10pct
+], ids=["stop", "emergency"])
+async def test_step2_stop_on_gutted_bid_holds(pos, capsys, caplog):
+    # Bid 10c on a 50c entry: under the floor max(5c, 12.5c).
+    sell = await _track(pos, 10, 11)
+    sell.assert_not_called()
+    assert "stop skipped: bid 10c vs floor 12.5c / spread 1c" in _logged(capsys, caplog)
+
+
+async def test_step2_stop_above_the_floor_sells():
+    sell = await _track(_track_pos(), 30, 31)
+    sell.assert_awaited_once()
+    assert sell.call_args.kwargs["limit_price"] == 0.30
+
+
+async def test_step2_time_exit_on_gutted_bid_still_sells():
+    from datetime import timedelta
+    # Stop at 5c is not hit by a 10c bid; held 2h past a 1h limit: a time exit.
+    pos = _track_pos(stop_loss_price=0.05, max_hold_hours=1,
+                     timestamp=datetime.now() - timedelta(hours=2))
+    sell = await _track(pos, 10, 11)
+    sell.assert_awaited_once()
+    assert sell.call_args.kwargs["limit_price"] == 0.10
