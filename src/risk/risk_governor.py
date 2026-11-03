@@ -29,8 +29,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-DEFAULT_STATE_PATH = "data/runtime/risk_governor_state.json"
-DEFAULT_HALT_FLAG_PATH = "data/runtime/TRADING_HALTED"
+# Anchored to the repo root (src/risk/ -> repo), not the cwd: a process started
+# from anywhere must read the same baseline and the same kill switch.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_STATE_PATH = str(_REPO_ROOT / "data" / "runtime" / "risk_governor_state.json")
+DEFAULT_HALT_FLAG_PATH = str(_REPO_ROOT / "data" / "runtime" / "TRADING_HALTED")
 
 
 class RiskStateCorrupt(Exception):
@@ -153,15 +156,16 @@ class RiskGovernor:
     def __init__(
         self,
         kalshi_client=None,
-        state_path: str = DEFAULT_STATE_PATH,
-        halt_flag_path: str = DEFAULT_HALT_FLAG_PATH,
+        state_path: Optional[str] = None,
+        halt_flag_path: Optional[str] = None,
         max_daily_loss_pct: float = 10.0,
         max_drawdown_pct: float = 15.0,
         clock: Optional[Callable[[], datetime]] = None,
     ):
+        # Resolved at call time (not bound at def time) so the defaults can be redirected.
         self.kalshi_client = kalshi_client
-        self.state_path = Path(state_path)
-        self.halt_flag_path = Path(halt_flag_path)
+        self.state_path = Path(state_path if state_path is not None else DEFAULT_STATE_PATH)
+        self.halt_flag_path = Path(halt_flag_path if halt_flag_path is not None else DEFAULT_HALT_FLAG_PATH)
         self.max_daily_loss_pct = max_daily_loss_pct
         self.max_drawdown_pct = max_drawdown_pct
         self._clock = clock or (lambda: datetime.now(timezone.utc))
