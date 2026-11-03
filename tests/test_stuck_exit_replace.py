@@ -168,3 +168,17 @@ def test_paper_mode_never_cancels_or_sends(tmp_path, call):
     pos = asyncio.run(go())
     assert c.calls == [] and c.sent == []
     assert pos.exit_order_id == "o1" and pos.quantity == 10
+
+
+def test_cancel_lands_but_response_lost_sends_nothing(tmp_path):
+    # The cancel reaches the exchange but its response times out: we can't tell
+    # it landed, so the id stays, nothing is booked and no new sell goes out.
+    c = FakeKalshi(no_bid_cents=30, o1_cents=50)
+
+    async def lost():
+        c.o1["status"] = "canceled"
+        raise TimeoutError("read timeout")
+
+    c.on_cancel = lost
+    res, pos, logs = _stop(tmp_path, c)
+    assert c.sent == [] and pos.exit_order_id == "o1" and logs == []
