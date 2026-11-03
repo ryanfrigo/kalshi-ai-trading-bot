@@ -190,9 +190,6 @@ async def test_db_cost_write_failure_does_not_break_the_call(make, sleeps):
     assert c.daily_tracker.total_cost == pytest.approx(0.0105)   # local tracker still bound
 
 
-@pytest.mark.xfail(strict=True, reason="openrouter_client.py:430-432 usage=None (provider omits the "
-                   "usage block) is costed as 0 tokens = $0.00 although a 1000/500 sonnet reply "
-                   "would be $0.0105; the daily cap never binds on such replies")
 async def test_missing_usage_block_is_billed_nonzero(make, sleeps):
     # A reply with tokens but no usage object is billed $0 -> budget never binds.
     c = make({SONNET: [resp("ok", usage=False)]})
@@ -201,9 +198,6 @@ async def test_missing_usage_block_is_billed_nonzero(make, sleeps):
 
 
 # --------------------------------------------------------------------------- billed-but-failed
-@pytest.mark.xfail(strict=True, reason="openrouter_client.py:418-425,430 a reply that is billed but "
-                   "rejected as empty (content='' with usage 1000/500 on sonnet = $0.0105) records "
-                   "no cost; x4 fallbacks x3 retries = up to $0.126 of unrecorded spend per call")
 async def test_billed_empty_reply_still_records_its_cost(make, sleeps):
     c = make({SONNET: [resp("", 1000, 500)], GPT: [resp("ok", 0, 0)]})
     await c.get_completion("hi", model=SONNET)
@@ -282,10 +276,6 @@ async def test_unwritable_budget_dir_does_not_raise_into_the_caller(make, sleeps
     assert calls(c).calls == []
 
 
-@pytest.mark.xfail(strict=True, reason="openrouter_client.py:497-503 budget is checked once per "
-                   "get_completion, not before each fallback attempt: with $0.01 limit left a first "
-                   "model that costs $0.0105 and returns unparsable output still lets the other 3 "
-                   "fallbacks fire (up to 4 billed calls past the cap)")
 async def test_budget_rechecked_between_fallback_models(make, sleeps):
     c = make({SONNET: [resp("no json", 1000, 500)], GPT: [resp(GOOD_JSON)], GEMINI: [resp(GOOD_JSON)],
               R1: [resp(GOOD_JSON)]}, limit=0.01)
@@ -474,15 +464,15 @@ def test_parse_truncated_after_nested_object_is_repaired(parse):
 
 
 def test_parse_missing_confidence_defaults_to_half(parse):
-    d = parse('{"action": "BUY", "side": "YES"}')
-    assert d.confidence == 0.5 and d.limit_price is None   # absent key -> None; the `50` default is dead code
+    d = parse('{"action": "BUY", "side": "YES", "limit_price": 55}')
+    assert d.confidence == 0.5 and d.limit_price == 55
 
 
 @pytest.mark.parametrize("raw,norm", [("buy_yes", "BUY"), ("BUY_NO", "BUY"), ("Buy", "BUY"),
                                       ("sell", "SELL"), ("hold", "SKIP"), ("", "SKIP"),
                                       ("LIQUIDATE", "SKIP")])
 def test_action_normalisation(parse, raw, norm):
-    assert parse('{"action": "%s", "side": "YES", "confidence": 0.7}' % raw).action == norm
+    assert parse('{"action": "%s", "side": "YES", "limit_price": 55, "confidence": 0.7}' % raw).action == norm
 
 
 def test_parse_non_object_json_inside_fence_returns_none(parse):
@@ -496,8 +486,8 @@ def test_parse_null_fields_do_not_crash(parse):
     assert parse('{"action": "BUY", "side": "YES", "confidence": null}') is None
 
 
-def test_parse_null_limit_price_is_none_and_string_price_coerces(parse):
-    assert parse('{"action":"BUY","side":"YES","limit_price":null,"confidence":0.7}').limit_price is None
+def test_parse_null_limit_price_is_rejected_and_string_price_coerces(parse):
+    assert parse('{"action":"BUY","side":"YES","limit_price":null,"confidence":0.7}') is None
     assert parse('{"action":"BUY","side":"YES","limit_price":"55","confidence":"0.7"}').limit_price == 55
 
 
@@ -506,25 +496,17 @@ def test_parse_nan_price_is_rejected(parse):
     assert parse('{"action":"BUY","side":"YES","limit_price":Infinity,"confidence":0.7}') is None
 
 
-@pytest.mark.xfail(strict=True, reason="openrouter_client.py:729 json.loads accepts NaN so "
-                   "confidence=nan flows into TradingDecision; every `conf >= threshold` / "
-                   "`conf <= price` check in decide.py is False for nan, so edge gates mis-route")
 def test_parse_nan_confidence_is_rejected(parse):
     d = parse('{"action":"BUY","side":"YES","limit_price":55,"confidence":NaN}')
     assert d is None or not math.isnan(d.confidence)
 
 
-@pytest.mark.xfail(strict=True, reason="openrouter_client.py:729 confidence is never range-checked: "
-                   "'confidence': 72 (percent) or -5 or 1e9 reaches decide.py unchanged and 72 passes "
-                   "every `>= high_confidence_threshold` gate, sizing a position off a bogus 7200%")
 @pytest.mark.parametrize("conf", ["72", "-5", "1e9", "Infinity"])
 def test_parse_out_of_range_confidence_is_rejected(parse, conf):
     d = parse('{"action":"BUY","side":"YES","limit_price":55,"confidence":%s}' % conf)
     assert d is None or 0.0 <= d.confidence <= 1.0
 
 
-@pytest.mark.xfail(strict=True, reason="openrouter_client.py:728-737 side/limit_price unvalidated: "
-                   "side='MAYBE' and limit_price=0/150/-3 (cents) are returned as a BUY decision")
 @pytest.mark.parametrize("extra", ['"side":"MAYBE","limit_price":55', '"side":"YES","limit_price":150',
                                    '"side":"YES","limit_price":-3', '"side":"YES","limit_price":0'])
 def test_parse_buy_with_invalid_side_or_price_is_rejected(parse, extra):
@@ -592,3 +574,45 @@ async def test_query_log_is_written_with_truncation(make):
     q = db.queries[0]
     assert len(q.prompt) == 2000 and len(q.response) == 5000 and q.tokens_used == 150
     assert q.cost_usd == pytest.approx(c._calculate_cost(SONNET, 100, 50))
+
+
+# --------------------------------------------------------------------------- spend-path fixes
+async def test_missing_usage_cost_is_prompt_chars_over_4_plus_max_tokens(make, sleeps, caplog):
+    c = make({SONNET: [resp("ok", usage=False)]})
+    await c.get_completion("x" * 4000, model=SONNET, max_tokens=500)
+    # input = 4000/4 = 1000 tokens, output = max_tokens = 500 -> 0.003 + 0.0075
+    assert c.total_cost == pytest.approx(0.0105)
+    assert c.daily_tracker.total_cost == pytest.approx(0.0105)
+
+
+async def test_budget_rechecked_before_each_retry(make, sleeps):
+    # First attempt is retryable-failing; the budget is spent externally in between.
+    c = make({SONNET: [RuntimeError("503 service unavailable"), resp()]}, limit=1.0)
+    n = {"i": 0}
+
+    async def gate():
+        n["i"] += 1
+        return n["i"] == 1        # open for the entry check, closed for the retry
+    c._check_daily_limits = gate
+    assert await c.get_completion("hi", model=SONNET) is None
+    assert len(calls(c).calls) == 1
+
+
+@pytest.mark.parametrize("side", ["yes", "No", "NO"])
+def test_parse_accepts_case_insensitive_side(parse, side):
+    d = parse('{"action":"BUY","side":"%s","limit_price":55,"confidence":0.9}' % side)
+    assert d is not None and d.side == side.upper()
+
+
+@pytest.mark.parametrize("price", ["null", '"x"', "100", "0.5"])
+def test_parse_buy_with_missing_or_bad_price_is_rejected(parse, price):
+    assert parse('{"action":"BUY","side":"YES","limit_price":%s,"confidence":0.9}' % price) is None
+
+
+def test_parse_buy_without_limit_price_is_rejected(parse):
+    assert parse('{"action":"BUY","side":"YES","confidence":0.9}') is None
+
+
+def test_parse_skip_without_price_still_parses(parse):
+    d = parse('{"action":"SKIP","confidence":0.3}')
+    assert d is not None and d.action == "SKIP" and d.limit_price is None
