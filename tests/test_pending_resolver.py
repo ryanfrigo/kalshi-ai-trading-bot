@@ -96,3 +96,60 @@ def test_non_pending_and_input_untouched():
     snapshot = dict(pend)
     out, ch = _run([normal, pend], FakeClient(live=[_order("10.00", "executed")]))
     assert out[0] is normal and pend == snapshot and len(ch) == 1
+
+
+def test_resting_partial_stays_pending():
+    (r,), ch = _run([_rec()], FakeClient(live=[_order("4.00", "resting")]))
+    assert is_pending(r) and r["order_id"] is None and ch == []
+
+
+def test_resting_full_fill_resolves():
+    (r,), _ = _run([_rec()], FakeClient(live=[_order("10.00", "resting")]))
+    assert r["count"] == 10 and not is_pending(r)
+
+
+def test_canceled_after_partial_resolves_with_partial_count():
+    (r,), _ = _run([_rec()], FakeClient(live=[_order("4.00", "canceled")]))
+    assert r["count"] == 4 and r["original_count"] == 10 and not is_pending(r)
+
+
+def test_average_fill_price_from_fill_costs():
+    o = _order("10.00", "executed", price="0.95")
+    o.update(taker_fill_cost_dollars="3.00", maker_fill_cost_dollars="6.00")
+    (r,), _ = _run([_rec()], FakeClient(live=[o]))
+    assert abs(r["price"] - 0.90) < 1e-9  # (3+6)/10, not the 0.95 limit
+
+
+def test_limit_price_fallback_when_costs_missing_or_not_finite():
+    o = _order("10.00", "executed", price="0.95")
+    (r,), _ = _run([_rec()], FakeClient(live=[o]))
+    assert r["price"] == 0.95
+    o.update(taker_fill_cost_dollars="nan", maker_fill_cost_dollars="1.0")
+    (r,), _ = _run([_rec()], FakeClient(live=[o]))
+    assert r["price"] == 0.95
+
+
+def test_cli_fills_resolves_pending_and_persists(tmp_path, monkeypatch, capsys):
+    import argparse
+    import json
+
+    import cli
+    import src.clients.kalshi_client as kc
+    from src.agent.journal import load_journal, write_journal
+
+    monkeypatch.chdir(tmp_path)
+    write_journal([_rec()])
+
+    class CliClient(FakeClient):
+        async def get_fills(self, **kw):
+            return {"fills": []}
+
+        async def close(self):
+            pass
+
+    live = _order("10.00", "executed")
+    monkeypatch.setattr(kc, "KalshiClient", lambda: CliClient(live=[live]))
+    cli.cmd_fills(argparse.Namespace(dry=False))
+    (r,) = load_journal()
+    assert r["order_id"] == "oid-9" and not is_pending(r)
+    assert json.loads(capsys.readouterr().out)["written"] is True

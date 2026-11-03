@@ -14,6 +14,22 @@ from src.agent.journal import is_pending
 from src.jobs.execute import _find_by_client_order_id
 
 _TERMINAL_UNFILLED = ("canceled", "expired")
+_TERMINAL = ("executed",) + _TERMINAL_UNFILLED
+
+
+def _avg_fill_price(order: Dict[str, Any], filled: float) -> float:
+    """(taker+maker fill cost)/filled in dollars, or 0.0 to fall back to the limit price.
+
+    UNVERIFIED field names: taker_fill_cost_dollars / maker_fill_cost_dollars come
+    from the Kalshi v2 order object per the reviewer; no fixture or code in this
+    repo references them. If either is absent or not finite we use the limit price.
+    """
+    try:
+        cost = float(order["taker_fill_cost_dollars"]) + float(order["maker_fill_cost_dollars"])
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+    avg = cost / filled
+    return avg if math.isfinite(avg) and avg > 0 else 0.0
 
 
 def _fill(order: Dict[str, Any]) -> float:
@@ -31,10 +47,15 @@ def _resolve_one(rec: Dict[str, Any], found: Any) -> Tuple[Dict[str, Any], str]:
     try:
         filled = _fill(found)
         oid = found.get("order_id")
-        price = float(found.get(f"{rec.get('side')}_price_dollars") or rec["price"])
+        price = _avg_fill_price(found, filled) or float(
+            found.get(f"{rec.get('side')}_price_dollars") or rec["price"])
     except (KeyError, TypeError, ValueError):
         return rec, ""
     if filled > 0:
+        # A non-terminal order short of the intended count may fill more: keep it
+        # pending so a later pass captures the rest.
+        if found.get("status") not in _TERMINAL and filled < int(rec.get("count", 0)):
+            return rec, ""
         if not oid or not math.isfinite(price):
             return rec, ""
         out = {k: v for k, v in rec.items() if k not in ("status", "order_outcome")}
