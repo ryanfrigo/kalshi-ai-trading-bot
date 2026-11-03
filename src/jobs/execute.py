@@ -615,6 +615,34 @@ async def _exit_read_failed(position: Position, db_manager: DatabaseManager, log
     return "unchanged"
 
 
+_HISTORICAL_ORDER_PAGES = 5
+
+
+async def _read_exit_order(oid: str, ticker: str, kalshi_client: KalshiClient) -> Dict:
+    """get_order, plus an archive lookup when (and only when) Kalshi answers a definitive 404.
+
+    A 5xx, a timeout or any other error propagates: the order is just unreadable.
+    On a 404 the order may have been archived, so page the historical orders for the
+    ticker (capped) and match the id locally. Not found, or the lookup failing, raises
+    so the caller keeps the id and counts a failure.
+    """
+    try:
+        return await kalshi_client.get_order(oid)
+    except KalshiAPIError as e:
+        if getattr(e, "status_code", None) != 404:
+            raise
+    cursor = None
+    for _ in range(_HISTORICAL_ORDER_PAGES):
+        page = await kalshi_client.get_historical_orders(ticker, limit=1000, cursor=cursor)
+        for o in page.get("orders") or []:
+            if isinstance(o, dict) and o.get("order_id") == oid:
+                return {"order": o}
+        cursor = page.get("cursor")
+        if not cursor:
+            break
+    raise LookupError(f"order {oid} is 404 on get_order and not in the historical orders")
+
+
 async def reconcile_resting_exit(position: Position, kalshi_client: KalshiClient,
                                  db_manager: DatabaseManager) -> str:
     """Book fills of the position's stored exit order since we last looked.
@@ -626,7 +654,7 @@ async def reconcile_resting_exit(position: Position, kalshi_client: KalshiClient
     logger = get_trading_logger("exit_fill")
     oid, ticker = position.exit_order_id, position.market_id
     try:
-        order = (await kalshi_client.get_order(oid)).get("order")
+        order = (await _read_exit_order(oid, ticker, kalshi_client)).get("order")
         filled = float(order["fill_count_fp"])
         price = float(order[f"{position.side.lower()}_price_dollars"])
         status = order["status"]

@@ -26,8 +26,14 @@ from src.utils.logging_setup import TradingLoggerMixin
 
 
 class KalshiAPIError(Exception):
-    """Custom exception for Kalshi API errors."""
-    pass
+    """Custom exception for Kalshi API errors.
+
+    ``status_code`` is the HTTP status of a definitive (non-retried) error response;
+    None for anything else, so callers can tell a real 404 from a timeout.
+    """
+    def __init__(self, *args, status_code: Optional[int] = None):
+        super().__init__(*args)
+        self.status_code = status_code
 
 
 class KalshiOrderOutcomeUnknown(KalshiAPIError):
@@ -302,7 +308,7 @@ class KalshiClient(TradingLoggerMixin):
                     # Don't retry on other client errors (e.g., 400, 401, 404)
                     error_msg = f"HTTP {e.response.status_code}: {e.response.text}"
                     self.logger.error("API request failed without retry", error=error_msg, endpoint=endpoint)
-                    raise KalshiAPIError(error_msg)
+                    raise KalshiAPIError(error_msg, status_code=e.response.status_code)
             except Exception as e:
                 last_exception = e
                 if order_create and not isinstance(
@@ -385,6 +391,16 @@ class KalshiClient(TradingLoggerMixin):
         https://docs.kalshi.com/api-reference/orders/get-order"""
         return await self._make_authenticated_request(
             "GET", f"/trade-api/v2/portfolio/orders/{order_id}")
+
+    async def get_historical_orders(self, ticker: str, limit: int = 1000,
+                                    cursor: Optional[str] = None) -> Dict[str, Any]:
+        """One page of archived orders for a ticker (GET only): {orders, cursor}.
+        https://docs.kalshi.com/api-reference/historical/get-historical-orders"""
+        params = {"ticker": ticker, "limit": limit}
+        if cursor:
+            params["cursor"] = cursor
+        return await self._make_authenticated_request(
+            "GET", "/trade-api/v2/historical/orders", params=params)
 
     async def get_orders(self, ticker: Optional[str] = None, status: Optional[str] = None,
                          limit: Optional[int] = None,

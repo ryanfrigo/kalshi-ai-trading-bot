@@ -251,6 +251,17 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None, live: bool 
                     # so we skip order placement only in the market_resolution case.
                     is_resolution = (exit_reason == "market_resolution")
 
+                    if is_resolution and position.exit_order_id:
+                        # An exit sell is stored and was not booked this cycle (reads
+                        # failing, or still unreconciled): its fills may already have sold
+                        # these contracts. Booking settlement for the full quantity would
+                        # count them twice and close the row with the sale unrecorded.
+                        logger.warning(
+                            f"Not booking settlement for {position.market_id}: exit order "
+                            f"{position.exit_order_id} is stored but not reconciled; "
+                            f"leaving the position open until its fills are booked.")
+                        continue
+
                     if not is_resolution:
                         # Sanity guard: a $0 exit on an active market means we're
                         # working from bad market data. Refuse to write a phantom

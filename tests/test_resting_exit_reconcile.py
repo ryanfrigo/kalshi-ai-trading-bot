@@ -270,3 +270,105 @@ def test_a_good_read_resets_the_count(tmp_path):
                                       RuntimeError("w")])
     assert [o[1] for o in out] == [("o1", 1), ("o1", 2), ("o1", 0), ("o1", 1), ("o1", 2)]
     assert sent is False  # still tracked: never 3 in a row
+
+
+# ---- a definitive 404 on get_order: look in the archived (historical) orders -------------
+
+def _not_found():
+    return KalshiAPIError("HTTP 404: not_found", status_code=404)
+
+
+def _historical(orders, cursor=""):
+    return {"orders": orders, "cursor": cursor}
+
+
+def _reconcile_404(tmp_path, historical):
+    """One reconcile where get_order is a 404 and get_historical_orders is `historical`."""
+    async def go():
+        db = await _db(tmp_path)
+        client = AsyncMock()
+        client.get_order = AsyncMock(side_effect=_not_found())
+        client.get_historical_orders = historical
+        (pos,) = await db.get_open_live_positions()
+        result = await reconcile_resting_exit(pos, client, db)
+        return result, await _row(db), await db.get_all_trade_logs(), client
+    return asyncio.run(go())
+
+
+def test_404_found_in_historical_books_fills_and_clears_the_id(tmp_path):
+    other = _order(3, "executed", oid="zzz")["order"]
+    mine = _order(10, "executed")["order"]
+    hist = AsyncMock(side_effect=[_historical([other], "c2"), _historical([mine])])
+    result, row, logs, client = _reconcile_404(tmp_path, hist)
+    assert result == "closed" and row == ("closed", 10, None, None)
+    assert len(logs) == 1 and logs[0].quantity == 10 and logs[0].pnl == pytest.approx(2.0)
+    assert hist.await_args_list[0].args == ("RX-1",) or hist.await_args_list[0].kwargs
+    assert hist.await_count == 2
+
+
+def test_404_found_canceled_with_partial_fill_shrinks_and_clears(tmp_path):
+    hist = AsyncMock(return_value=_historical([_order(4, "canceled")["order"]]))
+    result, row, logs, _ = _reconcile_404(tmp_path, hist)
+    assert result == "shrunk" and row == ("open", 6, None, None)
+    assert len(logs) == 1 and logs[0].quantity == 4
+
+
+def test_404_not_found_in_historical_keeps_the_id_and_counts_a_failure(tmp_path, capsys, caplog):
+    hist = AsyncMock(return_value=_historical([_order(10, "executed", oid="other")["order"]]))
+    result, row, logs, _ = _reconcile_404(tmp_path, hist)
+    assert result == "unchanged" and row == ("open", 10, "o1", 0.0) and logs == []
+
+
+def test_404_historical_paging_is_capped(tmp_path):
+    hist = AsyncMock(return_value=_historical([], "more"))  # never ends
+    result, row, logs, _ = _reconcile_404(tmp_path, hist)
+    assert result == "unchanged" and row[2] == "o1"
+    assert hist.await_count == 5
+
+
+def test_404_historical_lookup_error_keeps_the_id(tmp_path):
+    hist = AsyncMock(side_effect=RuntimeError("HTTP 503"))
+    result, row, logs, _ = _reconcile_404(tmp_path, hist)
+    assert result == "unchanged" and row == ("open", 10, "o1", 0.0) and logs == []
+
+
+@pytest.mark.parametrize("err", [KalshiAPIError("HTTP 503", status_code=503),
+                                 KalshiAPIError("HTTP 400: bad", status_code=400),
+                                 KalshiAPIError("no status"), RuntimeError("timeout"),
+                                 KalshiAPIError("HTTP 404 text only")])
+def test_anything_but_a_definitive_404_never_hits_historical(tmp_path, err):
+    async def go():
+        db = await _db(tmp_path)
+        client = AsyncMock()
+        client.get_order = AsyncMock(side_effect=err)
+        (pos,) = await db.get_open_live_positions()
+        result = await reconcile_resting_exit(pos, client, db)
+        return result, await _row(db), client
+    result, row, client = asyncio.run(go())
+    assert result == "unchanged" and row == ("open", 10, "o1", 0.0)
+    client.get_historical_orders.assert_not_awaited()
+
+
+# ---- settlement must not book contracts an unreconciled exit may have sold ---------------
+
+def test_resolution_is_not_booked_while_an_exit_order_is_unreconciled(tmp_path):
+    from src.jobs.track import run_tracking
+    client = AsyncMock()
+    client.get_order = AsyncMock(side_effect=RuntimeError("HTTP 503"))
+    client.get_market = AsyncMock(return_value={"market": {"status": "finalized", "result": "yes"}})
+
+    async def go():
+        db = await _db(tmp_path)
+        with patch("src.jobs.track.KalshiClient", return_value=client):
+            await run_tracking(db_manager=db, live=True)
+            blocked = (await _row(db), await db.get_all_trade_logs())
+            # exit actually sold 6 of 10 meanwhile; the read now works
+            client.get_order = AsyncMock(return_value=_order(6, "executed"))
+            await run_tracking(db_manager=db, live=True)
+        return blocked, await _row(db), await db.get_all_trade_logs()
+    (b_row, b_logs), row, logs = asyncio.run(go())
+    assert b_row == ("open", 10, "o1", 0.0) and b_logs == []
+    assert row[0] == "closed" and row[2] is None
+    assert sorted(l.quantity for l in logs) == [4, 6]  # the sale (6) + settlement of the rest
+    sale = next(l for l in logs if l.quantity == 6)
+    assert sale.exit_price == pytest.approx(0.60)
