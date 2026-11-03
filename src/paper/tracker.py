@@ -5,6 +5,7 @@ Logs hypothetical trades to SQLite and checks outcomes when markets settle.
 No real money is ever risked.
 """
 
+import math
 import sqlite3
 import os
 from datetime import datetime, timezone
@@ -31,7 +32,7 @@ class Signal:
     reasoning: str
     strategy: str           # e.g. directional, market_making
     # Outcome fields (filled after settlement)
-    outcome: Optional[str]  # win / loss / pending
+    outcome: Optional[str]  # win / loss / push / void / pending
     settlement_price: Optional[float]
     pnl: Optional[float]    # per-contract P&L in dollars
     settled_at: Optional[str]
@@ -83,7 +84,20 @@ def log_signal(
     reasoning: str,
     strategy: str = "directional",
 ) -> int:
-    """Record a new paper-trading signal. Returns the signal id."""
+    """Record a new paper-trading signal. Returns the signal id.
+
+    ``side`` must be yes/no in any case (stored upper-case); ``entry_price`` must be
+    a finite number strictly between 0 and 1. Anything else raises ValueError.
+    """
+    if not isinstance(side, str) or side.strip().upper() not in ("YES", "NO"):
+        raise ValueError(f"side must be 'yes' or 'no', got {side!r}")
+    side = side.strip().upper()
+    try:
+        entry_price = float(entry_price)
+    except (TypeError, ValueError):
+        raise ValueError(f"entry_price must be a number, got {entry_price!r}") from None
+    if not math.isfinite(entry_price) or not 0.0 < entry_price < 1.0:
+        raise ValueError(f"entry_price must be finite and in (0, 1), got {entry_price!r}")
     conn = get_connection()
     cur = conn.execute(
         """INSERT INTO signals
@@ -106,45 +120,41 @@ def log_signal(
     return signal_id
 
 
-def settle_signal(signal_id: int, settlement_price: float):
+def settle_signal(signal_id: int, settlement_price: Optional[float], *, void: bool = False):
     """
-    Mark a signal as settled.
-    For NO side: profit = entry_price - settlement_price  (you bought NO at entry_price)
-    Actually on Kalshi: buying NO at price p means you pay p, and receive $1 if NO wins.
-    So PnL = (1 - entry_price) if NO wins, else -entry_price.
+    Settle a pending signal. ``settlement_price`` is the YES side's settlement value
+    in [0, 1] (1.0 YES won, 0.0 NO won, 0.5 a half-and-half payout).
+
+    Payout per contract is ``s`` for a YES holder and ``1 - s`` for a NO holder, and
+    P&L is payout minus entry price (so 0.5 pays both sides 0.5, nobody gets a full
+    win). ``void=True`` is a refund: P&L 0, outcome 'void'. A non-finite or
+    out-of-range price raises ValueError and leaves the signal pending. Only
+    pending signals are touched; settling twice is a no-op.
     """
+    if void:
+        outcome, pnl, settlement_price = "void", 0.0, None
+    else:
+        try:
+            settlement_price = float(settlement_price)
+        except (TypeError, ValueError):
+            raise ValueError(f"settlement_price must be a number, got {settlement_price!r}") from None
+        if not math.isfinite(settlement_price) or not 0.0 <= settlement_price <= 1.0:
+            raise ValueError(f"settlement_price must be finite and in [0, 1], got {settlement_price!r}")
     conn = get_connection()
     row = conn.execute("SELECT * FROM signals WHERE id = ?", (signal_id,)).fetchone()
     if not row:
         conn.close()
         return
 
-    side = row["side"]
-    entry = row["entry_price"]
-
-    if side == "NO":
-        # settlement_price is the YES settlement (1.0 if YES wins, 0.0 if NO wins)
-        if settlement_price <= 0.5:
-            # NO wins
-            pnl = 1.0 - entry
-            outcome = "win"
-        else:
-            # YES wins → NO loses
-            pnl = -entry
-            outcome = "loss"
-    else:
-        # YES side
-        if settlement_price >= 0.5:
-            pnl = 1.0 - entry
-            outcome = "win"
-        else:
-            pnl = -entry
-            outcome = "loss"
+    if not void:
+        payout = settlement_price if row["side"] == "YES" else 1.0 - settlement_price
+        pnl = payout - row["entry_price"]
+        outcome = "win" if pnl > 0 else "loss" if pnl < 0 else "push"
 
     conn.execute(
         """UPDATE signals
            SET outcome = ?, settlement_price = ?, pnl = ?, settled_at = ?
-           WHERE id = ?""",
+           WHERE id = ? AND outcome = 'pending'""",
         (outcome, settlement_price, round(pnl, 4), datetime.now(timezone.utc).isoformat(), signal_id),
     )
     conn.commit()
@@ -200,7 +210,7 @@ def get_stats() -> Dict[str, Any]:
         "pending": pending,
         "wins": wins,
         "losses": losses,
-        "win_rate": round(wins / len(settled) * 100, 1) if settled else 0.0,
+        "win_rate": round(wins / (wins + losses) * 100, 1) if (wins + losses) else 0.0,
         "total_pnl": round(total_pnl, 2),
         "avg_return": round(total_pnl / len(settled), 4) if settled else 0.0,
         "best_trade": round(max(pnls), 4) if pnls else 0.0,

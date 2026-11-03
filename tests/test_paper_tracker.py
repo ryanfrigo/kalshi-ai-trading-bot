@@ -6,7 +6,7 @@ with a recording fake client that only has ``get_market``. The paper-vs-live
 boundary itself is pinned in tests/test_paper_live_boundary.py and not repeated here;
 test_tracker_has_no_exchange_surface only checks tracker.py's own imports.
 
-Bugs found are strict xfails carrying file:line, and are NOT fixed here.
+Known gap pinned as strict xfail (file:line): fees are not netted (no order-level taker_fee_order helper exists in src to reuse).
 """
 import asyncio
 import ast
@@ -74,7 +74,7 @@ def test_win_and_loss_pnl_are_complements_of_one():
     assert row(a)["pnl"] - row(b)["pnl"] == pytest.approx(1.0)
 
 
-@pytest.mark.xfail(strict=True, reason="src/paper/tracker.py:129,133,138,141 pnl ignores Kalshi trading fees: "
+@pytest.mark.xfail(strict=True, reason="src/paper/tracker.py:151 pnl ignores Kalshi trading fees: "
                    "NO @0.60 win should net 0.40 - ceil(.07*.6*.4*100)/100 = 0.38, tracker books 0.40")
 def test_pnl_is_net_of_fees():
     i = sig("NO", 0.60)
@@ -82,7 +82,7 @@ def test_pnl_is_net_of_fees():
     assert row(i)["pnl"] == pytest.approx(0.38)
 
 
-@pytest.mark.xfail(strict=True, reason="src/paper/tracker.py:129,133,138,141 pnl ignores fees: "
+@pytest.mark.xfail(strict=True, reason="src/paper/tracker.py:151 pnl ignores fees: "
                    "a LOSS also pays the entry fee, YES @0.50 loss should be -0.50 - 0.02 = -0.52")
 def test_loss_includes_entry_fee():
     i = sig("YES", 0.50)
@@ -99,60 +99,74 @@ def test_settle_unknown_id_is_a_noop():
     assert len(tracker.get_all_signals()) == 1
 
 
-@pytest.mark.xfail(strict=True, reason="src/paper/tracker.py:127,137 a 0.5 settlement (void / pushed / "
-                   "disputed-pending) makes BOTH sides win: NO wins on <=0.5 and YES wins on >=0.5")
-def test_half_settlement_does_not_pay_both_sides():
+@pytest.mark.parametrize("side,entry,pnl", [("NO", 0.40, 0.10), ("YES", 0.40, 0.10),
+                                            ("NO", 0.50, 0.0), ("NO", 0.70, -0.20)])
+def test_half_settlement_pays_each_side_half(side, entry, pnl):
+    """s=0.5: payout is 0.5 for YES and 1-0.5 for NO; pnl = payout - entry."""
+    i = sig(side, entry)
+    tracker.settle_signal(i, 0.5)
+    assert row(i)["pnl"] == pytest.approx(pnl)
+
+
+def test_half_settlement_nobody_gets_a_full_win():
     n, y = sig("NO", 0.5, "M1"), sig("YES", 0.5, "M1")
     tracker.settle_signal(n, 0.5)
     tracker.settle_signal(y, 0.5)
-    assert not (row(n)["outcome"] == "win" and row(y)["outcome"] == "win")
+    assert (row(n)["outcome"], row(y)["outcome"]) == ("push", "push")
+    assert row(n)["pnl"] == 0.0 and row(y)["pnl"] == 0.0
 
 
-def test_half_settlement_current_behaviour_both_win_documented():
-    """Companion to the xfail above: today's behaviour, so a change is noticed."""
-    n, y = sig("NO", 0.5, "M1"), sig("YES", 0.5, "M1")
-    tracker.settle_signal(n, 0.5)
-    tracker.settle_signal(y, 0.5)
-    assert (row(n)["outcome"], row(y)["outcome"]) == ("win", "win")
+@pytest.mark.parametrize("side,s,pnl", [("YES", 0.25, -0.15), ("NO", 0.25, 0.35), ("YES", 0.9, 0.5), ("NO", 0.9, -0.3)])
+def test_scalar_settlement_payout_is_the_settlement_value(side, s, pnl):
+    i = sig(side, 0.40)
+    tracker.settle_signal(i, s)
+    assert row(i)["pnl"] == pytest.approx(pnl)
 
 
-@pytest.mark.xfail(strict=True, reason="src/paper/tracker.py:116-148 settling an already-settled signal "
-                   "silently overwrites outcome/pnl (no outcome='pending' guard on the UPDATE)")
+def test_void_is_a_refund():
+    a, b = sig("NO", 0.85, "V1"), sig("YES", 0.30, "V1")
+    tracker.settle_signal(a, None, void=True)
+    tracker.settle_signal(b, 0.0, void=True)       # price ignored when void
+    for i in (a, b):
+        r = row(i)
+        assert (r["outcome"], r["pnl"], r["settlement_price"]) == ("void", 0.0, None)
+        assert r["settled_at"]
+
+
+def test_void_is_neither_win_nor_loss_in_stats():
+    a, b, c = sig("NO", 0.8, "S1"), sig("NO", 0.8, "S2"), sig("NO", 0.8, "S3")
+    tracker.settle_signal(a, 0.0)
+    tracker.settle_signal(b, 1.0)
+    tracker.settle_signal(c, None, void=True)
+    s = tracker.get_stats()
+    assert (s["settled"], s["wins"], s["losses"], s["win_rate"]) == (3, 1, 1, 50.0)
+    assert s["total_pnl"] == pytest.approx(-0.6)   # +.2 -.8 +0
+
+
 def test_resettle_does_not_overwrite_a_settled_signal():
     i = sig("NO", 0.85)
     tracker.settle_signal(i, 0.0)
+    first = row(i)
     tracker.settle_signal(i, 1.0)
-    assert row(i)["outcome"] == "win"
+    tracker.settle_signal(i, None, void=True)
+    assert row(i) == first and first["outcome"] == "win"
 
 
-@pytest.mark.xfail(strict=True, reason="src/paper/tracker.py:125-135 side other than 'NO' (e.g. 'no', "
-                   "'garbage') falls into the YES branch and is scored as a YES bet")
-@pytest.mark.parametrize("bad_side", ["no", "No", "garbage", ""])
-def test_unrecognised_side_is_not_scored_as_yes(bad_side):
-    i = sig(bad_side, 0.85)
-    tracker.settle_signal(i, 0.0)          # YES lost / NO-ish won
-    assert row(i)["outcome"] in ("pending", "win")
-
-
-@pytest.mark.parametrize("bad", [float("nan"), None, "yes"])
-def test_settle_with_malformed_price(bad):
-    """NaN is scored as a loss for either side (comparisons False); None/str raise."""
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), None, "yes", -0.1, 1.1])
+def test_bad_settlement_price_raises_and_leaves_signal_pending(bad):
     i = sig("NO")
-    if bad is None or isinstance(bad, str):
-        with pytest.raises(TypeError):
-            tracker.settle_signal(i, bad)
-        assert row(i)["outcome"] == "pending"
-    else:
+    with pytest.raises(ValueError):
         tracker.settle_signal(i, bad)
-        assert row(i)["outcome"] == "loss"
+    r = row(i)
+    assert (r["outcome"], r["pnl"], r["settled_at"]) == ("pending", None, None)
 
 
-@pytest.mark.xfail(strict=True, reason="src/paper/tracker.py:127,137 NaN settlement price is booked as a "
-                   "'loss' with pnl -entry instead of being rejected")
-def test_nan_settlement_is_rejected():
-    i = sig("NO")
-    tracker.settle_signal(i, float("nan"))
-    assert row(i)["outcome"] == "pending"
+@pytest.mark.parametrize("side,stored", [("no", "NO"), ("No", "NO"), (" yes ", "YES"), ("YES", "YES")])
+def test_side_is_case_insensitive_and_stored_upper(side, stored):
+    i = sig(side, 0.6)
+    assert row(i)["side"] == stored
+    tracker.settle_signal(i, 1.0)
+    assert row(i)["pnl"] == pytest.approx(0.4 if stored == "YES" else -0.6)
 
 
 # ---------------------------------------------------------------- paper_trader.check_settlements
@@ -186,7 +200,7 @@ def settle_run(monkeypatch):
     return run
 
 
-@pytest.mark.parametrize("status", ["settled", "finalized"])
+@pytest.mark.parametrize("status", ["determined", "finalized", "Finalized"])
 @pytest.mark.parametrize("result,expected", [("yes", "loss"), ("no", "win"), ("YES", "loss"), ("No", "win")])
 def test_final_status_settles_no_signal(settle_run, status, result, expected):
     i = sig("NO", 0.85)
@@ -195,31 +209,38 @@ def test_final_status_settles_no_signal(settle_run, status, result, expected):
     assert FakeKalshi.calls == ["MKT-A"]
 
 
-@pytest.mark.parametrize("status", ["active", "open", "initialized", "determined", "disputed", "amended", ""])
+@pytest.mark.parametrize("status", ["active", "open", "initialized", "disputed", "amended", "closed", "settled", ""])
 def test_non_final_status_stays_pending(settle_run, status):
-    """'determined' and 'disputed' are Kalshi's pre-final states: the result can still change."""
+    """Only determined/finalized are final: closed just means trading stopped and
+    disputed can still flip, even with a result on the market."""
     i = sig("NO")
     assert settle_run({"MKT-A": {"status": status, "result": "no"}}) == 0
     assert row(i)["outcome"] == "pending"
 
 
-@pytest.mark.xfail(strict=True, reason="paper_trader.py:157 'closed' counts as final but only means trading "
-                   "has stopped; result is still empty, and :161 turns '' into a NO win")
 def test_closed_status_with_no_result_stays_pending(settle_run):
     i = sig("NO")
     settle_run({"MKT-A": {"status": "closed", "result": ""}})
     assert row(i)["outcome"] == "pending"
 
 
-@pytest.mark.xfail(strict=True, reason="paper_trader.py:161 any result other than 'yes' (void, scalar, "
-                   "'', missing) is settled as 0.0, so a voided market books a NO win")
-@pytest.mark.parametrize("market", [{"status": "settled", "result": "void"},
-                                    {"status": "settled", "result": ""},
-                                    {"status": "settled"}])
-def test_void_or_missing_result_is_not_scored(settle_run, market):
+@pytest.mark.parametrize("market", [{"status": "finalized", "result": ""},
+                                    {"status": "finalized"},
+                                    {"status": "determined", "result": "scalar"},
+                                    {"status": "finalized", "result": "garbage"}])
+def test_missing_or_unknown_result_is_never_booked(settle_run, market):
     i = sig("NO", 0.85)
-    settle_run({"MKT-A": market})
+    assert settle_run({"MKT-A": market}) == 0
     assert row(i)["outcome"] == "pending"
+
+
+@pytest.mark.parametrize("status", ["determined", "finalized"])
+@pytest.mark.parametrize("side,entry", [("NO", 0.85), ("YES", 0.30)])
+def test_void_result_books_a_refund(settle_run, status, side, entry):
+    i = sig(side, entry)
+    assert settle_run({"MKT-A": {"status": status, "result": "void"}}) == 1
+    r = row(i)
+    assert (r["outcome"], r["pnl"]) == ("void", 0.0)
 
 
 def test_result_none_is_swallowed_and_stays_pending(settle_run):
@@ -244,9 +265,9 @@ def test_no_pending_signals_never_builds_a_client(settle_run):
 
 def test_settled_signals_are_not_refetched(settle_run):
     i = sig("NO")
-    settle_run({"MKT-A": {"status": "settled", "result": "no"}})
+    settle_run({"MKT-A": {"status": "finalized", "result": "no"}})
     FakeKalshi.calls.clear()
-    assert settle_run({"MKT-A": {"status": "settled", "result": "yes"}}) == 0
+    assert settle_run({"MKT-A": {"status": "finalized", "result": "yes"}}) == 0
     assert FakeKalshi.calls == []
     assert row(i)["outcome"] == "win"
 
@@ -329,7 +350,7 @@ def test_stats_hand_computed():
 # ---------------------------------------------------------------- malformed input
 
 @pytest.mark.parametrize("kw", [
-    dict(market_id=None), dict(market_title=None), dict(entry_price=None),
+    dict(market_id=None), dict(market_title=None),
 ])
 def test_log_signal_not_null_columns_reject_none(kw):
     args = dict(market_id="M", market_title="T", side="NO", entry_price=0.5, confidence=0.5, reasoning="r")
@@ -339,25 +360,23 @@ def test_log_signal_not_null_columns_reject_none(kw):
     assert tracker.get_all_signals() == []
 
 
-@pytest.mark.xfail(strict=True, reason="src/paper/tracker.py:87-101 log_signal stores entry_price unvalidated; "
-                   "values outside (0,1) or non-finite make pnl (1-entry / -entry) meaningless")
-@pytest.mark.parametrize("bad", [-0.2, 0.0, 1.0, 1.5, 85.0, float("nan"), float("inf")])
-def test_log_signal_rejects_out_of_range_entry_price(bad):
+@pytest.mark.parametrize("bad", [-0.2, 0.0, 1.0, 1.5, 85.0, float("nan"), float("inf"), float("-inf"), None, "abc"])
+def test_log_signal_rejects_bad_entry_price(bad):
     with pytest.raises(ValueError):
         tracker.log_signal("M", "T", "NO", bad, 0.5, "r")
+    assert tracker.get_all_signals() == []
 
 
-@pytest.mark.xfail(strict=True, reason="src/paper/tracker.py:87-101 log_signal accepts any side string "
-                   "('maybe'); only 'NO' is recognised on settlement")
-def test_log_signal_rejects_bad_side():
+@pytest.mark.parametrize("bad", ["maybe", "", "garbage", None, 1, "n o"])
+def test_log_signal_rejects_bad_side(bad):
     with pytest.raises(ValueError):
-        tracker.log_signal("M", "T", "maybe", 0.5, 0.5, "r")
+        tracker.log_signal("M", "T", bad, 0.5, 0.5, "r")
+    assert tracker.get_all_signals() == []
 
 
-def test_nan_entry_price_is_stored_as_null_and_rejected_by_not_null():
-    """sqlite turns NaN into NULL, so the NOT NULL constraint is the only guard."""
-    with pytest.raises(sqlite3.IntegrityError):
-        tracker.log_signal("M", "T", "NO", float("nan"), 0.5, "r")
+@pytest.mark.parametrize("ok", [0.01, 0.5, 0.99, "0.25"])
+def test_log_signal_accepts_interior_entry_prices(ok):
+    assert tracker.log_signal("M", "T", "NO", ok, 0.5, "r") > 0
 
 
 def test_stats_ignore_null_pnl_rows():
@@ -381,4 +400,4 @@ def test_tracker_has_no_exchange_surface():
             mods |= {a.name.split(".")[0] for a in n.names}
         elif isinstance(n, ast.ImportFrom):
             mods.add((n.module or "").split(".")[0])
-    assert mods <= {"sqlite3", "os", "datetime", "typing", "dataclasses"}, mods
+    assert mods <= {"sqlite3", "os", "math", "datetime", "typing", "dataclasses"}, mods
