@@ -177,6 +177,19 @@ def test_market_with_no_book_at_all_is_skipped():
     assert asyncio.run(c._check_orderbook_and_price(c._find_no_candidates([_market()]))) == []
 
 
+def test_no_yes_bids_means_no_no_ask_so_the_market_is_skipped(caplog):
+    # NO bids exist (best 80c) but no YES bids: there is no real NO ask to price off.
+    c = _compounder(FakeClient())
+
+    async def no_bids_only(ticker, depth=10):
+        return {"orderbook_fp": {"yes_dollars": [], "no_dollars": [["0.80", "100"]]}}
+    c.client.get_orderbook = no_bids_only
+    caplog.set_level("INFO", logger="src.strategies.safe_compounder")
+    opps = asyncio.run(c._check_orderbook_and_price(c._find_no_candidates([_market()])))
+    assert opps == []
+    assert "no NO ask: no YES bids" in caplog.text
+
+
 def test_low_confidence_book_is_skipped():
     c = _compounder(FakeClient(), min_confidence=0.99)
     assert asyncio.run(c._check_orderbook_and_price(c._find_no_candidates([_market()]))) == []
