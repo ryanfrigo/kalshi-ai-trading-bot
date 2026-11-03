@@ -81,6 +81,15 @@ def _contracts(row: Dict[str, Any], fp_key: str, legacy_key: str) -> float:
     raise ValueError(f"no {fp_key}/{legacy_key} on row for {row.get('ticker')}")
 
 
+def _fill_count(order: Dict[str, Any]) -> Optional[float]:
+    """fill_count_fp, else legacy fill_count; None if unreadable. Never raises:
+    the order is already placed, so the result must still carry its order_id."""
+    try:
+        return _contracts(order, "fill_count_fp", "fill_count")
+    except ValueError:
+        return None
+
+
 async def _sum_pages(fetch, list_key: str, ticker: str, fp_key: str, legacy_key: str) -> float:
     """Sum contracts on ``ticker`` across every page of ``fetch``. Raises on a bad
     list shape, an unreadable count, or more than _EXPOSURE_MAX_PAGES pages."""
@@ -302,7 +311,7 @@ async def place_guarded_order(
         result = {
             "ok": True, "dry": False, "ticker": ticker, "side": side, "count": n,
             "price_cents": price_cents, "edge": edge, "cap_reason": cap_reason,
-            "order_id": order.get("order_id"), "fill_count": order.get("fill_count"),
+            "order_id": order.get("order_id"), "fill_count": _fill_count(order),
         }
 
     if not dry:
@@ -396,7 +405,7 @@ async def close_position(
         order = resp.get("order", resp) if isinstance(resp, dict) else {}
         result = {"ok": True, "dry": False, "ticker": ticker, "side": side,
                   "action": "sell", "count": n, "price_cents": price_cents,
-                  "order_id": order.get("order_id"), "fill_count": order.get("fill_count")}
+                  "order_id": order.get("order_id"), "fill_count": _fill_count(order)}
 
     if not dry:
         append_decision(make_decision_record(

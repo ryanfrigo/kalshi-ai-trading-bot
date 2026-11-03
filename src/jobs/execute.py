@@ -12,7 +12,7 @@ from typing import Optional, Dict
 from src.utils.database import DatabaseManager, Position, TradeLog
 from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
-from src.clients.kalshi_client import KalshiClient, KalshiAPIError
+from src.clients.kalshi_client import KalshiClient, KalshiAPIError, KalshiOrderOutcomeUnknown
 from src.utils.market_prices import get_market_prices, is_tradeable_market
 
 async def execute_position(
@@ -253,6 +253,10 @@ async def place_sell_limit_order(
             logger.warning(f"Not selling {position.market_id}: limit {limit_price_cents}c "
                            f"is outside 1-99c.")
             return False
+        if _pending_coid(position.exit_order_id):
+            logger.warning(f"Not selling {position.market_id}: exit {position.exit_order_id} "
+                           f"has an unknown outcome and is not resolved yet.")
+            return False
         if position.exit_order_id and not await _cancel_exit_above(
                 position, limit_price_cents, kalshi_client, db_manager, logger):
             logger.warning(f"Not selling {position.market_id}: exit order "
@@ -298,7 +302,16 @@ async def place_sell_limit_order(
         logger.info(f"🎯 Placing SELL LIMIT order: {count} {side.upper()} at {limit_price_cents}¢ for {position.market_id}")
         
         # Place the sell limit order
-        response = await kalshi_client.place_order(**order_params)
+        try:
+            response = await kalshi_client.place_order(**order_params)
+        except KalshiOrderOutcomeUnknown as e:
+            # The sell may be on the book or filled. Track it by client_order_id so
+            # later passes resolve it before any new exit or settlement.
+            logger.error(f"Exit sell for {position.market_id} outcome unknown ({e}); "
+                         f"tracking client_order_id {client_order_id} as pending.")
+            await db_manager.set_exit_order(position.id, PENDING_EXIT_PREFIX + client_order_id,
+                                            None)
+            return False
         if order_out is not None and isinstance(response, dict):
             order_out.update(response)
         
@@ -616,6 +629,45 @@ async def _exit_read_failed(position: Position, db_manager: DatabaseManager, log
 
 
 _HISTORICAL_ORDER_PAGES = 5
+_ORDER_LOOKUP_PAGES = 10
+
+# exit_order_id value for an exit sell whose POST outcome is unknown: the prefix
+# plus its client_order_id. Kalshi order ids are UUIDs, so they never collide.
+PENDING_EXIT_PREFIX = "coid:"
+
+
+def _pending_coid(exit_order_id: Optional[str]) -> Optional[str]:
+    """The client_order_id of a pending exit marker; None for a real order id or None."""
+    if exit_order_id and exit_order_id.startswith(PENDING_EXIT_PREFIX):
+        return exit_order_id[len(PENDING_EXIT_PREFIX):]
+    return None
+
+
+async def _find_by_client_order_id(coid: str, ticker: str,
+                                   kalshi_client: KalshiClient) -> Optional[Dict]:
+    """The order with ``coid`` among the ticker's orders, then its archived orders.
+
+    Same lookup as KalshiClient._resolve_order_create (no client_order_id filter
+    exists, so page and match locally), plus the archive. None only when every page
+    of both was read; a failed read or a page cap hit raises.
+    """
+    reads = ((lambda c: kalshi_client.get_orders(ticker=ticker, limit=200, cursor=c),
+              _ORDER_LOOKUP_PAGES),
+             (lambda c: kalshi_client.get_historical_orders(ticker, limit=1000, cursor=c),
+              _HISTORICAL_ORDER_PAGES))
+    for fetch, max_pages in reads:
+        cursor = None
+        for _ in range(max_pages):
+            page = await fetch(cursor)
+            for o in page.get("orders") or []:
+                if isinstance(o, dict) and o.get("client_order_id") == coid:
+                    return o
+            cursor = page.get("cursor")
+            if not cursor:
+                break
+        else:
+            raise LookupError(f"orders for {ticker} span more than {max_pages} pages")
+    return None
 
 
 async def _read_exit_order(oid: str, ticker: str, kalshi_client: KalshiClient) -> Dict:
@@ -652,6 +704,26 @@ async def reconcile_resting_exit(position: Position, kalshi_client: KalshiClient
     keeps the stored id and baseline for the next pass; only a good read clears it.
     """
     logger = get_trading_logger("exit_fill")
+    coid = _pending_coid(position.exit_order_id)
+    if coid:
+        try:
+            found = await _find_by_client_order_id(coid, position.market_id, kalshi_client)
+            if found is not None and not found.get("order_id"):
+                raise ValueError("found without an order_id")
+        except Exception as e:
+            logger.error(f"Pending exit {coid} on {position.market_id} unresolved ({e!r}); "
+                         f"new exits and settlement stay blocked.")
+            return await _exit_read_failed(position, db_manager, logger)
+        if found is None:
+            await db_manager.set_exit_order(position.id, None, None)
+            logger.info(f"Pending exit {coid} on {position.market_id} never landed; cleared.")
+            return "cleared"
+        # Nothing of it was booked yet: track it from a zero baseline.
+        await db_manager.set_exit_order(position.id, found["order_id"], 0.0)
+        position.exit_order_id, position.exit_order_filled = found["order_id"], 0.0
+        position.exit_order_read_failures = 0
+        logger.info(f"Pending exit {coid} on {position.market_id} is order "
+                    f"{found['order_id']}; reconciling it.")
     oid, ticker = position.exit_order_id, position.market_id
     try:
         order = (await _read_exit_order(oid, ticker, kalshi_client)).get("order")
