@@ -6,8 +6,8 @@ read-only ones is logged as a violation (it raises AssertionError, but
 run_ingestion swallows exceptions, so each test checks the violation list).
 The DB is a real SQLite file in tmp_path.
 
-Bugs found are pinned with xfail(strict=True) and a file:line reason; they are
-NOT fixed here.
+Bugs found were first pinned as xfail(strict=True) and have since been fixed; the
+tests below are their regression tests.
 """
 import asyncio
 import math
@@ -149,14 +149,19 @@ async def test_volume_fp_parsing(db, fp, legacy, expected):
     assert r["volume"] == expected
 
 
-async def test_missing_dollar_field_defaults_to_zero(db):
+@pytest.mark.parametrize("field,value", [("no_ask_dollars", "__missing__"), ("yes_bid_dollars", None),
+                                         ("yes_ask_dollars", "0.0000"), ("no_bid_dollars", "")])
+async def test_missing_or_zero_quote_skips_row_with_warning(db, field, value):
+    """No two-sided quote on a leg: skip with a warning, never store half a quote as a price."""
     row = mk()
-    del row["no_ask_dollars"]
-    row["yes_bid_dollars"] = None
-    q, _ = await process([row], db)
-    (r,) = await rows(db)
-    assert r["yes_price"] == pytest.approx(0.22)  # (0 + 0.44)/2
-    assert r["no_price"] == pytest.approx(0.28)   # (0.56 + 0)/2
+    if value == "__missing__":
+        del row[field]
+    else:
+        row[field] = value
+    q, log = await process([row, mk("KXOK-1")], db)
+    assert [m.market_id for m in drain(q)] == ["KXOK-1"]
+    assert [r["market_id"] for r in await rows(db)] == ["KXOK-1"]
+    assert any("KXA-1" in m and "two-sided" in m for m in log.messages("warning"))
 
 
 async def test_expiration_z_suffix_parsed_as_utc(db):
@@ -247,53 +252,56 @@ BAD_ROWS = {
 }
 
 
-@pytest.mark.xfail(strict=True, reason="src/jobs/ingest.py:30-91 no per-row try/except: one malformed "
-                   "row raises and discards the whole batch, so every good market in it is lost")
 @pytest.mark.parametrize("kind", sorted(BAD_ROWS))
 async def test_malformed_row_is_skipped_not_batch_fatal(db, kind):
     bad = mk("KXBAD-1")
     BAD_ROWS[kind](bad)
-    q, _ = await process([mk("KXGOOD-1"), bad, mk("KXGOOD-2")], db)
+    q, log = await process([mk("KXGOOD-1"), bad, mk("KXGOOD-2")], db)
     assert sorted(m.market_id for m in drain(q)) == ["KXGOOD-1", "KXGOOD-2"]
+    assert [r["market_id"] for r in await rows(db)] == ["KXGOOD-1", "KXGOOD-2"]
+    assert any("malformed" in m for m in log.messages("warning"))
 
 
-@pytest.mark.xfail(strict=True, reason="src/jobs/ingest.py:44-47 legacy branch does None/0 on a None cent "
-                   "field (no `or 0` as get_market_prices has) -> TypeError kills the batch")
+async def test_non_dict_row_is_skipped(db):
+    q, _ = await process([None, "junk", mk("KXGOOD-1")], db)
+    assert [m.market_id for m in drain(q)] == ["KXGOOD-1"]
+
+
 async def test_legacy_none_cent_field_does_not_crash(db):
     row = {"ticker": "KXL-1", "title": "t", "yes_bid": None, "yes_ask": 44, "no_bid": 56,
            "no_ask": 60, "volume": 300, "expiration_time": EXPIRY, "status": "active"}
-    await process([row], db)
-    assert len(await rows(db)) == 1
+    q, log = await process([row, mk("KXOK-1")], db)
+    # None reads as 0 (as get_market_prices does): no two-sided quote -> skipped, not a crash
+    assert [m.market_id for m in drain(q)] == ["KXOK-1"]
+    assert any("two-sided" in m for m in log.messages("warning"))
 
 
-@pytest.mark.xfail(strict=True, reason="src/jobs/ingest.py:36-41 float('nan') accepted: NaN prices are "
-                   "upserted and queued (every comparison with NaN is False, so no guard trips)")
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
 @pytest.mark.parametrize("field", ["yes_bid_dollars", "yes_ask_dollars", "no_bid_dollars", "no_ask_dollars"])
-async def test_nonfinite_price_is_not_stored_or_queued(db, field):
-    q, _ = await process([mk(**{field: "nan"})], db)
-    for m in drain(q):
-        assert math.isfinite(m.yes_price) and math.isfinite(m.no_price)
-    for r in await rows(db):
-        assert r["yes_price"] is not None and math.isfinite(r["yes_price"])
-        assert r["no_price"] is not None and math.isfinite(r["no_price"])
+async def test_nonfinite_price_is_not_stored_or_queued(db, field, bad):
+    q, log = await process([mk(**{field: bad}), mk("KXOK-1")], db)
+    assert [m.market_id for m in drain(q)] == ["KXOK-1"]
+    assert [r["market_id"] for r in await rows(db)] == ["KXOK-1"]
+    assert any("malformed" in m and "non-finite" in m for m in log.messages("warning"))
 
 
-@pytest.mark.xfail(strict=True, reason="src/jobs/ingest.py:40-41 mid of (bid, 0) for a one-sided book: "
-                   "yes_bid=0.60 with no ask is stored as yes_price=0.30, a fabricated price")
-async def test_one_sided_book_not_stored_as_half_the_bid(db):
-    q, _ = await process([mk(yes_bid="0.6000", yes_ask="0", no_bid="0", no_ask="0.4500",
-                             volume_fp="500")], db)
-    stored = [r["yes_price"] for r in await rows(db)]
-    assert not any(abs(p - 0.30) < 1e-9 for p in stored)
+@pytest.mark.parametrize("quotes", [
+    dict(yes_bid="0.6000", yes_ask="0", no_bid="0", no_ask="0.4500"),      # bid only on YES leg
+    dict(yes_bid="0", yes_ask="0.0500", no_bid="0.9500", no_ask="0"),      # ask only on YES leg
+    dict(yes_bid="0", yes_ask="0", no_bid="0", no_ask="0"),                # empty book
+])
+async def test_one_sided_book_is_skipped_not_half_priced(db, quotes):
+    q, log = await process([mk(volume_fp="500", **quotes)], db)
+    assert drain(q) == [] and await rows(db) == []
+    assert any("two-sided" in m for m in log.messages("warning"))
 
 
-@pytest.mark.xfail(strict=True, reason="src/jobs/ingest.py:35 no *_dollars and no v1 keys (renamed/absent "
-                   "price fields) silently becomes a 0.00/0.00 market that is stored and queued")
 async def test_row_with_no_price_fields_at_all_is_not_ingested_as_zero(db):
     row = {"ticker": "KXZ-1", "title": "t", "volume_fp": "500.00", "expiration_time": EXPIRY,
            "status": "active"}
-    q, _ = await process([row], db)
+    q, log = await process([row], db)
     assert drain(q) == [] and await rows(db) == []
+    assert any("two-sided" in m for m in log.messages("warning"))
 
 
 # --------------------------------------------------------------------------- run_ingestion
@@ -419,12 +427,10 @@ async def test_positions_lookup_failure_aborts_before_any_fetch(db, client, monk
     assert c.calls == [] and drain(q) == [] and c.closed == 1
 
 
-@pytest.mark.xfail(strict=True, reason="src/jobs/ingest.py:155-163 single-ticker mode skips the "
-                   "status=='active' filter the bulk paths apply: a settled market is queued")
 async def test_single_ticker_inactive_market_not_queued(db, client):
     q, _ = await run(db, "KXA-1", lambda c: c.single.update(
         {"KXA-1": {"market": mk("KXA-1", status="finalized")}}))
-    assert drain(q) == []
+    assert drain(q) == [] and await rows(db) == []
 
 
 async def test_events_pagination_dedupe_and_active_filter(db, client):
@@ -510,8 +516,6 @@ async def test_both_apis_failing_ingests_nothing_without_raising(db, client):
     assert drain(q) == [] and await rows(db) == [] and c.closed == 1
 
 
-@pytest.mark.xfail(strict=True, reason="src/jobs/ingest.py:187-188 an event with markets=None raises "
-                   "TypeError inside the page loop: the page's good events and all later pages are dropped")
 async def test_malformed_event_does_not_drop_rest_of_page(db, client):
     def setup(c):
         c.event_pages = [{"events": [{"markets": None}, {"markets": [mk("KXA-1")]}]}]
@@ -520,8 +524,6 @@ async def test_malformed_event_does_not_drop_rest_of_page(db, client):
     assert [m.market_id for m in drain(q)] == ["KXA-1"]
 
 
-@pytest.mark.xfail(strict=True, reason="src/jobs/ingest.py:227 m['status'] KeyError in the /markets "
-                   "fallback aborts every remaining page (outer except swallows it)")
 async def test_markets_fallback_row_without_status_does_not_abort_pages(db, client):
     bad = mk("KXBAD-1")
     del bad["status"]
@@ -533,8 +535,6 @@ async def test_markets_fallback_row_without_status_does_not_abort_pages(db, clie
     assert sorted(m.market_id for m in drain(q)) == ["KXA-1", "KXB-1"]
 
 
-@pytest.mark.xfail(strict=True, reason="src/jobs/ingest.py:211 `events_page > 20` after the increment lets "
-                   "21 pages through while the comment/log say the cap is 20")
 async def test_events_page_cap_is_20(db, client):
     n = {"i": 0}
 
@@ -545,18 +545,87 @@ async def test_events_page_cap_is_20(db, client):
             return {"events": [{"markets": [mk(f"KXP{n['i']:03d}-1")]}], "cursor": f"c{n['i']}"}
         c._make_authenticated_request = endless
     q, c = await run(db, setup=setup)
-    assert len([x for x in c.calls if x[0] == "GET"]) <= 20
+    assert len([x for x in c.calls if x[0] == "GET"]) == 20
 
 
-@pytest.mark.xfail(strict=True, reason="src/jobs/ingest.py:223-245 /markets fallback loop has no page cap: "
-                   "a server repeating the cursor loops forever (events path caps at 20)")
-async def test_markets_fallback_has_a_page_cap(db, client):
+async def test_markets_fallback_page_cap_is_exactly_20(db, client):
     def setup(c):
         async def endless(limit=100, cursor=None, **k):
             c.calls.append(("get_markets", cursor))
             if len(c.calls) > 60:
                 raise RuntimeError("runaway")
-            return {"markets": [], "cursor": "same"}
+            return {"markets": [], "cursor": f"c{len(c.calls)}"}
         c.get_markets = endless
     _, c = await run(db, setup=setup)
-    assert len(c.gets("get_markets")) <= 25
+    assert len(c.gets("get_markets")) == 20
+
+
+async def test_markets_fallback_stops_on_repeated_cursor(db, client):
+    def setup(c):
+        async def stuck(limit=100, cursor=None, **k):
+            c.calls.append(("get_markets", cursor))
+            if len(c.calls) > 60:
+                raise RuntimeError("runaway")
+            return {"markets": [mk(f"KXR{len(c.calls)}-1")], "cursor": "same"}
+        c.get_markets = stuck
+    q, c = await run(db, setup=setup)
+    assert len(c.gets("get_markets")) == 2  # first page, then the repeat is detected
+    assert len(drain(q)) == 2
+
+
+async def test_events_paging_stops_at_20_but_keeps_all_20_pages(db, client):
+    def setup(c):
+        c.event_pages = [{"events": [{"markets": [mk(f"KXP{i:02d}-1")]}], "cursor": f"c{i}"}
+                         for i in range(40)]
+    q, c = await run(db, setup=setup)
+    assert len(drain(q)) == 20
+    assert len([x for x in c.calls if x[0] == "GET"]) == 20
+
+
+# --------------------------------------------------------------------------- category (lives on the event)
+
+
+def cat_row(ticker, **over):
+    r = mk(ticker, **over)
+    r.pop("category", None)
+    return r
+
+
+async def test_category_taken_from_parent_event(db, client):
+    """Kalshi v2 GetEvents: `category` is an Event field; nested markets carry none."""
+    def setup(c):
+        c.event_pages = [{"events": [{"category": "Sports", "markets": [cat_row("KXA-1")]},
+                                     {"category": "Politics", "markets": [cat_row("KXB-1")]},
+                                     {"markets": [cat_row("KXC-1")]}]}]
+    q, _ = await run(db, setup=setup)
+    assert {m.market_id: m.category for m in drain(q)} == {
+        "KXA-1": "Sports", "KXB-1": "Politics", "KXC-1": "unknown"}
+    assert {r["market_id"]: r["category"] for r in await rows(db)} == {
+        "KXA-1": "Sports", "KXB-1": "Politics", "KXC-1": "unknown"}
+
+
+async def test_market_own_category_beats_event_category(db, client):
+    def setup(c):
+        c.event_pages = [{"events": [{"category": "Sports",
+                                      "markets": [mk("KXA-1", category="Weather")]}]}]
+    q, _ = await run(db, setup=setup)
+    assert [m.category for m in drain(q)] == ["Weather"]
+
+
+async def test_excluded_and_preferred_filters_work_on_events_path(db, client, monkeypatch):
+    def setup(c):
+        c.event_pages = [{"events": [{"category": "Sports", "markets": [cat_row("KXS-1")]},
+                                     {"category": "Politics", "markets": [cat_row("KXP-1")]}]}]
+    monkeypatch.setattr(settings.trading, "excluded_categories", ["Sports"])
+    monkeypatch.setattr(settings.trading, "preferred_categories", [])
+    q, _ = await run(db, setup=setup)
+    assert [m.market_id for m in drain(q)] == ["KXP-1"]
+    monkeypatch.setattr(settings.trading, "excluded_categories", [])
+    monkeypatch.setattr(settings.trading, "preferred_categories", ["Sports"])
+    q, _ = await run(db, setup=setup)
+    assert [m.market_id for m in drain(q)] == ["KXS-1"]
+
+
+async def test_null_category_becomes_unknown_not_none(db):
+    q, _ = await process([mk(category=None)], db)
+    assert [m.category for m in drain(q)] == ["unknown"]

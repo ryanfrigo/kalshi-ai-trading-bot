@@ -5,6 +5,7 @@ This job fetches active markets from the Kalshi API, transforms them into a stru
 and upserts them into the database.
 """
 import asyncio
+import math
 import time
 from datetime import datetime
 from typing import Optional, List
@@ -14,6 +15,85 @@ from src.utils.database import DatabaseManager, Market
 from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
 from src.utils.market_prices import is_tradeable_market
+
+# Page caps shared by the events and /markets loops.
+MAX_PAGES = 20
+
+
+def _parse_quotes(market_data: dict):
+    """Return (yes_bid, yes_ask, no_bid, no_ask) in dollars, or raise ValueError.
+
+    A missing/None quote reads as 0 (same as get_market_prices). Non-finite
+    values are rejected. The caller decides what a 0 quote means.
+    """
+    if "yes_bid_dollars" in market_data:
+        keys = ("yes_bid_dollars", "yes_ask_dollars", "no_bid_dollars", "no_ask_dollars")
+        quotes = tuple(float(market_data.get(k, 0) or 0) for k in keys)
+    else:
+        # Legacy API: values in cents (0-100)
+        keys = ("yes_bid", "yes_ask", "no_bid", "no_ask")
+        quotes = tuple((market_data.get(k, 0) or 0) / 100 for k in keys)
+    if not all(math.isfinite(q) for q in quotes):
+        raise ValueError(f"non-finite quote in {dict(zip(keys, quotes))}")
+    return quotes
+
+
+def _build_market(market_data: dict, existing_position_market_ids: set, logger):
+    """Transform one raw market row into a Market, or None to skip it.
+
+    Raises KeyError/TypeError/ValueError on a malformed row; the caller skips it.
+    """
+    yes_bid, yes_ask, no_bid, no_ask = _parse_quotes(market_data)
+
+    # Mid-prices are only meaningful with a two-sided quote on both legs. A missing
+    # or zero bid/ask (one-sided book, empty book, or absent price fields) would
+    # make the mid half of the real quote, so skip instead of inventing a price.
+    if min(yes_bid, yes_ask, no_bid, no_ask) <= 0:
+        logger.warning(
+            f"Skipping {market_data['ticker']}: no two-sided quote "
+            f"(yes {yes_bid:.4f}/{yes_ask:.4f}, no {no_bid:.4f}/{no_ask:.4f})"
+        )
+        return None
+    yes_price = (yes_bid + yes_ask) / 2
+    no_price = (no_bid + no_ask) / 2
+
+    # Skip collection/aggregate tickers: both yes_ask and no_ask near $1.00
+    # (e.g. KXMVECROSSCATEGORY-*, KXMVESPORTSMULTIGAMEEXTENDED-*).
+    _COLLECTION_THRESHOLD = 0.98
+    if yes_ask >= _COLLECTION_THRESHOLD and no_ask >= _COLLECTION_THRESHOLD:
+        logger.warning(
+            f"Skipping collection/aggregate market {market_data['ticker']}: "
+            f"yes_ask={yes_ask:.4f}, no_ask={no_ask:.4f} "
+            f"(both >= {_COLLECTION_THRESHOLD}, not a tradeable binary market)"
+        )
+        return None
+
+    # Kalshi API v2 uses volume_fp (string/float) instead of volume (int)
+    volume = int(float(market_data.get("volume_fp", 0) or market_data.get("volume", 0) or 0))
+
+    has_position = market_data["ticker"] in existing_position_market_ids
+
+    # Centralised in is_tradeable_market() so execute.py can reuse the same guard (issue #42).
+    if not is_tradeable_market(market_data):
+        logger.debug(f"Skipping collection ticker {market_data['ticker']} (YES_ask={yes_ask}, NO_ask={no_ask})")
+        return None
+
+    return Market(
+        market_id=market_data["ticker"],
+        title=market_data["title"],
+        yes_price=yes_price,
+        no_price=no_price,
+        volume=volume,
+        expiration_ts=int(
+            datetime.fromisoformat(
+                market_data["expiration_time"].replace("Z", "+00:00")
+            ).timestamp()
+        ),
+        category=market_data.get("category") or "unknown",
+        status=market_data["status"],
+        last_updated=datetime.now(),
+        has_position=has_position,
+    )
 
 
 async def process_and_queue_markets(
@@ -28,67 +108,14 @@ async def process_and_queue_markets(
     """
     markets_to_upsert = []
     for market_data in markets_data:
-        # A simple approach is to take the average of bid and ask.
-        # Kalshi API v2 uses dollar-denominated fields (yes_bid_dollars, yes_ask_dollars)
-        # These are already in dollars (e.g., 0.5000 = $0.50)
-        # Fall back to legacy cent-based fields (yes_bid, yes_ask) divided by 100
-        if "yes_bid_dollars" in market_data:
-            yes_bid = float(market_data.get("yes_bid_dollars", 0) or 0)
-            yes_ask = float(market_data.get("yes_ask_dollars", 0) or 0)
-            no_bid = float(market_data.get("no_bid_dollars", 0) or 0)
-            no_ask = float(market_data.get("no_ask_dollars", 0) or 0)
-            yes_price = (yes_bid + yes_ask) / 2
-            no_price = (no_bid + no_ask) / 2
-        else:
-            # Legacy API: values in cents (0-100)
-            yes_ask = market_data.get("yes_ask", 0) / 100
-            no_ask = market_data.get("no_ask", 0) / 100
-            yes_price = (market_data.get("yes_bid", 0) / 100 + yes_ask) / 2
-            no_price = (market_data.get("no_bid", 0) / 100 + no_ask) / 2
-
-        # Skip collection/aggregate tickers: both yes_ask and no_ask near $1.00
-        # (e.g. KXMVECROSSCATEGORY-*, KXMVESPORTSMULTIGAMEEXTENDED-*).
-        # The Kalshi API returns yes_ask=1.0000 and no_ask=1.0000 for these
-        # multi-event container markets — they are NOT real binary markets and
-        # cannot be traded.
-        _COLLECTION_THRESHOLD = 0.98
-        if yes_ask >= _COLLECTION_THRESHOLD and no_ask >= _COLLECTION_THRESHOLD:
-            logger.warning(
-                f"Skipping collection/aggregate market {market_data['ticker']}: "
-                f"yes_ask={yes_ask:.4f}, no_ask={no_ask:.4f} "
-                f"(both >= {_COLLECTION_THRESHOLD}, not a tradeable binary market)"
-            )
+        try:
+            market = _build_market(market_data, existing_position_market_ids, logger)
+        except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as err:
+            ticker = market_data.get("ticker") if isinstance(market_data, dict) else None
+            logger.warning(f"Skipping malformed market row {ticker!r}: {type(err).__name__}: {err}")
             continue
-
-        # Kalshi API v2 uses volume_fp (string/float) instead of volume (int)
-        volume = int(float(market_data.get("volume_fp", 0) or market_data.get("volume", 0) or 0))
-
-        has_position = market_data["ticker"] in existing_position_market_ids
-
-        # Skip collection/series tickers — these return $1.00/$1.00 for both
-        # sides and are not directly tradeable (see GitHub issue #42).
-        # Centralised in is_tradeable_market() so execute.py can reuse the same guard.
-        if not is_tradeable_market(market_data):
-            logger.debug(f"Skipping collection ticker {market_data['ticker']} (YES_ask={yes_ask}, NO_ask={no_ask})")
-            continue
-
-        market = Market(
-            market_id=market_data["ticker"],
-            title=market_data["title"],
-            yes_price=yes_price,
-            no_price=no_price,
-            volume=volume,
-            expiration_ts=int(
-                datetime.fromisoformat(
-                    market_data["expiration_time"].replace("Z", "+00:00")
-                ).timestamp()
-            ),
-            category=market_data.get("category", "unknown"),
-            status=market_data["status"],
-            last_updated=datetime.now(),
-            has_position=has_position,
-        )
-        markets_to_upsert.append(market)
+        if market is not None:
+            markets_to_upsert.append(market)
 
     if markets_to_upsert:
         await db_manager.upsert_markets(markets_to_upsert)
@@ -153,9 +180,14 @@ async def run_ingestion(
         if market_ticker:
             logger.info(f"Fetching single market: {market_ticker}")
             market_response = await kalshi_client.get_market(ticker=market_ticker)
-            if market_response and "market" in market_response:
+            single = market_response.get("market") if market_response else None
+            if single and single.get("status") != "active":
+                logger.warning(
+                    f"Market {market_ticker} is not active (status={single.get('status')!r}); skipping."
+                )
+            elif single:
                 await process_and_queue_markets(
-                    [market_response["market"]],
+                    [single],
                     db_manager,
                     queue,
                     existing_position_market_ids,
@@ -185,10 +217,18 @@ async def run_ingestion(
                     
                     batch = []
                     for event in events:
-                        for m in event.get("markets", []):
+                        if not isinstance(event, dict):
+                            continue
+                        # Kalshi v2 carries `category` on the event only, not on nested markets.
+                        event_category = event.get("category")
+                        for m in event.get("markets") or []:
+                            if not isinstance(m, dict):
+                                continue
                             ticker = m.get("ticker", "")
                             if ticker and ticker not in seen_tickers and m.get("status") == "active":
                                 seen_tickers.add(ticker)
+                                if event_category and not m.get("category"):
+                                    m = {**m, "category": event_category}
                                 batch.append(m)
                     
                     if batch:
@@ -205,11 +245,11 @@ async def run_ingestion(
                     if not cursor:
                         break
                     events_page += 1
-                    # Cap at 20 pages (~2000 events, ~5000+ markets) to avoid
+                    # Cap at MAX_PAGES pages (~2000 events, ~5000+ markets) to avoid
                     # 16+ minute ingestion that blocks the trading cycle.
                     # Most high-volume tradeable markets appear in the first pages.
-                    if events_page > 20:
-                        logger.info(f"Reached page limit (20), stopping ingestion with {len(seen_tickers)} markets.")
+                    if events_page >= MAX_PAGES:
+                        logger.info(f"Reached page limit ({MAX_PAGES}), stopping ingestion with {len(seen_tickers)} markets.")
                         break
                     
                     await asyncio.sleep(0.1)
@@ -220,11 +260,15 @@ async def run_ingestion(
             if len(seen_tickers) < 100:
                 logger.info(f"Few markets from events ({len(seen_tickers)}), also fetching /markets.")
                 cursor = None
+                seen_cursors = set()
+                fallback_pages = 0
                 while True:
                     response = await kalshi_client.get_markets(limit=100, cursor=cursor)
-                    markets_page = response.get("markets", [])
+                    fallback_pages += 1
+                    markets_page = response.get("markets") or []
 
-                    active_markets = [m for m in markets_page if m["status"] == "active" 
+                    active_markets = [m for m in markets_page if isinstance(m, dict)
+                                     and m.get("status") == "active"
                                      and m.get("ticker", "") not in seen_tickers]
                     if active_markets:
                         for m in active_markets:
@@ -242,6 +286,13 @@ async def run_ingestion(
 
                     cursor = response.get("cursor")
                     if not cursor:
+                        break
+                    if cursor in seen_cursors:
+                        logger.warning(f"/markets repeated cursor {cursor!r}, stopping.")
+                        break
+                    seen_cursors.add(cursor)
+                    if fallback_pages >= MAX_PAGES:
+                        logger.info(f"Reached /markets page limit ({MAX_PAGES}), stopping.")
                         break
             
             logger.info(f"Total unique markets ingested: {len(seen_tickers)}")

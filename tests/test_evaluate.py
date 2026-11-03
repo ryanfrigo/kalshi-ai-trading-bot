@@ -245,13 +245,19 @@ async def test_nan_tracker_cost_does_not_poison_result(db, monkeypatch):
     assert r["daily_costs"][TODAY]["cost"] == 1.0 and r["cost_per_decision"] == 1.0
 
 
-@pytest.mark.xfail(strict=True, reason="src/jobs/evaluate.py:114 max(db_cost, tracker cost) raises TypeError "
-                   "when the pickled tracker has total_cost=None (getattr default only covers a missing attr)")
 async def test_none_tracker_cost_does_not_crash(db, monkeypatch):
     monkeypatch.setattr(ev, "_read_xai_tracker_from_pickle", lambda: tracker(total_cost=None, request_count=1))
     await cost_row(db, TODAY, 1.0, 1, 1)
     r = await ev.analyze_ai_costs(db)
-    assert r["daily_costs"][TODAY]["cost"] == 1.0
+    assert r["daily_costs"][TODAY]["cost"] == 1.0  # None counts as 0
+
+
+async def test_none_tracker_cost_and_requests_count_as_zero(db, monkeypatch):
+    monkeypatch.setattr(ev, "_read_xai_tracker_from_pickle",
+                        lambda: tracker(total_cost=None, request_count=None, is_exhausted=True))
+    r = await ev.analyze_ai_costs(db)
+    assert r["daily_costs"][TODAY]["cost"] == 0.0 and r["xai_requests_today"] == 0
+    assert r["trading_paused"] is False  # exhausted flag with no usage is still cleared
 
 
 async def test_nan_tracker_cost_understates_when_db_is_zero(db, monkeypatch):
@@ -317,9 +323,6 @@ async def test_open_positions_counts_only_open(db):
     assert (await ev.analyze_trading_performance(db))["position_stats"][0] == 2
 
 
-@pytest.mark.xfail(strict=True, reason="src/jobs/evaluate.py:225 julianday('now') is UTC but positions."
-                   "timestamp is naive local isoformat (database.py), so avg_hours_held is off by the "
-                   "UTC offset (negative for a fresh position west of UTC)")
 async def test_avg_hours_held_is_timezone_correct(db, monkeypatch):
     monkeypatch.setenv("TZ", "America/Los_Angeles")
     time.tzset()
@@ -403,8 +406,11 @@ async def test_run_evaluation_end_to_end_on_temp_db(log):
     assert not log.find("error", "Error in evaluation job")
 
 
-@pytest.mark.xfail(strict=True, reason="src/jobs/evaluate.py:277 actual_limit == 0 yields utilization 0 -> "
-                   "'HEALTHY' even with spend over a zero limit (analyze_ai_costs flags it, summary does not)")
 async def test_zero_limit_with_spend_is_not_healthy(monkeypatch, log):
     s = await status_for(monkeypatch, log, cost=5.0, limit=0)
-    assert s["status"] != "🟢 HEALTHY"
+    assert s["status"] == "🔴 OVER BUDGET"
+    assert log.find("warning", "HIGH COST ALERT: Consider immediate actions")
+
+
+async def test_zero_limit_zero_spend_is_healthy(monkeypatch, log):
+    assert (await status_for(monkeypatch, log, cost=0.0, limit=0))["status"] == "🟢 HEALTHY"
