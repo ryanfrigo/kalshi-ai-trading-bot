@@ -253,7 +253,8 @@ async def place_sell_limit_order(
             logger.warning(f"Not selling {position.market_id}: limit {limit_price_cents}c "
                            f"is outside 1-99c.")
             return False
-        if position.exit_order_id:
+        if position.exit_order_id and not await _cancel_exit_above(
+                position, limit_price_cents, kalshi_client, db_manager, logger):
             logger.warning(f"Not selling {position.market_id}: exit order "
                            f"{position.exit_order_id} is still being tracked.")
             return False
@@ -324,6 +325,45 @@ async def place_sell_limit_order(
             
     except Exception as e:
         logger.error(f"❌ Error placing sell limit order for {position.market_id}: {e}")
+        return False
+
+
+async def _cancel_exit_above(position: Position, limit_cents: int, kalshi_client: KalshiClient,
+                             db_manager: DatabaseManager, logger) -> bool:
+    """Cancel the tracked resting exit when it is priced above a new exit at ``limit_cents``.
+
+    A GTC exit the market moved away from never fills, and while its id is stored
+    every later exit is refused. Fills on it are booked first, then it is cancelled
+    and read again so a fill that raced the cancel is booked too. True only when the
+    order is gone, every fill is booked and the id is cleared; ``position`` is then
+    refreshed in place from the DB (the caller books the new sell against it). Any
+    read, cancel or booking problem returns False and leaves the id set.
+    """
+    oid = position.exit_order_id
+
+    async def refresh(expected_oid) -> bool:
+        fresh = await db_manager.get_position_by_market_and_side(position.market_id,
+                                                                 position.side)
+        if fresh is None or fresh.id != position.id or fresh.exit_order_id != expected_oid:
+            return False
+        vars(position).update(vars(fresh))
+        return True
+
+    try:
+        order = (await kalshi_client.get_order(oid)).get("order")
+        cents = int(round(float(order[f"{position.side.lower()}_price_dollars"]) * 100))
+        if order["status"] != "resting" or cents <= limit_cents:
+            return False
+        if (await reconcile_resting_exit(position, kalshi_client, db_manager)
+                not in ("unchanged", "shrunk") or not await refresh(oid)):
+            return False
+        logger.info(f"Cancelling exit {oid} on {position.market_id} at {cents}c: "
+                    f"above the new exit at {limit_cents}c.")
+        await kalshi_client.cancel_order(oid)
+        return (await reconcile_resting_exit(position, kalshi_client, db_manager)
+                in ("cleared", "shrunk") and await refresh(None))
+    except Exception as e:
+        logger.error(f"Exit {oid} on {position.market_id} not replaced ({e!r}).")
         return False
 
 
