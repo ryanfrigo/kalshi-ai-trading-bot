@@ -84,3 +84,50 @@ async def test_active_market_ignores_settlement_fields_and_keeps_exits():
     pos.stop_loss_price = 0.45
     should_exit, reason, price = await should_exit_position(pos, 0.40, 0.55, "active", "")
     assert should_exit and reason.startswith("stop_loss_triggered") and price == 0.40
+
+
+async def test_closed_ignores_settlement_value_default():
+    """settlement_value_dollars is filled only after determination; a closed
+    market's "0.0000" must not book a close."""
+    pos = _pos()
+    pos.side = "YES"
+    assert await should_exit_position(pos, 0.40, 0.55, "closed", "", "0.0000") == (False, "", 0.0)
+    assert (await should_exit_position(pos, 0.0, 0.0, "closed", "yes", "0.0000"))[2] == 1.0
+
+
+# --- through run_tracking -------------------------------------------------
+
+from unittest.mock import AsyncMock, patch
+
+from src.jobs.track import run_tracking
+from src.utils.database import DatabaseManager
+
+
+async def _run(tmp_path, market, side="NO"):
+    db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+    await db.initialize()
+    pos = _pos()
+    pos.side, pos.id, pos.entry_price = side, None, 0.50
+    await db.add_position(pos)
+    with patch("src.jobs.track.KalshiClient") as client:
+        client.return_value.get_market = AsyncMock(return_value={"market": market})
+        client.return_value.close = AsyncMock()
+        await run_tracking(db_manager=db, live=True)
+    return await db.get_open_live_positions(), await db.get_all_trade_logs()
+
+
+async def test_run_tracking_books_scalar_settlement_value(tmp_path):
+    market = {"status": "finalized", "result": "scalar", "settlement_value_dollars": "0.3000",
+              "yes_bid_dollars": "0.0000", "no_bid_dollars": "0.0000"}
+    open_, logs = await _run(tmp_path, market, side="NO")
+    assert open_ == [] and len(logs) == 1
+    assert logs[0].exit_price == pytest.approx(0.7)
+    assert logs[0].pnl == pytest.approx((0.7 - 0.50) * 10)
+
+
+@pytest.mark.parametrize("bad", ["30", "-0.1", "nan"])
+async def test_run_tracking_out_of_range_settlement_value_waits(tmp_path, bad):
+    market = {"status": "finalized", "result": "scalar", "settlement_value_dollars": bad,
+              "yes_bid_dollars": "0.4000", "no_bid_dollars": "0.5500"}
+    open_, logs = await _run(tmp_path, market, side="NO")
+    assert len(open_) == 1 and logs == []

@@ -21,17 +21,21 @@ from src.utils.market_prices import get_market_prices
 _warned_unresolved: set = set()
 
 
-def _settlement_price(side: str, result, settlement_value) -> Optional[float]:
+def _settlement_price(side: str, result, settlement_value, status: str) -> Optional[float]:
     """The held side's settlement price from get-market, or None if undetermined.
 
     `result` 'yes'/'no' (any case) is authoritative; otherwise
     `settlement_value_dollars` (the YES side's value, populated only after
     determination; https://docs.kalshi.com/api-reference/market/get-market) covers
-    scalar markets. Anything else, including '' and 'scalar' alone, is None.
+    scalar markets, but only at determined/finalized: on a closed market it can
+    still hold a "0.0000" default. Anything else, including '' and 'scalar' alone,
+    is None.
     """
     r = str(result or '').strip().lower()
     if r in ('yes', 'no'):
         return 1.0 if r == str(side).lower() else 0.0
+    if str(status or '').lower() not in ('determined', 'finalized'):
+        return None
     try:
         yes_value = float(settlement_value)
     except (TypeError, ValueError):
@@ -62,7 +66,7 @@ async def should_exit_position(
     # the other way, so with no outcome book nothing and retry next cycle. Closed
     # markets take no orders, so the stop/time/profit exits cannot run either.
     if str(market_status or '').lower() in ('closed', 'determined', 'finalized'):
-        settled = _settlement_price(position.side, market_result, settlement_value)
+        settled = _settlement_price(position.side, market_result, settlement_value, market_status)
         if settled is None:
             key = (position.market_id, position.side)
             if key not in _warned_unresolved:
