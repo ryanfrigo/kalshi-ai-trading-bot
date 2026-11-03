@@ -215,6 +215,24 @@ async def test_status_reports_error_not_healthy_when_balance_unreadable(kw):
     assert st["position_utilization"]  # the unified system formats this key
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), -1, -500, -0.0, 0, "0", "-5", "nan", "inf"])
+async def test_status_is_error_for_non_finite_or_non_positive_balance(bad):
+    """The strict balance read in get_position_limits_status: a balance that is not a
+    finite number > 0 must report ERROR (never HEALTHY), with the unverified-limits note."""
+    m, _, _ = _mgr(client=FakeClient(balance_resp={"balance": bad}))
+    st = await m.get_position_limits_status()
+    assert st["status"] == "ERROR"
+    assert "unusable balance" in st["message"]
+    assert st["position_utilization"] == "unknown"
+    assert "unverified" in st["recommendations"][0]
+    assert "portfolio_value" not in st
+
+
+async def test_status_smallest_positive_balance_is_not_error():
+    m, _, _ = _mgr(client=FakeClient(balance_cents=1))
+    assert (await m.get_position_limits_status())["status"] != "ERROR"
+
+
 async def test_status_levels():
     for n, want in [(0, "HEALTHY"), (m_warn(), "WARNING"), (m_cap(), "OVER_LIMIT")]:
         m, _, _ = _mgr(db=FakeDB([_pos(i) for i in range(n)]))
