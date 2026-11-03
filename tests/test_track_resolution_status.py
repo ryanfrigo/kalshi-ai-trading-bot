@@ -172,3 +172,21 @@ async def test_uppercase_result_and_mixed_case_status_settle():
     assert await should_exit_position(pos, 0.0, 0.0, "closed", "YES") == (True, "market_resolution", 1.0)
     assert await should_exit_position(
         pos, 0.4, 0.5, "Determined", "", "1.0000") == (True, "market_resolution", 1.0)
+
+
+@pytest.mark.parametrize("status", ["disputed", "Disputed", "DISPUTED"])
+@pytest.mark.parametrize("result", ["yes", "no"])
+async def test_disputed_waits_even_with_result(status, result):
+    """A dispute can flip the result, so it is not authoritative yet."""
+    import src.jobs.track as track
+    track._warned_unresolved.clear()
+    pos = _pos()
+    pos.side = "YES"
+    assert await should_exit_position(pos, 0.0, 0.0, status, result, "1.0000") == (False, "", 0.0)
+    track._warned_unresolved.clear()
+
+
+async def test_amended_with_result_settles():
+    pos = _pos()
+    pos.side = "YES"
+    assert await should_exit_position(pos, 0.0, 0.0, "amended", "yes") == (True, "market_resolution", 1.0)

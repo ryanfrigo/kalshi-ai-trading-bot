@@ -31,6 +31,8 @@ def _settlement_price(side: str, result, settlement_value, status: str) -> Optio
     still hold a "0.0000" default. Anything else, including '' and 'scalar' alone,
     is None.
     """
+    if str(status or '').strip().lower() == 'disputed':
+        return None  # a dispute can still flip the result
     r = str(result or '').strip().lower()
     if r in ('yes', 'no'):
         return 1.0 if r == str(side).lower() else 0.0
