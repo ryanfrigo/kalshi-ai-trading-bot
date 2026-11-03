@@ -15,6 +15,14 @@ from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 import math
 
+from src.config.settings import settings
+
+
+def _is_prob(x: Any) -> bool:
+    """True only for a finite real number in [0, 1]. bool/None/str are not probabilities."""
+    return (isinstance(x, (int, float)) and not isinstance(x, bool)
+            and math.isfinite(x) and 0.0 <= x <= 1.0)
+
 
 @dataclass
 class EdgeFilterResult:
@@ -41,13 +49,19 @@ class EdgeFilter:
     LOW_CONFIDENCE_EDGE = 0.08         # LOOSENED: 8% edge for low confidence (was 12%)
     
     # LOOSENED: Lower confidence floor for more opportunities
-    MIN_CONFIDENCE_FOR_TRADE = 0.35    # LOOSENED: 35% minimum confidence (was 50%)
+    # Never looser than settings (decide.py applies the same floor); max() so it can only tighten.
+    MIN_CONFIDENCE_FOR_TRADE = max(0.35, settings.trading.min_confidence_to_trade)
     MAX_ACCEPTABLE_RISK = 0.6          # INCREASED: 60% max position risk (was 50%)
     
     # UPDATED: More permissive quality filters
     MIN_VOLUME_FOR_HIGH_EDGE = 500     # DECREASED: Lower volume requirement (was 2000, now 500)
     MIN_SPREAD_QUALITY = 0.03          # INCREASED: Allow wider spreads (was 0.02, now 0.03)
     
+    @staticmethod
+    def _rejected(reason: str) -> "EdgeFilterResult":
+        return EdgeFilterResult(passes_filter=False, edge_magnitude=0.0, edge_percentage=0.0,
+                                side="NONE", reason=reason, confidence_adjusted_edge=0.0)
+
     @classmethod
     def calculate_edge(
         cls,
@@ -67,11 +81,19 @@ class EdgeFilter:
             EdgeFilterResult with filtering decision and details
         """
         
-        # Validate inputs
-        ai_probability = max(0.01, min(0.99, ai_probability))
-        market_probability = max(0.01, min(0.99, market_probability))
-        confidence = confidence or 0.7
-        
+        # Validate inputs: fail closed on missing/invalid data, never clamp into a tradable value.
+        # A TypeError for None/str probabilities is deliberate (callers rely on it).
+        for name, val in (("ai_probability", ai_probability), ("market_probability", market_probability)):
+            if not isinstance(val, (int, float)):
+                raise TypeError(f"{name} must be a number, got {type(val).__name__}")
+        if not _is_prob(ai_probability):
+            return cls._rejected(f"Invalid ai_probability {ai_probability!r}: must be finite and in [0, 1]")
+        if not _is_prob(market_probability) or market_probability in (0.0, 1.0):
+            return cls._rejected(f"No valid market quote (price {market_probability!r}): must be finite and strictly between 0 and 1")
+        if not _is_prob(confidence):
+            return cls._rejected(f"Invalid confidence {confidence!r}: must be finite and in [0, 1]")
+        ai_probability = max(0.01, min(0.99, ai_probability))  # in-range AI 0/1 is only softened to 1%/99%
+
         # Calculate raw edge (probability difference)
         edge_magnitude = ai_probability - market_probability
         edge_percentage = abs(edge_magnitude)
@@ -192,12 +214,14 @@ class EdgeFilter:
             volume = additional_filters.get('volume', 0)
             min_volume = additional_filters.get('min_volume', 1000)
             
-            if volume < min_volume:
+            if not (volume >= min_volume):  # also rejects NaN
                 return False, f"Volume {volume} below minimum {min_volume}", edge_result
             
             time_to_expiry = additional_filters.get('time_to_expiry_days', 30)
             max_time = additional_filters.get('max_time_to_expiry', 365)
             
+            if not (time_to_expiry > 0):  # rejects NaN and already-expired
+                return False, f"Time to expiry {time_to_expiry} days is not a valid future horizon", edge_result
             if time_to_expiry > max_time:
                 return False, f"Time to expiry {time_to_expiry} days exceeds maximum {max_time}", edge_result
         

@@ -96,10 +96,11 @@ def make_opp(market_prob, predicted, conf=0.8, market_id="MKT-1"):
     o = MarketOpportunity(
         market_id=market_id, market_title="t", predicted_probability=predicted,
         market_probability=market_prob, confidence=conf, edge=edge, volatility=0.2,
-        expected_return=abs(edge) * conf, max_loss=0.5, time_to_expiry=30.0,
+        expected_return=abs(edge) * conf, max_loss=0.5, time_to_expiry=10.0,  # inside settings' 14-day horizon
         correlation_score=0.0, kelly_fraction=0.0, fractional_kelly=0.0,
         risk_adjusted_fraction=0.0, sharpe_ratio=0.0, sortino_ratio=0.0,
         max_drawdown_contribution=0.0)
+    o.volume = 10_000  # MarketOpportunity has no volume field; the liquidity gate fails closed without it
     o.edge_percentage = abs(edge)
     o.recommended_side = "YES" if edge > 0 else "NO"
     return o

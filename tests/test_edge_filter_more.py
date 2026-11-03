@@ -147,7 +147,7 @@ def test_symmetry_holds_at_the_exact_threshold():
 # ------------------------------------------------------------ thresholds
 def test_constants_pin_the_current_ladder():
     assert (EF.HIGH_CONFIDENCE_EDGE, EF.MEDIUM_CONFIDENCE_EDGE, EF.LOW_CONFIDENCE_EDGE) == (0.03, 0.05, 0.08)
-    assert EF.MIN_CONFIDENCE_FOR_TRADE == 0.35
+    assert EF.MIN_CONFIDENCE_FOR_TRADE == max(0.35, settings.trading.min_confidence_to_trade) == 0.45
     assert EF.MIN_EDGE_REQUIREMENT == 0.04
 
 
@@ -158,7 +158,7 @@ def test_required_edge_ladder_boundaries(conf, expected):
     assert get_minimum_edge_for_confidence(conf) == expected
 
 
-@pytest.mark.parametrize("conf", [0.99, 0.8, 0.7999, 0.7, 0.6, 0.5999, 0.5, 0.35])
+@pytest.mark.parametrize("conf", [0.99, 0.8, 0.7999, 0.7, 0.6, 0.5999, 0.5, 0.45])
 def test_helper_ladder_agrees_with_calculate_edge_ladder(conf):
     """The ladder is written twice (calculate_edge and the helper); they must not drift."""
     need = get_minimum_edge_for_confidence(conf)
@@ -176,16 +176,17 @@ def test_helper_ladder_agrees_with_calculate_edge_ladder(conf):
     (0.60, 0.05, True),
     (0.5999, 0.05, False),  # drops to the LOW rung (needs ~8%)
     (0.5999, 0.08, True),
-    (0.35, 0.08, True),     # at the confidence floor
-    (0.3499, 0.50, False),  # under the floor, however big the edge
+    (0.45, 0.08, True),     # at the confidence floor (settings' 0.45)
+    (0.4499, 0.50, False),  # under the floor, however big the edge
 ])
 def test_threshold_boundaries(conf, edge, passes):
     assert EF.calculate_edge(0.5 + edge, 0.5, conf).passes_filter is passes
 
 
 def test_confidence_floor_is_inclusive():
-    assert EF.calculate_edge(0.9, 0.5, 0.35).passes_filter
-    assert not EF.calculate_edge(0.9, 0.5, 0.3499999).passes_filter
+    floor = EF.MIN_CONFIDENCE_FOR_TRADE
+    assert EF.calculate_edge(0.9, 0.5, floor).passes_filter
+    assert not EF.calculate_edge(0.9, 0.5, floor - 1e-7).passes_filter
 
 
 def test_module_helpers_use_default_confidence_0_7():
@@ -219,10 +220,6 @@ def test_settings_confidence_floor_is_not_looser_than_edge_filter_floor_on_the_r
     assert settings.trading.min_confidence_to_trade >= EF.MIN_CONFIDENCE_FOR_TRADE
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "src/utils/edge_filter.py:42 MIN_CONFIDENCE_FOR_TRADE=0.35 < settings.py:81 "
-    "min_confidence_to_trade=0.45: portfolio/immediate.py:90 and market_making.py:167 use only "
-    "EdgeFilter, so a conf 0.40 opportunity (edge 10%) passes there but is refused in decide.py."))
 def test_edge_filter_confidence_floor_agrees_with_settings():
     assert EF.MIN_CONFIDENCE_FOR_TRADE >= settings.trading.min_confidence_to_trade
 
@@ -236,11 +233,6 @@ def test_edge_filter_never_trades_below_settings_min_trade_edge():
     assert not r.passes_filter or r.edge_percentage >= s.min_trade_edge
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "src/strategies/portfolio/immediate.py:156-159 hard-codes min_volume=1000 and "
-    "max_time_to_expiry=365 and reads volume via getattr(opportunity,'volume',1000) -- "
-    "MarketOpportunity (portfolio/models.py:8) has no volume field, so the default 1000 always "
-    "equals min_volume and the liquidity gate can never fail; settings.py:78 allows 14 days, not 365."))
 def test_immediate_path_passes_settings_liquidity_and_expiry_limits_to_the_filter(monkeypatch):
     import asyncio
     from src.strategies.portfolio import immediate
@@ -299,11 +291,13 @@ def test_equal_probabilities_at_the_rails_have_no_edge(ai, mkt):
     assert not EF.calculate_edge(ai, mkt, 0.9).passes_filter
 
 
-def test_probabilities_are_clamped_to_one_to_ninety_nine_percent():
-    r = EF.calculate_edge(1.0, 0.0, 0.9)
-    assert r.edge_magnitude == pytest.approx(0.98) and r.side == "YES"
-    r = EF.calculate_edge(0.0, 1.0, 0.9)
-    assert r.edge_magnitude == pytest.approx(-0.98) and r.side == "NO"
+def test_in_range_ai_probability_is_softened_to_one_to_ninety_nine_percent():
+    """AI 0/1 is a valid (if extreme) forecast and is softened; a market 0/1 is no quote (rejected)."""
+    r = EF.calculate_edge(1.0, 0.5, 0.9)
+    assert r.edge_magnitude == pytest.approx(0.49) and r.side == "YES"
+    r = EF.calculate_edge(0.0, 0.5, 0.9)
+    assert r.edge_magnitude == pytest.approx(-0.49) and r.side == "NO"
+    assert not EF.calculate_edge(1.0, 0.0, 0.9).passes_filter
 
 
 @pytest.mark.parametrize("ai,mkt,conf", [(None, 0.5, 0.9), (0.6, None, 0.9)])
@@ -321,45 +315,27 @@ def test_negative_confidence_is_rejected():
     assert not EF.calculate_edge(0.9, 0.5, -0.5).passes_filter
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "src/utils/edge_filter.py:71 `max(0.01, min(0.99, nan))` returns 0.99, so ai_probability=NaN "
-    "becomes 99%: vs a 50c market it reports a 49% YES edge and PASSES (conf 0.9)."))
 def test_nan_ai_probability_is_rejected():
     assert not EF.calculate_edge(NAN, 0.5, 0.9).passes_filter
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "src/utils/edge_filter.py:72 NaN market_probability also clamps to 0.99: ai 0.5 vs a NaN "
-    "price reports a 49% NO edge and PASSES."))
 def test_nan_market_probability_is_rejected():
     assert not EF.calculate_edge(0.5, NAN, 0.9).passes_filter
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "src/utils/edge_filter.py:73 `confidence or 0.7`: confidence 0.0 (and None) is replaced by 0.7, "
-    "so a zero-confidence call with a 40% edge PASSES at 'medium' confidence."))
 @pytest.mark.parametrize("conf", [0.0, None])
 def test_zero_or_missing_confidence_is_rejected(conf):
     assert not EF.calculate_edge(0.9, 0.5, conf).passes_filter
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "src/utils/edge_filter.py:71 out-of-range probabilities are silently clamped, not rejected: "
-    "ai_probability=5.0 (a percent-vs-fraction unit slip) becomes 0.99 and passes with a 49% edge."))
 def test_out_of_range_probability_is_rejected():
     assert not EF.calculate_edge(5.0, 0.5, 0.9).passes_filter
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "src/utils/edge_filter.py:73,98 confidence is never range-checked: confidence=1.5 (150%) "
-    "passes as 'high' and is echoed in the reason string."))
 def test_out_of_range_confidence_is_rejected():
     assert not EF.calculate_edge(0.55, 0.5, 1.5).passes_filter
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "src/utils/edge_filter.py:72 market price 0.0 / 1.0 (no quote on a side) is clamped to 0.01/0.99 "
-    "and treated as buyable: ai 0.5 vs market 1.0 reports a 49% NO edge and passes."))
 @pytest.mark.parametrize("mkt", [0.0, 1.0])
 def test_unquoted_market_price_is_rejected(mkt):
     assert not EF.calculate_edge(0.5, mkt, 0.9).passes_filter
@@ -417,23 +393,14 @@ def test_none_volume_raises_rather_than_passing():
         EF.should_trade_market(0.6, 0.5, 0.9, {"volume": None})
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "src/utils/edge_filter.py:195 `volume < min_volume` is False for NaN, so a NaN volume PASSES "
-    "the liquidity gate."))
 def test_nan_volume_is_rejected():
     assert not _stm(vol=NAN)[0]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "src/utils/edge_filter.py:201 `time_to_expiry > max_time` is False for NaN, so a NaN "
-    "time-to-expiry PASSES the horizon gate."))
 def test_nan_time_to_expiry_is_rejected():
     assert not _stm(tte=NAN)[0]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "src/utils/edge_filter.py:201 only an upper bound on time_to_expiry: -5 days (already expired) "
-    "passes the horizon gate."))
 def test_negative_time_to_expiry_is_rejected():
     assert not _stm(tte=-5)[0]
 
@@ -475,9 +442,6 @@ def test_filter_opportunities_one_none_probability_aborts_the_batch():
         EF.filter_opportunities([_opp(), _opp(predicted_probability=None)])
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "src/utils/edge_filter.py:140 opp.get('confidence', 0.7) then edge_filter.py:73 `or 0.7`: an "
-    "opportunity with confidence=None/0 is graded as 70% and passes a 5% edge. (No caller today.)"))
 def test_filter_opportunities_rejects_missing_confidence():
     assert EF.filter_opportunities([_opp(confidence=None, predicted_probability=0.55)]) == []
 

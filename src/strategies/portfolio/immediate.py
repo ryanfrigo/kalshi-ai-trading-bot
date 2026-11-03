@@ -153,10 +153,11 @@ async def _evaluate_immediate_trade(
             market_probability=opportunity.market_probability,
             confidence=opportunity.confidence,
             additional_filters={
-                'volume': getattr(opportunity, 'volume', 1000),
-                'min_volume': 1000,
+                # Missing volume must FAIL the gate (NaN is rejected downstream), never default to passing.
+                'volume': getattr(opportunity, 'volume', float('nan')),
+                'min_volume': settings.trading.min_volume,
                 'time_to_expiry_days': opportunity.time_to_expiry,
-                'max_time_to_expiry': 365
+                'max_time_to_expiry': settings.trading.max_time_to_expiry_days
             }
         )
         
