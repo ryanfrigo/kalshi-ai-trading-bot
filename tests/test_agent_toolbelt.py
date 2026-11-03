@@ -373,3 +373,27 @@ def test_fill_count_reads_fp_then_legacy(tmp_path, order, expected):
                                       journal_path=journal))
     assert buy["ok"] is True and buy["order_id"] == "oid" and buy["fill_count"] == expected
     assert sell["ok"] is True and sell["order_id"] == "oid" and sell["fill_count"] == expected
+
+
+class _UnknownClient(_FillClient):
+    async def place_order(self, **kw):
+        from src.clients.kalshi_client import KalshiOrderOutcomeUnknown
+        self.placed.append(kw)
+        raise KalshiOrderOutcomeUnknown("outcome unknown; not resent")
+
+
+def test_outcome_unknown_is_reported_not_raised(tmp_path):
+    journal = tmp_path / "j.jsonl"
+    buyer, seller = _UnknownClient({}), _UnknownClient({})
+    buy = asyncio.run(place_guarded_order(
+        buyer, ticker="KXX-1", side="no", count=5, price=0.60, est_prob=0.80,
+        governor=_Governor(), dry=False, journal_path=str(journal),
+        policy_path=str(tmp_path / "none.json")))
+    sell = asyncio.run(close_position(seller, ticker="KXX-1", dry=False,
+                                      journal_path=str(journal)))
+    for res, client in ((buy, buyer), (sell, seller)):
+        assert res["ok"] is False and res["reason"] == "outcome_unknown"
+        assert len(client.placed) == 1  # sent once, never resent
+        assert res["client_order_id"] == client.placed[0]["client_order_id"]
+    assert sell["action"] == "sell"
+    assert not journal.exists()  # non-ok results are not journaled

@@ -14,6 +14,8 @@ import re
 import uuid
 from typing import Any, Dict, Optional, Tuple
 
+from src.clients.kalshi_client import KalshiOrderOutcomeUnknown
+
 
 _TICKER_RE = re.compile(r"[A-Z0-9][A-Z0-9._-]{0,99}")
 
@@ -306,7 +308,12 @@ async def place_guarded_order(
         kwargs["no_price" if side == "no" else "yes_price"] = price_cents
         if expiration_ts is not None:
             kwargs["expiration_ts"] = expiration_ts  # resting quotes must not go stale
-        resp = await kalshi_client.place_order(**kwargs)
+        try:
+            resp = await kalshi_client.place_order(**kwargs)
+        except KalshiOrderOutcomeUnknown:
+            # The order may be live: report it by client_order_id, never resend.
+            return {"ok": False, "reason": "outcome_unknown", "ticker": ticker,
+                    "side": side, "count": n, "client_order_id": coid}
         order = resp.get("order", resp) if isinstance(resp, dict) else {}
         result = {
             "ok": True, "dry": False, "ticker": ticker, "side": side, "count": n,
@@ -401,7 +408,12 @@ async def close_position(
         kwargs = {"ticker": ticker, "client_order_id": coid, "side": side,
                   "action": "sell", "count": n, "type_": "limit"}
         kwargs["yes_price" if side == "yes" else "no_price"] = price_cents
-        resp = await kalshi_client.place_order(**kwargs)
+        try:
+            resp = await kalshi_client.place_order(**kwargs)
+        except KalshiOrderOutcomeUnknown:
+            # The sell may be live: report it by client_order_id, never resend.
+            return {"ok": False, "reason": "outcome_unknown", "ticker": ticker,
+                    "side": side, "action": "sell", "count": n, "client_order_id": coid}
         order = resp.get("order", resp) if isinstance(resp, dict) else {}
         result = {"ok": True, "dry": False, "ticker": ticker, "side": side,
                   "action": "sell", "count": n, "price_cents": price_cents,
