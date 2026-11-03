@@ -54,3 +54,90 @@ def test_explicit_path_arguments_still_win(tmp_path, monkeypatch):
                            halt_flag_path=str(tmp_path / "H"))
     assert gov.state_path == tmp_path / "s.json"
     assert gov.halt_flag_path == tmp_path / "H"
+
+
+# --- KALSHI_RUNTIME_DIR and the report's audit log -------------------------
+
+import json
+
+import pytest
+
+
+def test_env_var_redirects_state_halt_and_audit(tmp_path, monkeypatch):
+    from src.risk import risk_governor as rg
+
+    d = tmp_path / "elsewhere"
+    monkeypatch.setenv("KALSHI_RUNTIME_DIR", str(d))
+
+    assert rg.resolve_state_path() == d / "risk_governor_state.json"
+    assert rg.resolve_halt_flag_path() == d / "TRADING_HALTED"
+    assert rg.resolve_audit_path() == d / "governor_audit.jsonl"
+    gov = rg.RiskGovernor()
+    assert gov.state_path == d / "risk_governor_state.json"
+    assert gov.halt_flag_path == d / "TRADING_HALTED"
+
+
+def test_env_var_read_at_call_time_not_import_time(tmp_path, monkeypatch):
+    monkeypatch.setenv("KALSHI_RUNTIME_DIR", str(tmp_path / "late"))
+    mod = _fresh_module()  # imported before... env already set; now change it
+    monkeypatch.setenv("KALSHI_RUNTIME_DIR", str(tmp_path / "later"))
+    assert mod.resolve_audit_path() == tmp_path / "later" / "governor_audit.jsonl"
+
+
+def test_unset_env_keeps_repo_root_default(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("KALSHI_RUNTIME_DIR", raising=False)
+    mod = _fresh_module()
+
+    runtime = REPO / "data" / "runtime"
+    assert mod.resolve_state_path() == runtime / "risk_governor_state.json"
+    assert mod.resolve_halt_flag_path() == runtime / "TRADING_HALTED"
+    assert mod.resolve_audit_path() == runtime / "governor_audit.jsonl"
+    # An empty value is "unset", not "the cwd".
+    monkeypatch.setenv("KALSHI_RUNTIME_DIR", "  ")
+    assert mod.resolve_audit_path() == runtime / "governor_audit.jsonl"
+
+
+def test_cli_report_reads_audit_from_anchor_when_cwd_elsewhere(tmp_path, monkeypatch, capsys):
+    import argparse
+
+    import cli
+    from src.risk import risk_governor as rg
+
+    anchor = tmp_path / "anchor"
+    anchor.mkdir()
+    (anchor / "governor_audit.jsonl").write_text(json.dumps({
+        "action": "rebase_peak",
+        "old": {"peak_equity_cents": 123456},
+        "new": {"date": "2026-09-25"},
+    }) + "\n")
+    monkeypatch.setattr(rg, "DEFAULT_AUDIT_PATH", str(anchor / "governor_audit.jsonl"))
+
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)  # no data/runtime here: a cwd-relative read finds nothing
+
+    seen = {}
+    import src.agent.report as report
+
+    def fake_render(**kw):
+        seen.update(kw)
+        return "md"
+
+    monkeypatch.setattr(report, "render_track_record", fake_render)
+
+    async def fake_brief(client):
+        return {"equity_cents": 1}
+
+    import src.agent.toolbelt as toolbelt
+    monkeypatch.setattr(toolbelt, "account_brief", fake_brief)
+
+    class FakeClient:
+        async def close(self):
+            pass
+
+    import src.clients.kalshi_client as kc
+    monkeypatch.setattr(kc, "KalshiClient", FakeClient)
+
+    cli.cmd_report(argparse.Namespace(stdout=True))
+    assert seen["equity"]["rebase"] == {"date": "2026-09-25", "prior_peak_cents": 123456}

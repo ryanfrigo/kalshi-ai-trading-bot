@@ -34,6 +34,29 @@ from typing import Callable, Dict, List, Optional
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STATE_PATH = str(_REPO_ROOT / "data" / "runtime" / "risk_governor_state.json")
 DEFAULT_HALT_FLAG_PATH = str(_REPO_ROOT / "data" / "runtime" / "TRADING_HALTED")
+DEFAULT_AUDIT_PATH = str(_REPO_ROOT / "data" / "runtime" / "governor_audit.jsonl")
+RUNTIME_DIR_ENV = "KALSHI_RUNTIME_DIR"
+
+
+def _env_runtime_dir() -> Optional[Path]:
+    """The KALSHI_RUNTIME_DIR override, read at call time (never import time)."""
+    raw = os.environ.get(RUNTIME_DIR_ENV, "").strip()
+    return Path(raw) if raw else None
+
+
+def resolve_state_path() -> Path:
+    d = _env_runtime_dir()
+    return d / "risk_governor_state.json" if d else Path(DEFAULT_STATE_PATH)
+
+
+def resolve_halt_flag_path() -> Path:
+    d = _env_runtime_dir()
+    return d / "TRADING_HALTED" if d else Path(DEFAULT_HALT_FLAG_PATH)
+
+
+def resolve_audit_path() -> Path:
+    d = _env_runtime_dir()
+    return d / "governor_audit.jsonl" if d else Path(DEFAULT_AUDIT_PATH)
 
 
 class RiskStateCorrupt(Exception):
@@ -164,8 +187,8 @@ class RiskGovernor:
     ):
         # Resolved at call time (not bound at def time) so the defaults can be redirected.
         self.kalshi_client = kalshi_client
-        self.state_path = Path(state_path if state_path is not None else DEFAULT_STATE_PATH)
-        self.halt_flag_path = Path(halt_flag_path if halt_flag_path is not None else DEFAULT_HALT_FLAG_PATH)
+        self.state_path = Path(state_path) if state_path is not None else resolve_state_path()
+        self.halt_flag_path = Path(halt_flag_path) if halt_flag_path is not None else resolve_halt_flag_path()
         self.max_daily_loss_pct = max_daily_loss_pct
         self.max_drawdown_pct = max_drawdown_pct
         self._clock = clock or (lambda: datetime.now(timezone.utc))
