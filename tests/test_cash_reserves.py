@@ -682,3 +682,92 @@ async def test_emergency_messages_quote_the_real_threshold():
 
 def test_module_docstring_matches_thresholds():
     assert "15%" not in cr.__doc__
+
+
+# ------------------------------------------------------- positions pagination
+
+class PagedClient(FakeClient):
+    """get_positions serves `pages` keyed by cursor; records the kwargs it got."""
+
+    def __init__(self, pages, fail_cursor=None, **kw):
+        super().__init__(**kw)
+        self.pages, self.fail_cursor, self.kwargs = pages, fail_cursor, []
+
+    async def get_positions(self, *a, **k):
+        self.calls.append("get_positions")
+        self.kwargs.append(k)
+        if k.get("cursor") is not None and k.get("cursor") == self.fail_cursor:
+            raise RuntimeError("page 2 failed")
+        return self.pages[k.get("cursor")]
+
+
+def _row(n):
+    return {"ticker": f"T{n}", "position_fp": "10.00"}  # $5 estimate each
+
+
+@pytest.mark.asyncio
+async def test_two_pages_are_summed_and_cursor_is_followed():
+    c = PagedClient({None: {"market_positions": [_row(1), _row(2)], "cursor": "c2"},
+                     "c2": {"market_positions": [_row(3)], "cursor": ""}}, balance=10_000)
+    assert await mgr(c)._get_portfolio_value() == pytest.approx(100.0 + 15.0)
+    assert [k.get("cursor") for k in c.kwargs] == [None, "c2"]
+    assert all(k.get("limit") == 200 for k in c.kwargs)
+
+
+@pytest.mark.asyncio
+async def test_second_page_changes_the_gate_decision():
+    """Page 1 alone: $2 cash vs $5 held => 28% reserve. Page 2 adds $2000 of
+    positions => 0.1% reserve => blocked. Reading only page 1 would approve."""
+    big = {"position_fp": "4000.00"}
+    c = PagedClient({None: {"market_positions": [_row(1)], "cursor": "c2"},
+                     "c2": {"market_positions": [big]}}, balance=200)
+    r = await mgr(c).check_cash_reserves(0.01)
+    assert r.can_trade is False and r.portfolio_value == pytest.approx(2.0 + 5.0 + 2000.0)
+
+
+@pytest.mark.asyncio
+async def test_page_cap_raises_and_falls_back_not_partial_sum():
+    pages = {None: {"market_positions": [_row(0)], "cursor": "p1"}}
+    for i in range(1, 40):
+        pages[f"p{i}"] = {"market_positions": [_row(i)], "cursor": f"p{i + 1}"}
+    c = PagedClient(pages, balance=10_000_000)
+    with pytest.raises(ValueError, match="more than 20 pages"):
+        await mgr(c)._fetch_all_positions()
+    assert len(c.kwargs) == 20                              # exactly the cap, no more
+    assert await mgr(c)._get_portfolio_value() == 100.0     # fail-closed fallback, not 20 pages' sum
+    r = await mgr(c).check_cash_reserves(50.0)
+    assert r.can_trade is False                             # $50 of the $100 fallback
+
+
+@pytest.mark.asyncio
+async def test_exactly_cap_pages_is_accepted():
+    pages = {None: {"market_positions": [_row(0)], "cursor": "p1"}}
+    for i in range(1, 20):
+        nxt = {"cursor": f"p{i + 1}"} if i < 19 else {}
+        pages[f"p{i}"] = {"market_positions": [_row(i)], **nxt}
+    c = PagedClient(pages, balance=10_000)
+    assert len(await mgr(c)._fetch_all_positions()) == 20
+
+
+@pytest.mark.asyncio
+async def test_failure_on_page_two_falls_back_not_partial_sum():
+    c = PagedClient({None: {"market_positions": [_row(1)], "cursor": "c2"}},
+                    fail_cursor="c2", balance=10_000_000)
+    assert await mgr(c)._get_portfolio_value() == 100.0
+    r = await mgr(c).check_cash_reserves(50.0)
+    assert r.can_trade is False
+
+
+@pytest.mark.asyncio
+async def test_malformed_page_two_falls_back():
+    c = PagedClient({None: {"market_positions": [_row(1)], "cursor": "c2"},
+                     "c2": {"oops": 1}}, balance=10_000_000)
+    assert await mgr(c)._get_portfolio_value() == 100.0
+
+
+@pytest.mark.asyncio
+async def test_repeated_cursor_raises():
+    c = PagedClient({None: {"market_positions": [_row(1)], "cursor": "c2"},
+                     "c2": {"market_positions": [_row(2)], "cursor": "c2"}}, balance=10_000)
+    with pytest.raises(ValueError, match="repeated cursor"):
+        await mgr(c)._fetch_all_positions()

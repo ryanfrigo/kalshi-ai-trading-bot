@@ -308,12 +308,7 @@ class CashReservesManager:
             available_cash = balance_response.get('balance', 0) / 100
             
             # Get current positions value
-            positions_response = await self.kalshi_client.get_positions()
-            positions = positions_response.get('market_positions') if isinstance(positions_response, dict) else None
-            if not isinstance(positions, list):
-                # Unreadable shape: don't pretend we hold nothing (that would
-                # inflate the reserve %). Fall back via the except below.
-                raise ValueError("positions response missing 'market_positions' list")
+            positions = await self._fetch_all_positions()
             total_position_value = 0.0
 
             for position in positions:
@@ -327,6 +322,35 @@ class CashReservesManager:
             self.logger.error(f"Error calculating portfolio value: {e}")
             return 100.0  # Conservative fallback
     
+    POSITIONS_PAGE_LIMIT = 200
+    POSITIONS_MAX_PAGES = 20
+
+    async def _fetch_all_positions(self) -> List[Any]:
+        """Every ``market_positions`` row, following the cursor.
+
+        Raises (so the caller's fail-closed fallback applies) on an unreadable
+        page, a repeated cursor, a failed later page, or more than
+        POSITIONS_MAX_PAGES pages. Never returns a partial list: an undervalued
+        book would overstate the reserve %.
+        """
+        rows: List[Any] = []
+        seen = set()
+        cursor = None
+        for _ in range(self.POSITIONS_MAX_PAGES):
+            resp = await self.kalshi_client.get_positions(limit=self.POSITIONS_PAGE_LIMIT, cursor=cursor)
+            page = resp.get('market_positions') if isinstance(resp, dict) else None
+            if not isinstance(page, list):
+                # Unreadable shape: don't pretend we hold nothing.
+                raise ValueError("positions response missing 'market_positions' list")
+            rows.extend(page)
+            cursor = resp.get('cursor')
+            if not cursor:
+                return rows
+            if cursor in seen:
+                raise ValueError("repeated cursor while paging positions")
+            seen.add(cursor)
+        raise ValueError(f"more than {self.POSITIONS_MAX_PAGES} pages of positions")
+
     @staticmethod
     def _position_value(position: Any) -> float:
         """Dollar value of one v2 ``market_positions`` row; 0.0 for malformed
