@@ -94,9 +94,10 @@ def _mgr(client=None, db=None):
 # ---------------------------------------------------------------- boundaries
 
 async def test_position_count_at_limit_blocks_one_below_allows():
-    m, _, _ = _mgr(db=FakeDB([_pos(i) for i in range(14)]))
+    lim = m_cap()
+    m, _, _ = _mgr(db=FakeDB([_pos(i) for i in range(lim - 1)]))
     assert (await m.check_position_limits(1.0, portfolio_value=1000.0)).can_trade is True
-    m, _, _ = _mgr(db=FakeDB([_pos(i) for i in range(15)]))
+    m, _, _ = _mgr(db=FakeDB([_pos(i) for i in range(lim)]))
     r = await m.check_position_limits(1.0, portfolio_value=1000.0)
     assert r.can_trade is False and "limit" in r.reason
 
@@ -138,7 +139,7 @@ def m_warn():
 async def test_result_reports_configured_numbers():
     m, _, _ = _mgr(db=FakeDB([_pos(1), _pos(2)]))
     r = await m.check_position_limits(10.0, portfolio_value=1000.0)
-    assert (r.current_positions, r.max_positions, r.max_position_size) == (2, 15, 50.0)
+    assert (r.current_positions, r.max_positions, r.max_position_size) == (2, settings.trading.max_positions, 50.0)
 
 
 # --------------------------------------------------------------- fail closed
@@ -195,80 +196,76 @@ async def test_available_cash_is_zero_on_error():
     assert await m._get_available_cash() == 0.0
 
 
-@pytest.mark.xfail(strict=True, reason="get_position_limits_status reports HEALTHY when the balance "
-                   "read fails: helpers swallow the error and return fallbacks (100.0 value, 0.0 "
-                   "cash), so the monitor never reaches its ERROR branch (position_limits.py:~190-215).")
-async def test_status_endpoint_reports_error_not_healthy_on_failure():
-    m, _, _ = _mgr(client=FakeClient(balance_exc=RuntimeError("x")))
+@pytest.mark.parametrize("kw", [dict(balance_exc=RuntimeError("x")), dict(balance_resp={}),
+                                 dict(balance_resp={"balance": "n/a"}), dict(balance_cents=0)])
+async def test_status_reports_error_not_healthy_when_balance_unreadable(kw):
+    m, _, _ = _mgr(client=FakeClient(**kw))
     st = await m.get_position_limits_status()
-    assert st["status"] != "HEALTHY"
+    assert st["status"] == "ERROR"
+    assert st["position_utilization"]  # the unified system formats this key
 
 
 async def test_status_levels():
-    for n, want in [(0, "HEALTHY"), (m_warn(), "WARNING"), (15, "OVER_LIMIT")]:
+    for n, want in [(0, "HEALTHY"), (m_warn(), "WARNING"), (m_cap(), "OVER_LIMIT")]:
         m, _, _ = _mgr(db=FakeDB([_pos(i) for i in range(n)]))
         assert (await m.get_position_limits_status())["status"] == want
 
 
 # ---------------------------------------------------- invalid proposed size
 
-@pytest.mark.xfail(strict=True, reason="NaN proposed size passes every comparison: can_trade=True "
-                   "(position_limits.py:~87-120). Gate must fail closed on non-finite input.")
-async def test_nan_proposed_size_is_rejected():
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), 0.0, -500.0, None, "5"])
+async def test_non_finite_or_non_positive_proposed_size_is_rejected(bad):
     m, _, _ = _mgr()
-    r = await m.check_position_limits(float("nan"), portfolio_value=1000.0)
-    assert r.can_trade is False
+    r = await m.check_position_limits(bad, portfolio_value=1000.0)
+    assert r.can_trade is False and "Invalid" in r.reason
 
 
-@pytest.mark.xfail(strict=True, reason="Negative proposed size is approved (no lower bound check, "
-                   "position_limits.py:~87-120).")
-async def test_negative_proposed_size_is_rejected():
+async def test_tiny_positive_size_still_allowed():
     m, _, _ = _mgr()
-    r = await m.check_position_limits(-500.0, portfolio_value=1000.0)
-    assert r.can_trade is False
+    assert (await m.check_position_limits(0.01, portfolio_value=1000.0)).can_trade is True
 
 
 # ------------------------------------------ v2 / legacy field drift (#101)
 
-@pytest.mark.xfail(strict=True, reason="_get_portfolio_value reads positions_response['positions'] "
-                   "but Kalshi returns 'market_positions' (position_limits.py:~236); held "
-                   "positions are valued at 0, so the 5% cap and usage check use cash only.")
-async def test_portfolio_value_counts_positions_under_market_positions_key():
-    rows = [{"ticker": "KX-A", "position_fp": "-40.00"}]
-    m, _, _ = _mgr(client=FakeClient(balance_cents=10_000, positions=rows))
-    assert await m._get_portfolio_value() > 100.0
+_FP = {"ticker": "KX-A", "position_fp": "-40.00", "market_exposure_dollars": "36.00"}
 
 
-@pytest.mark.xfail(strict=True, reason="_get_portfolio_value reads legacy 'quantity'; v2 rows carry "
-                   "signed string 'position_fp' (see market_prices.signed_position, #101). "
-                   "Positions are valued at 0.")
-async def test_portfolio_value_reads_v2_position_fp():
-    class LegacyKeyClient(FakeClient):
-        def positions_resp(self):  # right key, v2 field
-            return {"positions": self.positions}
-    rows = [{"ticker": "KX-A", "position_fp": "-40.00"}]
-    m, _, _ = _mgr(client=LegacyKeyClient(balance_cents=10_000, positions=rows))
-    assert await m._get_portfolio_value() > 100.0
+async def test_portfolio_value_counts_v2_market_positions_using_exposure_dollars():
+    m, _, _ = _mgr(client=FakeClient(balance_cents=10_000, positions=[_FP]))
+    assert await m._get_portfolio_value() == pytest.approx(136.0)
 
 
-async def test_portfolio_value_with_legacy_quantity_field_values_at_half_dollar():
-    # Documents the legacy path that does work: only because the test feeds the old shape.
+async def test_portfolio_value_estimates_from_position_fp_without_exposure():
+    row = {"ticker": "KX-A", "position_fp": "-40.00"}
+    m, _, _ = _mgr(client=FakeClient(balance_cents=10_000, positions=[row]))
+    assert await m._get_portfolio_value() == pytest.approx(100.0 + 20.0)
+
+
+async def test_portfolio_value_ignores_legacy_positions_key():
     class LegacyKeyClient(FakeClient):
         def positions_resp(self):
-            return {"positions": self.positions}
-    m, _, _ = _mgr(client=LegacyKeyClient(balance_cents=10_000, positions=[{"quantity": -10}]))
+            return {"positions": [{"quantity": -10}]}
+    m, _, _ = _mgr(client=LegacyKeyClient(balance_cents=10_000))
+    assert await m._get_portfolio_value() == pytest.approx(100.0)
+
+
+async def test_portfolio_value_skips_malformed_rows_and_keeps_real_cash():
+    rows = [{"position_fp": None, "ticker": "A"}, "junk", {"position_fp": "abc"},
+            {"position_fp": "nan"}, {"position_fp": "0.00"}, _FP]
+    m, _, _ = _mgr(client=FakeClient(balance_cents=500_000, positions=rows))
+    assert await m._get_portfolio_value() == pytest.approx(5036.0)
+
+
+async def test_portfolio_value_bad_exposure_falls_back_to_estimate():
+    row = {"position_fp": "10.00", "market_exposure_dollars": "oops"}
+    m, _, _ = _mgr(client=FakeClient(balance_cents=10_000, positions=[row]))
     assert await m._get_portfolio_value() == pytest.approx(105.0)
 
 
-@pytest.mark.xfail(strict=True, reason="A None 'quantity' raises inside the loop and the whole "
-                   "portfolio value collapses to the $100 fallback regardless of real cash "
-                   "(position_limits.py:~243-245).")
-async def test_one_bad_position_row_does_not_discard_real_cash():
-    class LegacyKeyClient(FakeClient):
-        def positions_resp(self):
-            return {"positions": self.positions}
-    m, _, _ = _mgr(client=LegacyKeyClient(balance_cents=500_000, positions=[{"quantity": None}]))
-    assert await m._get_portfolio_value() == pytest.approx(5000.0)
+async def test_held_positions_raise_the_size_cap():
+    m, _, _ = _mgr(client=FakeClient(balance_cents=10_000, positions=[_FP]))
+    r = await m.check_position_limits(6.0)  # cap = 5% of $136 = $6.80
+    assert r.can_trade is True and r.max_position_size == pytest.approx(6.8)
 
 
 async def test_balance_is_read_as_cents_matching_kalshi_balance_field():
@@ -278,25 +275,23 @@ async def test_balance_is_read_as_cents_matching_kalshi_balance_field():
 
 # ------------------------------------------------ settings agreement
 
-@pytest.mark.xfail(strict=True, reason="Manager hard-codes max_positions=15 while settings.trading."
-                   "max_positions=10 (position_limits.py:~55 vs settings.py:73). The gate allows "
-                   "5 more positions than the configured policy.")
-def test_max_positions_matches_settings():
+def test_max_positions_comes_from_settings(monkeypatch):
+    monkeypatch.setattr(settings.trading, "max_positions", 4)
     m, _, _ = _mgr()
-    assert m.max_positions == settings.trading.max_positions
+    assert m.max_positions == 4 and m.warning_threshold == 1
 
 
-@pytest.mark.xfail(strict=True, reason="Manager hard-codes max_position_size_pct=5.0; settings."
-                   "trading.max_position_size_pct=10.0 (Ryan-approved 2026-09-28). Safe direction "
-                   "but the two sources of truth drift.")
-def test_max_position_size_pct_matches_settings():
-    m, _, _ = _mgr()
-    assert m.max_position_size_pct == settings.trading.max_position_size_pct
+def test_size_pct_is_the_tighter_of_module_cap_and_settings(monkeypatch):
+    monkeypatch.setattr(settings.trading, "max_position_size_pct", 2.0)
+    assert _mgr()[0].max_position_size_pct == 2.0
+    monkeypatch.setattr(settings.trading, "max_position_size_pct", 10.0)
+    assert _mgr()[0].max_position_size_pct == 5.0
 
 
-def test_manager_is_never_looser_than_settings_on_size():
+def test_manager_is_never_looser_than_settings():
     m, _, _ = _mgr()
     assert m.max_position_size_pct <= settings.trading.max_position_size_pct
+    assert m.max_positions == settings.trading.max_positions
 
 
 # ----------------------------------------------------- usage-reason text
@@ -315,29 +310,46 @@ async def test_usage_limit_reason_matches_threshold():
 
 # ------------------------------------------------------------ enforcement
 
+def m_cap():
+    return PositionLimitsManager(FakeDB(), FakeClient()).max_positions
+
+
 async def test_enforce_noop_within_limits_touches_nothing():
-    m, client, db = _mgr(db=FakeDB([_pos(i) for i in range(15)]))
+    m, client, db = _mgr(db=FakeDB([_pos(i) for i in range(m_cap())]))
     out = await m.enforce_position_limits()
     assert out["action"] == "no_action_needed"
     assert db.status_updates == [] and client.calls == []
 
 
-async def test_enforce_closes_only_the_excess_riskiest_first_and_places_no_order():
-    good = [_pos(i, confidence=0.9, age_h=1, qty=1, stop=0.4) for i in range(15)]
-    bad = _pos(99, confidence=0.4, age_h=100, qty=500, stop=None)  # highest priority
+async def test_enforce_over_limit_reports_candidates_and_writes_nothing():
+    good = [_pos(i, confidence=0.9, age_h=1, qty=1, stop=0.4) for i in range(m_cap())]
+    bad = _pos(99, confidence=0.4, age_h=100, qty=500, stop=None)  # riskiest
     m, client, db = _mgr(db=FakeDB(good + [bad]))
     out = await m.enforce_position_limits()
-    assert out["action"] == "positions_closed" and out["positions_closed"] == 1
-    assert out["closed_markets"] == ["KX-99"]
-    assert db.status_updates == [(99, "closed")]
-    assert client.calls == []  # no order / cancel / sell was issued
+    assert out["action"] == "over_limit_manual_review"
+    assert out["over_limit_count"] == 1
+    assert out["candidates"] == ["KX-99"]
+    assert "positions_closed" not in out and "closed_markets" not in out
+    assert db.status_updates == []          # no DB row marked closed
+    assert client.calls == []               # no order / cancel / sell
 
 
-async def test_force_closure_trims_down_to_warning_threshold():
-    m, client, db = _mgr(db=FakeDB([_pos(i) for i in range(15)]))
+async def test_enforce_over_limit_logs_a_warning():
+    m, _, _ = _mgr(db=FakeDB([_pos(i) for i in range(m_cap() + 1)]))
+    warnings = []
+    m.logger = type("L", (), {"warning": lambda self, msg, *a, **k: warnings.append(msg),
+                              "error": lambda *a, **k: None, "info": lambda *a, **k: None})()
+    await m.enforce_position_limits()
+    assert warnings and "Manual review" in warnings[0]
+
+
+async def test_force_closure_reviews_down_to_warning_threshold_without_writes():
+    m, client, db = _mgr(db=FakeDB([_pos(i) for i in range(m_cap())]))
     out = await m.enforce_position_limits(force_closure=True)
-    assert out["positions_closed"] == 15 - m.warning_threshold
-    assert client.calls == []
+    assert out["action"] == "over_limit_manual_review"
+    assert len(out["candidates"]) == m.max_positions - m.warning_threshold
+    assert out["over_limit_count"] == 0
+    assert db.status_updates == [] and client.calls == []
 
 
 async def test_enforce_db_error_returns_error_action():
@@ -346,27 +358,8 @@ async def test_enforce_db_error_returns_error_action():
     assert out["action"] == "error"
 
 
-@pytest.mark.xfail(strict=True, reason="_close_position swallows its exception and returns False, "
-                   "but enforce_position_limits appends the market to closed_positions without "
-                   "checking the return value (position_limits.py:~170-175): a failed close is "
-                   "reported as closed.")
-async def test_failed_close_is_not_reported_as_closed():
-    class BoomDB(FakeDB):
-        async def update_position_status(self, *a):
-            raise RuntimeError("write failed")
-    m, _, _ = _mgr(db=BoomDB([_pos(i) for i in range(16)]))
-    out = await m.enforce_position_limits()
-    assert out["positions_closed"] == 0
-
-
-@pytest.mark.xfail(strict=True, reason="'Closing' a position only flips the DB row to 'closed'; no "
-                   "sell is sent, so the real Kalshi position stays open while the bot believes "
-                   "it is flat (position_limits.py:~345-358). Limit enforcement is bookkeeping, "
-                   "not exposure reduction.")
-async def test_enforcement_actually_reduces_exposure_at_the_exchange():
-    m, client, db = _mgr(db=FakeDB([_pos(i) for i in range(16)]))
-    await m.enforce_position_limits()
-    assert any("order" in c or "sell" in c for c in client.calls)
+def test_manager_has_no_db_closing_path():
+    assert not hasattr(PositionLimitsManager, "_close_position")
 
 
 async def test_closure_priority_ranking_factors():
@@ -388,16 +381,15 @@ async def test_check_can_add_position_wrapper_matches_manager():
         1.0, FakeDB(), FakeClient(balance_cents=100_000))
     assert ok is True and reason == "Position limits satisfied"
     ok, reason = await check_can_add_position(
-        1.0, FakeDB([_pos(i) for i in range(15)]), FakeClient(balance_cents=100_000))
+        1.0, FakeDB([_pos(i) for i in range(m_cap())]), FakeClient(balance_cents=100_000))
     assert ok is False
 
 
-async def test_enforce_limits_if_needed_only_above_max_and_never_orders():
+async def test_enforce_limits_if_needed_never_writes_or_orders():
     client = FakeClient()
-    assert await enforce_limits_if_needed(FakeDB([_pos(i) for i in range(15)]), client) is False
-    db = FakeDB([_pos(i) for i in range(16)])
-    assert await enforce_limits_if_needed(db, client) is True
-    assert len(db.status_updates) == 1 and client.calls == []
+    db = FakeDB([_pos(i) for i in range(m_cap() + 1)])
+    assert await enforce_limits_if_needed(db, client) is False  # nothing was enforced
+    assert db.status_updates == [] and client.calls == []
 
 
 async def test_get_max_position_size_is_pct_of_portfolio():
