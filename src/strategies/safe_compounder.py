@@ -740,7 +740,7 @@ class SafeCompounder:
                 )
                 order = r.get("order", {})
                 status = order.get("status", "resting")
-                filled = _to_int_count(order.get("fill_count", 0))
+                filled = _to_int_count(order.get("fill_count_fp", order.get("fill_count", 0)))
 
                 if filled > 0:
                     stats["filled"] += filled
