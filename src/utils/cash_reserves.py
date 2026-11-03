@@ -301,7 +301,7 @@ class CashReservesManager:
             return {'status': 'ERROR', 'message': str(e)}
     
     async def _get_portfolio_value(self) -> float:
-        """Calculate total portfolio value (cash + positions)."""
+        """Calculate total portfolio value (cash + positions). Raises if it cannot be read."""
         try:
             # Get available cash
             balance_response = await self.kalshi_client.get_balance()
@@ -319,8 +319,11 @@ class CashReservesManager:
             return available_cash + total_position_value
             
         except Exception as e:
+            # No fallback value: an invented denominator (it used to be $100)
+            # overstates the reserve when cash is larger and lets small trades
+            # through. Callers fail closed on the raise.
             self.logger.error(f"Error calculating portfolio value: {e}")
-            return 100.0  # Conservative fallback
+            raise
     
     POSITIONS_PAGE_LIMIT = 200
     POSITIONS_MAX_PAGES = 20
@@ -328,7 +331,7 @@ class CashReservesManager:
     async def _fetch_all_positions(self) -> List[Any]:
         """Every ``market_positions`` row, following the cursor.
 
-        Raises (so the caller's fail-closed fallback applies) on an unreadable
+        Raises (so every caller fails closed) on an unreadable
         page, a repeated cursor, a failed later page, or more than
         POSITIONS_MAX_PAGES pages. Never returns a partial list: an undervalued
         book would overstate the reserve %.

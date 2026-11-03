@@ -344,11 +344,12 @@ async def test_malformed_rows_are_skipped_not_zeroing_the_portfolio():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("resp", [[1, 2], {"positions": [{"quantity": 5}]}, {"market_positions": None}, {}])
-async def test_unreadable_positions_shape_falls_back_not_to_cash_only(resp):
+async def test_unreadable_positions_shape_raises_not_cash_only(resp):
     # Missing/legacy shape must not be read as "no positions" (that would
-    # overstate the reserve); it takes the $100 conservative fallback.
+    # overstate the reserve) nor replaced by an invented value: it raises.
     c = FakeClient(balance=500_000, positions=resp)
-    assert await mgr(c)._get_portfolio_value() == 100.0
+    with pytest.raises(ValueError, match="market_positions"):
+        await mgr(c)._get_portfolio_value()
 
 
 @pytest.mark.asyncio
@@ -369,9 +370,10 @@ async def test_flat_position_with_exposure_is_not_counted():
 
 
 @pytest.mark.asyncio
-async def test_portfolio_value_error_falls_back_to_100_dollars():
+async def test_portfolio_value_balance_error_raises_no_invented_value():
     c = FakeClient(balance_exc=RuntimeError("x"))
-    assert await mgr(c)._get_portfolio_value() == 100.0
+    with pytest.raises(RuntimeError):
+        await mgr(c)._get_portfolio_value()
 
 
 # -------------------------------------------------- v2 drift (#101): BUGS
@@ -726,7 +728,7 @@ async def test_second_page_changes_the_gate_decision():
 
 
 @pytest.mark.asyncio
-async def test_page_cap_raises_and_falls_back_not_partial_sum():
+async def test_page_cap_raises_not_partial_sum():
     pages = {None: {"market_positions": [_row(0)], "cursor": "p1"}}
     for i in range(1, 40):
         pages[f"p{i}"] = {"market_positions": [_row(i)], "cursor": f"p{i + 1}"}
@@ -734,9 +736,9 @@ async def test_page_cap_raises_and_falls_back_not_partial_sum():
     with pytest.raises(ValueError, match="more than 20 pages"):
         await mgr(c)._fetch_all_positions()
     assert len(c.kwargs) == 20                              # exactly the cap, no more
-    assert await mgr(c)._get_portfolio_value() == 100.0     # fail-closed fallback, not 20 pages' sum
-    r = await mgr(c).check_cash_reserves(50.0)
-    assert r.can_trade is False                             # $50 of the $100 fallback
+    with pytest.raises(ValueError, match="more than 20 pages"):
+        await mgr(c)._get_portfolio_value()                 # raises, not 20 pages' sum
+    assert (await mgr(c).check_cash_reserves(4.0)).can_trade is False
 
 
 @pytest.mark.asyncio
@@ -750,19 +752,20 @@ async def test_exactly_cap_pages_is_accepted():
 
 
 @pytest.mark.asyncio
-async def test_failure_on_page_two_falls_back_not_partial_sum():
+async def test_failure_on_page_two_raises_not_partial_sum():
     c = PagedClient({None: {"market_positions": [_row(1)], "cursor": "c2"}},
                     fail_cursor="c2", balance=10_000_000)
-    assert await mgr(c)._get_portfolio_value() == 100.0
-    r = await mgr(c).check_cash_reserves(50.0)
-    assert r.can_trade is False
+    with pytest.raises(RuntimeError, match="page 2 failed"):
+        await mgr(c)._get_portfolio_value()
+    assert (await mgr(c).check_cash_reserves(4.0)).can_trade is False
 
 
 @pytest.mark.asyncio
-async def test_malformed_page_two_falls_back():
+async def test_malformed_page_two_raises():
     c = PagedClient({None: {"market_positions": [_row(1)], "cursor": "c2"},
                      "c2": {"oops": 1}}, balance=10_000_000)
-    assert await mgr(c)._get_portfolio_value() == 100.0
+    with pytest.raises(ValueError, match="market_positions"):
+        await mgr(c)._get_portfolio_value()
 
 
 @pytest.mark.asyncio
@@ -771,3 +774,63 @@ async def test_repeated_cursor_raises():
                      "c2": {"market_positions": [_row(2)], "cursor": "c2"}}, balance=10_000)
     with pytest.raises(ValueError, match="repeated cursor"):
         await mgr(c)._fetch_all_positions()
+
+
+# ------------------------------- positions unreadable => gate blocks (no $100 fallback)
+
+def _positions_fail_clients():
+    """Each: $500 cash, positions unreadable in a different way."""
+    cap = {None: {"market_positions": [_row(0)], "cursor": "p1"}}
+    for i in range(1, 40):
+        cap[f"p{i}"] = {"market_positions": [_row(i)], "cursor": f"p{i + 1}"}
+    return {
+        "read_error": FakeClient(balance=50_000, positions_exc=RuntimeError("boom")),
+        "missing_key": FakeClient(balance=50_000, positions={"positions": []}),
+        "not_a_list": FakeClient(balance=50_000, positions={"market_positions": None}),
+        "page2_failure": PagedClient({None: {"market_positions": [_row(1)], "cursor": "c2"}},
+                                     fail_cursor="c2", balance=50_000),
+        "cap_hit": PagedClient(cap, balance=50_000),
+        "repeated_cursor": PagedClient({None: {"market_positions": [_row(1)], "cursor": "c2"},
+                                        "c2": {"market_positions": [], "cursor": "c2"}}, balance=50_000),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", list(_positions_fail_clients()))
+async def test_unreadable_positions_block_a_small_trade_with_ample_cash(case):
+    """$500 cash, positions unreadable, $4 trade (0.8% of cash). The old $100
+    fallback read this as a 500% reserve and a 4% impact => approved."""
+    c = _positions_fail_clients()[case]
+    r = await mgr(c).check_cash_reserves(4.0)
+    assert r.can_trade is False
+    assert r.emergency_status is True
+    assert r.reason.startswith("Error checking cash reserves:")
+    ok, reason = await check_can_trade_with_cash_reserves(4.0, FakeDB(), _positions_fail_clients()[case])
+    assert ok is False and "Error checking cash reserves" in reason
+
+
+@pytest.mark.asyncio
+async def test_unreadable_positions_reason_carries_the_error():
+    c = FakeClient(balance=50_000, positions_exc=RuntimeError("positions 503"))
+    r = await mgr(c).check_cash_reserves(4.0)
+    assert "positions 503" in r.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", list(_positions_fail_clients()))
+async def test_unreadable_positions_make_status_error_and_emergency(case):
+    clients = _positions_fail_clients()
+    s = await mgr(clients[case]).get_cash_status()
+    assert s["status"] == "ERROR" and "emergency_status" not in s
+    assert await is_cash_emergency(FakeDB(), _positions_fail_clients()[case]) is True
+    a = await mgr(_positions_fail_clients()[case]).handle_cash_emergency()
+    assert (a.action_type, a.urgency) == ("halt_trading", "critical")
+    assert await get_max_trade_size_for_reserves(FakeDB(), _positions_fail_clients()[case]) == 0
+
+
+@pytest.mark.asyncio
+async def test_readable_positions_still_approve_the_same_trade():
+    """Control for the scenario above: same $500 cash and $4 trade is approved
+    when positions read fine, so the block is the read failure, not the size."""
+    c = FakeClient(balance=50_000)
+    assert (await mgr(c).check_cash_reserves(4.0)).can_trade is True
