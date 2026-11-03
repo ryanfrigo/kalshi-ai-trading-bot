@@ -25,6 +25,8 @@ def _avg_fill_price(order: Dict[str, Any], filled: float) -> float:
     (https://docs.kalshi.com/api-reference/orders/get-order). If either fails to
     parse as a finite number we fall back to the limit price.
     """
+    if filled <= 0:
+        return 0.0  # nothing filled (the costs are "0.0000"): no average to take
     try:
         cost = float(order["taker_fill_cost_dollars"]) + float(order["maker_fill_cost_dollars"])
     except (KeyError, TypeError, ValueError):
@@ -48,14 +50,17 @@ def _resolve_one(rec: Dict[str, Any], found: Any) -> Tuple[Dict[str, Any], str]:
     try:
         filled = _fill(found)
         oid = found.get("order_id")
-        price = _avg_fill_price(found, filled) or float(
-            found.get(f"{rec.get('side')}_price_dollars") or rec["price"])
     except (KeyError, TypeError, ValueError):
         return rec, ""
     if filled > 0:
         # A non-terminal order short of the intended count may fill more: keep it
         # pending so a later pass captures the rest.
         if found.get("status") not in _TERMINAL and filled < int(rec.get("count", 0)):
+            return rec, ""
+        try:
+            price = _avg_fill_price(found, filled) or float(
+                found.get(f"{rec.get('side')}_price_dollars") or rec["price"])
+        except (KeyError, TypeError, ValueError):
             return rec, ""
         if not oid or not math.isfinite(price):
             return rec, ""

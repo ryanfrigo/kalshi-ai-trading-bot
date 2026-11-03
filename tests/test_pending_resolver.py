@@ -30,7 +30,8 @@ class FakeClient:
 
 def _order(fill, status, coid="c-1", price="0.88"):
     return {"order_id": "oid-9", "client_order_id": coid, "status": status,
-            "fill_count_fp": fill, "no_price_dollars": price}
+            "fill_count_fp": fill, "no_price_dollars": price,
+            "taker_fill_cost_dollars": "0.0000", "maker_fill_cost_dollars": "0.0000"}
 
 
 def _run(recs, client):
@@ -160,3 +161,39 @@ def test_fractional_fill_keeps_the_float_count():
     assert r["count"] == 2.5 and r["original_count"] == 10
     (r,), _ = _run([_rec()], FakeClient(live=[_order("10.00", "executed")]))
     assert r["count"] == 10 and isinstance(r["count"], int)
+
+
+def test_zero_fill_canceled_with_cost_fields_is_voided_not_a_crash():
+    o = _order("0.00", "canceled")
+    assert o["taker_fill_cost_dollars"] == "0.0000"  # as the real API sends it
+    (r,), ch = _run([_rec()], FakeClient(live=[o]))
+    assert r["voided"] is True and ch[0]["change"] == "voided (canceled)"
+
+
+def test_zero_fill_resting_with_cost_fields_stays_pending_not_a_crash():
+    (r,), ch = _run([_rec()], FakeClient(live=[_order("0.00", "resting")]))
+    assert is_pending(r) and not r.get("voided") and ch == []
+
+
+def test_missing_side_price_and_bad_costs_fall_back_to_record_price_exactly():
+    o = _order("10.00", "executed")
+    del o["no_price_dollars"]
+    o.update(taker_fill_cost_dollars="oops", maker_fill_cost_dollars="1.0")
+    (r,), _ = _run([_rec()], FakeClient(live=[o]))
+    assert r["price"] == 0.90 and r["order_id"] == "oid-9"
+
+
+def test_zero_costs_with_fill_fall_back_to_limit_price_not_zero():
+    o = _order("10.00", "executed", price="0.88")  # costs default to "0.0000"
+    (r,), _ = _run([_rec()], FakeClient(live=[o]))
+    assert r["price"] == 0.88
+
+
+def test_executed_below_intended_still_resolves():
+    (r,), _ = _run([_rec()], FakeClient(live=[_order("4.00", "executed")]))
+    assert r["count"] == 4 and r["original_count"] == 10 and not is_pending(r)
+
+
+def test_avg_fill_price_with_zero_fill_returns_zero_not_a_crash():
+    from src.agent.pending import _avg_fill_price
+    assert _avg_fill_price(_order("0.00", "canceled"), 0.0) == 0.0
