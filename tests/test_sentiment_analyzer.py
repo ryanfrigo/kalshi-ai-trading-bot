@@ -11,7 +11,6 @@ Bugs found are pinned as strict xfails at the bottom, with file:line in the reas
 
 import asyncio
 import json
-import math
 from types import SimpleNamespace
 
 import pytest
@@ -211,10 +210,13 @@ def test_parse_wrong_shapes_raise_rather_than_return_a_value(content, exc):
         parse(content)
 
 
-def test_parse_infinite_score_clamps_to_the_extreme():
-    # json.loads accepts the non-standard token Infinity; clamping makes it +/-1.
-    assert parse('{"score": Infinity}').score == 1.0
-    assert parse('{"score": -Infinity}').score == -1.0
+@pytest.mark.parametrize(
+    "body",
+    ['{"score": Infinity}', '{"score": -Infinity}', '{"score": 0.5, "confidence": Infinity}'],
+)
+def test_parse_infinite_values_are_rejected(body):
+    with pytest.raises(ValueError, match="Non-finite"):
+        parse(body)
 
 
 # ----------------------------------------------------- analyze_sentiment: cache + failure
@@ -452,14 +454,6 @@ async def test_summary_swallows_unexpected_internal_errors(make, monkeypatch):
     assert out.startswith("Sentiment analysis unavailable")
 
 
-async def test_summary_never_leaks_a_numeric_signal_when_model_calls_fail(make):
-    # The failure strings carry no score; nothing downstream can mistake them
-    # for sentiment.
-    analyzer, _ = make([RuntimeError("down")], news=FakeNews([(art(), 1.0)]))
-    out = await analyzer.get_market_sentiment_summary("Q?")
-    assert "weighted score" not in out and "positive" not in out.lower()
-
-
 async def test_hung_model_is_cut_off_by_deciders_timeout(make):
     # decide.py wraps the summary in wait_for(timeout=30). The analyzer adds no
     # timeout of its own beyond the OpenAI client's, so a hang surfaces there.
@@ -485,46 +479,39 @@ def test_format_summary_zero_articles():
 
 
 # ============================================================================
-# Bugs found. Strict xfails: they flip to a failure (XPASS) when fixed.
+# Bugs found. Fixed ones are plain tests; the two open design calls stay as
+# strict xfails that flip to a failure (XPASS) when fixed.
 # ============================================================================
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "sentiment_analyzer.py:348-353 json.loads accepts the non-standard token NaN and "
-    "max(-1.0, min(1.0, nan)) evaluates to 1.0, so a model reply of "
-    '{"score": NaN, "confidence": NaN} becomes score=+1.0 confidence=1.0: maximally '
-    "confident bullish from garbage"))
-def test_nan_reply_is_rejected_not_turned_into_max_confidence_bullish():
-    try:
-        r = parse('{"score": NaN, "confidence": NaN, "reasoning": "x"}')
-    except (ValueError, TypeError):
-        return  # rejecting is correct
-    assert not (r.score == 1.0 and r.confidence == 1.0)
-    assert not math.isnan(r.score)
+@pytest.mark.parametrize(
+    "body",
+    ['{"score": NaN, "confidence": NaN}', '{"score": NaN}', '{"score": 0.5, "confidence": NaN}'],
+)
+def test_nan_reply_is_rejected_not_turned_into_max_confidence_bullish(body):
+    with pytest.raises(ValueError, match="Non-finite"):
+        parse(body)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "sentiment_analyzer.py:155-160,186-191 when every per-article "
-    "model call fails, analyze_market_sentiment skips them all and returns "
-    "num_articles=0, which _format_summary (:371-376) renders as 'No relevant news "
-    "articles found ... neutral (no signal)'. Articles WERE found; the model failed. "
-    "decide.py then gets a non-None string, so it never falls back to the xAI search"))
-async def test_all_model_calls_failing_is_reported_as_unavailable_not_no_news(make):
+async def test_nan_reply_is_a_parse_failure_that_is_skipped_and_not_cached(make):
+    analyzer, _ = make(['{"score": NaN, "confidence": NaN}', reply(0.2)])
+    ms = await analyzer.analyze_market_sentiment("Q?", [art("a")])
+    assert ms.num_articles == 0
+    assert (await analyzer.analyze_sentiment("a. Officials kept rates steady.", "Q?")).score == 0.2
+
+
+async def test_all_model_calls_failing_returns_none_so_decide_falls_back(make):
     news = FakeNews([(art("Rates cut"), 0.9), (art("Jobs"), 0.8)])
     analyzer, _ = make([RuntimeError("401 bad key")], news=news)
-    out = await analyzer.get_market_sentiment_summary("Q?")
-    assert "No relevant news articles found" not in out
-    assert "unavailable" in out.lower()
+    # None is what decide.py treats as "no news_summary": it falls back to xAI search.
+    assert await analyzer.get_market_sentiment_summary("Q?") is None
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "sentiment_analyzer.py:398 `\"positive\" if score > 0 else \"negative\"` labels an "
-    "exactly-neutral 0.0 article '[negative +0.00]'"))
 async def test_neutral_article_is_not_labelled_negative(make):
     news = FakeNews([(art("Meh"), 1.0)])
     analyzer, _ = make([reply(0.0)], news=news)
     out = await analyzer.get_market_sentiment_summary("Q?")
-    assert "[negative" not in out
+    assert "[neutral +0.00]" in out and "[negative" not in out and "[positive" not in out
 
 
 @pytest.mark.xfail(strict=True, reason=(
@@ -550,21 +537,17 @@ async def test_single_barely_relevant_article_is_not_reported_as_strong_signal(m
     assert "Overall sentiment: positive" not in out
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "sentiment_analyzer.py:137,155 relevance_scores shorter than articles is "
-    "silently truncated by zip(): every article still costs a model call but the extras "
-    "are dropped from the result with no error"))
 async def test_mismatched_relevance_scores_length_is_an_error(make):
-    analyzer, _ = make([reply(0.5)])
-    with pytest.raises(ValueError):
+    analyzer, client = make([reply(0.5)])
+    with pytest.raises(ValueError, match="relevance_scores"):
         await analyzer.analyze_market_sentiment(
             "Q?", [art("a"), art("b"), art("c")], relevance_scores=[1.0]
         )
+    assert client.calls == []  # raised before any (billed) model call
+    with pytest.raises(ValueError):  # too many is just as wrong
+        await analyzer.analyze_market_sentiment("Q?", [art("a")], relevance_scores=[1.0, 1.0])
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "sentiment_analyzer.py:81,103,106 settings.sentiment.cache_ttl_minutes is logged but "
-    "never applied: self._cache entries have no timestamp and never expire"))
 async def test_cache_entries_expire_after_cache_ttl(make, monkeypatch):
     import time as real_time
 
@@ -578,3 +561,17 @@ async def test_cache_entries_expire_after_cache_ttl(make, monkeypatch):
     monkeypatch.setattr(real_time, "monotonic", lambda: later)
     await analyzer.analyze_sentiment("t", "m")
     assert len(client.calls) == 2
+
+
+async def test_cache_entry_is_still_served_just_inside_the_ttl(make, monkeypatch):
+    import time as real_time
+
+    analyzer, client = make()
+    now = real_time.monotonic()
+    monkeypatch.setattr(real_time, "monotonic", lambda: now)
+    await analyzer.analyze_sentiment("t", "m")
+    monkeypatch.setattr(
+        real_time, "monotonic", lambda: now + settings.sentiment.cache_ttl_minutes * 60 - 1
+    )
+    await analyzer.analyze_sentiment("t", "m")
+    assert len(client.calls) == 1
