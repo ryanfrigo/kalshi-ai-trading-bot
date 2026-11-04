@@ -102,3 +102,10 @@ def test_a_refused_sell_is_not_counted_as_an_order_placed():
     res, sold = run({"A": market(), "B": market()}, sell_refuses={"A"})
     assert sold == ["A", "B"]
     assert res == {"orders_placed": 1, "positions_processed": 2}
+
+
+def test_a_zero_bid_never_triggers_a_stop_sell_at_zero():
+    # No bid reads as a 100% loss; selling at $0 would give the position away.
+    res, sold = run({"A": market(no_bid="0.0000"), "B": market()})
+    assert sold == ["B"]
+    assert res == {"orders_placed": 1, "positions_processed": 2}
