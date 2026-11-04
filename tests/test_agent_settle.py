@@ -90,3 +90,53 @@ def test_integral_settlement_count_stays_int():
          "result": "yes", "cost": 1.2, "revenue": 300.0, "fee": 0.0, "pnl": 1.8}
     count = settlement_to_record(s)["count"]
     assert count == 3 and isinstance(count, int)
+
+
+# ---------------------------------------------------------------------------
+# fractional fixed-point counts from the settlements API ("0.40", "2.50")
+# ---------------------------------------------------------------------------
+
+
+def test_sub_contract_yes_position_is_kept():
+    rec = {"ticker": "X", "market_result": "yes",
+           "yes_count_fp": "0.40", "no_count_fp": "0.00",
+           "yes_total_cost_dollars": "0.16", "no_total_cost_dollars": "0.0",
+           "revenue": 40, "fee_cost": "0"}
+    out = settlement_pnl(rec)
+    assert out["held_side"] == "yes"
+    assert out["count"] == pytest.approx(0.4)
+    assert out["won"] is True
+    assert out["pnl"] == pytest.approx(0.24)
+
+
+def test_fractional_yes_count_prices_the_record():
+    rec = {"ticker": "X", "market_result": "yes",
+           "yes_count_fp": "2.50", "no_count_fp": "0.00",
+           "yes_total_cost_dollars": "1.00", "no_total_cost_dollars": "0.0",
+           "revenue": 250, "fee_cost": "0"}
+    out = settlement_pnl(rec)
+    assert out["count"] == pytest.approx(2.5)
+    row = settlement_to_record(out)
+    assert row["price"] == pytest.approx(0.40)
+    assert row["count"] == pytest.approx(2.5)
+
+
+def test_integral_no_count_stays_int():
+    rec = {"ticker": "X", "market_result": "no",
+           "yes_count_fp": "0.00", "no_count_fp": "16.00",
+           "yes_total_cost_dollars": "0.0", "no_total_cost_dollars": "15.20",
+           "revenue": 1600, "fee_cost": "0"}
+    count = settlement_pnl(rec)["count"]
+    assert count == 16 and isinstance(count, int)
+
+
+def test_sub_contract_no_lost_full_loss():
+    rec = {"ticker": "X", "market_result": "yes",
+           "yes_count_fp": "0.00", "no_count_fp": "0.30",
+           "yes_total_cost_dollars": "0.0", "no_total_cost_dollars": "0.15",
+           "revenue": 0, "fee_cost": "0"}
+    out = settlement_pnl(rec)
+    assert out["held_side"] == "no"
+    assert out["won"] is False
+    assert out["count"] == pytest.approx(0.3)
+    assert out["pnl"] == pytest.approx(-0.15)

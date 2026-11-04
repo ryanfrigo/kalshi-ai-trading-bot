@@ -26,10 +26,11 @@ def settlement_pnl(rec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     pnl = revenue - cost - fees. won = held side matched market_result.
     """
     yc, nc = _f(rec, "yes_count_fp"), _f(rec, "no_count_fp")
-    if yc < 0.5 and nc < 0.5:
+    if yc <= 0 and nc <= 0:
         return None
-    held_side = "yes" if yc >= 0.5 else "no"
-    count = int(round(yc if held_side == "yes" else nc))
+    held_side = "yes" if yc > 0 else "no"
+    x = yc if held_side == "yes" else nc
+    count = int(x) if x == int(x) else x
     result = rec.get("market_result")
     cost = _f(rec, "yes_total_cost_dollars") + _f(rec, "no_total_cost_dollars")
     fee = _f(rec, "fee_cost")
