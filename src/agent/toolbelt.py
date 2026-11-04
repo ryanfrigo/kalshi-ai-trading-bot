@@ -130,8 +130,9 @@ async def _committed_cents(kalshi_client, ticker: str, price_cents: int) -> int:
 
 async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
     """Structured situational awareness: governor verdict, equity, positions,
-    resting orders. Read-only. ``read_errors`` names any read that failed or was cut
-    short, so a listing with no matching entry there is complete."""
+    resting orders. Read-only. ``read_errors`` names reads this noticed failed or were
+    cut short. An empty list isn't proof of completeness: a response missing its list
+    key still reads as empty."""
     from src.risk.risk_governor import RiskGovernor
 
     gov = governor or RiskGovernor(kalshi_client=kalshi_client)
