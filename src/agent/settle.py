@@ -28,7 +28,7 @@ def settlement_pnl(rec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     yc, nc = _f(rec, "yes_count_fp"), _f(rec, "no_count_fp")
     if yc <= 0 and nc <= 0:
         return None
-    held_side = "yes" if yc > 0 else "no"
+    held_side = "yes" if yc >= nc else "no"
     x = yc if held_side == "yes" else nc
     count = int(x) if x == int(x) else x
     result = rec.get("market_result")

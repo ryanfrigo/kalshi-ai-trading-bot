@@ -140,3 +140,30 @@ def test_sub_contract_no_lost_full_loss():
     assert out["won"] is False
     assert out["count"] == pytest.approx(0.3)
     assert out["pnl"] == pytest.approx(-0.15)
+
+
+# ---------------------------------------------------------------------------
+# held side is the LARGER count, not merely "any yes"
+# ---------------------------------------------------------------------------
+
+
+def test_held_side_is_larger_no_count_when_both_sides_held():
+    rec = {"ticker": "X", "market_result": "no",
+           "yes_count_fp": "0.30", "no_count_fp": "2.00",
+           "no_total_cost_dollars": "1.00", "yes_total_cost_dollars": "0.10",
+           "revenue": 200, "fee_cost": "0"}
+    out = settlement_pnl(rec)
+    assert out["held_side"] == "no"
+    assert out["count"] == 2
+    assert out["won"] is True
+
+
+def test_held_side_is_larger_yes_count_when_both_sides_held():
+    rec = {"ticker": "X", "market_result": "yes",
+           "yes_count_fp": "3.00", "no_count_fp": "1.00",
+           "yes_total_cost_dollars": "1.50", "no_total_cost_dollars": "0.40",
+           "revenue": 300, "fee_cost": "0"}
+    out = settlement_pnl(rec)
+    assert out["held_side"] == "yes"
+    assert out["count"] == 3
+    assert out["won"] is True
