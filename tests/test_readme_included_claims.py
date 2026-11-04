@@ -143,14 +143,16 @@ def test_runtime_dir_expands_tilde(monkeypatch):
 # (6) halt-exempt sell is reduce-only + IOC
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "README says risk_governor.py enforces reduce_only + IOC; code enforces it "
-        "in src/clients/kalshi_client.py:97,112"
-    ),
-)
 def test_halt_exempt_sell_is_reduce_only_ioc():
-    source = (ROOT / "src/risk/risk_governor.py").read_text()
-    assert "reduce_only" in source
-    assert "immediate_or_cancel" in source
+    # The governor documents the halt exemption; the order payload builder in
+    # kalshi_client enforces IOC + reduce_only. Call the pure builder (no network).
+    from src.clients.kalshi_client import build_order_v2_payload
+
+    governor = (ROOT / "src/risk/risk_governor.py").read_text()
+    assert "reduce-only sell" in governor
+    payload = build_order_v2_payload(
+        ticker="KXTEST-1", client_order_id="t", side="yes", action="sell",
+        count=1, type_="limit", yes_price=40, reduce_only=True,
+    )
+    assert payload["time_in_force"] == "immediate_or_cancel"
+    assert payload["reduce_only"] is True
