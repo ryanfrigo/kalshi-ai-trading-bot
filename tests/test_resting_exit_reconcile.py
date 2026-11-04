@@ -372,3 +372,52 @@ def test_resolution_is_not_booked_while_an_exit_order_is_unreconciled(tmp_path):
     assert sorted(l.quantity for l in logs) == [4, 6]  # the sale (6) + settlement of the rest
     sale = next(l for l in logs if l.quantity == 6)
     assert sale.exit_price == pytest.approx(0.60)
+
+
+# --- exit order ids: missing id, read-failure reset, sub-cent fills ----------
+
+def _reconcile_fill(tmp_path, order):
+    from src.jobs.execute import reconcile_exit_fill
+
+    async def go():
+        db = await _db(tmp_path, exit_order=None)
+        (pos,) = await db.get_open_live_positions()
+        result = await reconcile_exit_fill(pos, {"order": order}, True, 0.60, db, "test")
+        return result, await _row(db), await db.get_all_trade_logs()
+    return asyncio.run(go())
+
+
+def test_a_resting_exit_without_an_order_id_stores_nothing(tmp_path):
+    result, row, logs = _reconcile_fill(tmp_path, {"status": "resting", "fill_count_fp": "0.00"})
+    assert result == "resting"
+    assert row == ("open", 10, None, None) and logs == []
+
+
+def test_a_partial_fill_without_an_order_id_still_books_the_sold_part(tmp_path):
+    result, row, logs = _reconcile_fill(tmp_path, {"status": "resting", "fill_count_fp": "4.00"})
+    assert result == "partial"
+    assert row == ("open", 6, None, None)
+    assert [l.quantity for l in logs] == [4]
+
+
+def test_a_sub_cent_fill_still_tracks_the_resting_exit(tmp_path):
+    # 0.004 rounds to 0 sold, but the order rests: its id must be kept so a later
+    # fill is booked instead of being settled a second time.
+    result, row, logs = _reconcile_fill(
+        tmp_path, {"order_id": "o7", "status": "resting", "fill_count_fp": "0.004"})
+    assert result == "partial"
+    assert row == ("open", 10, "o7", 0.004) and logs == []
+
+
+def test_a_partly_filled_exit_starts_with_zero_read_failures(tmp_path):
+    async def go():
+        db = await _db(tmp_path, exit_order=None)
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("UPDATE positions SET exit_order_read_failures = 2")
+            await conn.commit()
+        await place_profit_taking_orders(db, FakeKalshi(fill=4, yes_cents=60), live=True)
+        async with aiosqlite.connect(db.db_path) as conn:
+            cur = await conn.execute("SELECT exit_order_id, exit_order_read_failures "
+                                     "FROM positions WHERE market_id = 'RX-1'")
+            return await cur.fetchone()
+    assert asyncio.run(go()) == ("o1", 0)
