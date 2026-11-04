@@ -23,7 +23,7 @@ def market(no_bid="0.3000", status="active"):
     return {"market": {"status": status, "yes_bid_dollars": "0.0000", "no_bid_dollars": no_bid}}
 
 
-def run(responses, sell_raises=()):
+def run(responses, sell_raises=(), sell_refuses=()):
     """responses: ticker -> market body, or an Exception for get_market to raise."""
     db = MagicMock()
     db.get_open_live_positions = AsyncMock(return_value=[pos(t) for t in responses])
@@ -40,6 +40,8 @@ def run(responses, sell_raises=()):
     async def fake_sell(**kw):
         if kw["position"].market_id in sell_raises:
             raise RuntimeError("sell helper crashed")
+        if kw["position"].market_id in sell_refuses:
+            return False  # refused before sending: order_out stays empty
         kw["order_out"].update({"order_id": f"o-{kw['position'].market_id}"})
         return True
 
@@ -94,3 +96,9 @@ def test_a_failing_position_read_returns_empty_results():
         res = asyncio.run(place_stop_loss_orders(db, MagicMock(), stop_loss_threshold=-0.15, live=True))
     sell.assert_not_awaited()
     assert res == {"orders_placed": 0, "positions_processed": 0}
+
+
+def test_a_refused_sell_is_not_counted_as_an_order_placed():
+    res, sold = run({"A": market(), "B": market()}, sell_refuses={"A"})
+    assert sold == ["A", "B"]
+    assert res == {"orders_placed": 1, "positions_processed": 2}
