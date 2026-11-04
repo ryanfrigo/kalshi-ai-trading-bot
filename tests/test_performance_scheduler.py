@@ -214,3 +214,24 @@ def test_weekly_summary_default_message(monkeypatch):
 def test_get_scheduler_status_without_instance(monkeypatch):
     monkeypatch.setattr(ps, "_scheduler_instance", None)
     assert ps.get_scheduler_status() == {"running": False, "last_analysis": None}
+
+
+def test_module_imports_without_schedule_package():
+    import subprocess
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.modules['schedule'] = None; import src.jobs.performance_scheduler"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_start_without_schedule_raises_clear_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "schedule", None)
+    with pytest.raises(ImportError, match="pip install schedule"):
+        ps.PerformanceScheduler().start()
