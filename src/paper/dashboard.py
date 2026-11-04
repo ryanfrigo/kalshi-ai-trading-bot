@@ -99,16 +99,16 @@ def generate_html(output_path: str = None) -> str:
 </head>
 <body>
 <h1>📊 Paper Trading Dashboard</h1>
-<div class="mode-banner">📝 PAPER MODE — All positions and P&amp;L are <strong>simulated</strong>. No real money is at risk.</div>
+<div class="mode-banner">📝 PAPER MODE — All positions and P&amp;L are <strong>simulated</strong>. No real money is at risk. P&amp;L excludes Kalshi trading fees.</div>
 <p class="subtitle">Kalshi AI Trading Bot — Signal tracker &amp; hypothetical P&amp;L · Updated {now}</p>
 
 <div class="stats">
   <div class="stat"><div class="value">{stats['total_signals']}</div><div class="label">Total Signals</div></div>
   <div class="stat"><div class="value">{stats['settled']}</div><div class="label">Settled</div></div>
   <div class="stat"><div class="value">{stats['pending']}</div><div class="label">Pending</div></div>
-  <div class="stat"><div class="value">{stats['win_rate']}%</div><div class="label">Win Rate</div></div>
-  <div class="stat"><div class="value {'pos' if stats['total_pnl']>=0 else 'neg'}">${stats['total_pnl']:.2f}</div><div class="label">Total P&amp;L</div></div>
-  <div class="stat"><div class="value">${stats['avg_return']:.4f}</div><div class="label">Avg Return / Trade</div></div>
+  <div class="stat"><div class="value">{stats['win_rate']}%</div><div class="label">Win Rate (before fees)</div></div>
+  <div class="stat"><div class="value {'pos' if stats['total_pnl']>=0 else 'neg'}">${stats['total_pnl']:.2f}</div><div class="label">Total P&amp;L (before fees)</div></div>
+  <div class="stat"><div class="value">${stats['avg_return']:.4f}</div><div class="label">Avg Return / Trade (before fees)</div></div>
   <div class="stat"><div class="value pos">${stats['best_trade']:.2f}</div><div class="label">Best Trade</div></div>
   <div class="stat"><div class="value neg">${stats['worst_trade']:.2f}</div><div class="label">Worst Trade</div></div>
 </div>
