@@ -136,11 +136,12 @@ async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
     from src.risk.risk_governor import RiskGovernor
 
     gov = governor or RiskGovernor(kalshi_client=kalshi_client)
-    decision = await gov.check()
 
     bal = await kalshi_client.get_balance()
     cash = int(bal.get("balance", 0) or 0)
     pv = int(bal.get("portfolio_value", 0) or 0)
+    # One balance reply for both, so read_errors describes what the governor computed from.
+    decision = await gov.check(current_equity_cents=cash + pv)
 
     read_errors = []
     if bal.get("balance") is None or bal.get("portfolio_value") is None:

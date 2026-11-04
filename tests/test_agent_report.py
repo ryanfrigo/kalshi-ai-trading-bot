@@ -263,3 +263,29 @@ def test_a_failed_balance_read_publishes_no_governor_figures_but_still_shows_the
     assert "| Drawdown since governor re-baseline (2026-09-25) | 100.0% |" in good
     assert "| Day P&L | -$500.00 |" in good
     assert "all-time drawdown includes" in good
+
+
+def test_corrupt_governor_state_publishes_no_drawdown_or_day_pnl():
+    gov = {"halted": True, "reasons": ["STATE_CORRUPT: /x/state.json"], "drawdown_pct": 0.0, "daily_pnl_cents": 50000}
+    md = _account_md(equity=500.0, cash=500.0, governor=gov)
+    assert "| Governor halted | YES |" in md and "| Equity | $500.00 |" in md
+    assert "Drawdown from peak" not in md and "Day P&L" not in md and "/x/state.json" not in md
+
+
+def test_a_true_zero_balance_still_publishes_its_drawdown():
+    gov = {"halted": True, "reasons": ["EQUITY_UNREADABLE: equity 0c is not a usable reading"],
+           "drawdown_pct": 100.0, "daily_pnl_cents": -50000}
+    md = _account_md(equity=0.0, cash=0.0, positions=[], governor=gov, read_errors=[])
+    assert "| Equity | $0.00 |" in md
+    assert "| Drawdown from peak | 100.0% |" in md and "| Day P&L | -$500.00 |" in md
+
+
+def test_other_halts_still_publish_their_figures():
+    gov = {"halted": True, "reasons": ["MANUAL_HALT: x", "DAILY_LOSS"], "drawdown_pct": 3.0, "daily_pnl_cents": -100}
+    md = _account_md(governor=gov)
+    assert "| Drawdown from peak | 3.0% |" in md and "| Day P&L | -$1.00 |" in md
+
+
+def test_a_governor_with_no_reasons_key_still_publishes_its_figures():
+    md = _account_md(governor={"halted": False, "drawdown_pct": 1.0, "daily_pnl_cents": 0})
+    assert "| Drawdown from peak | 1.0% |" in md

@@ -10,7 +10,11 @@ class FakeDecision:
 
 
 class FakeGovernor:
-    async def check(self):
+    def __init__(self):
+        self.equity = None
+
+    async def check(self, current_equity_cents=None):
+        self.equity = current_equity_cents
         return FakeDecision()
 
 
@@ -184,3 +188,38 @@ async def test_a_resting_row_that_is_no_dict_is_reported():
     b = await _brief(OrdersReplyClient({"orders": [None, {"ticker": "A"}]}, pages=[{"market_positions": []}]))
     assert [o["ticker"] for o in b["resting_orders"]] == ["A"]
     assert b["read_errors"] == ["resting_orders: bad row"]
+
+
+class CountingClient(FakeClient):
+    def __init__(self, bals, **kw):
+        super().__init__(**kw)
+        self.bals = list(bals)
+
+    async def get_balance(self):
+        return self.bals.pop(0)
+
+
+async def test_the_governor_gets_the_same_balance_reply_as_the_brief():
+    gov = FakeGovernor()
+    c = CountingClient([{"balance": 1000, "portfolio_value": 250}], pages=[{"market_positions": []}])
+    b = await account_brief(c, governor=gov)
+    assert gov.equity == 1250 and b["equity"] == 12.5 and c.bals == []
+
+
+async def test_an_empty_balance_reply_cannot_slip_past_with_a_real_governor(tmp_path):
+    from src.risk.risk_governor import RiskGovernor
+
+    state = tmp_path / "state.json"
+    gov = RiskGovernor(state_path=str(state), halt_flag_path=str(tmp_path / "halt"))
+    await gov.check(current_equity_cents=50000)
+    before = state.read_text()
+    # A second reply is here only to show it never gets read.
+    c = CountingClient(
+        [{"status_code": 200, "empty_body": True}, {"balance": 50000, "portfolio_value": 0}],
+        pages=[{"market_positions": []}],
+    )
+    b = await account_brief(c, governor=gov)
+    assert b["read_errors"] == ["balance"] and len(c.bals) == 1
+    assert b["governor"]["halted"] is True
+    assert b["governor"]["reasons"][0].startswith("EQUITY_UNREADABLE")
+    assert state.read_text() == before

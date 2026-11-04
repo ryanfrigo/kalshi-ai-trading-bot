@@ -40,6 +40,8 @@ def _account_section(equity: Optional[Dict[str, Any]]) -> List[str]:
     # read_errors holds tickers, which this page doesn't publish: use it, never print it.
     errors = equity.get("read_errors") or []
     balance_read = "balance" not in errors
+    # A corrupt state file leaves the governor no baselines to measure from.
+    state_ok = not any(r.startswith("STATE_CORRUPT") for r in gov.get("reasons") or [])
     unavailable = "unavailable (read failed)"
     equity_cell = f"${float(equity.get('equity', 0)):,.2f}" if balance_read else unavailable
     cash_cell = f"${float(equity.get('cash', 0)):,.2f}" if balance_read else unavailable
@@ -77,8 +79,8 @@ def _account_section(equity: Optional[Dict[str, Any]]) -> List[str]:
             f"Drawdown since governor re-baseline ({rebase['date']})" if rebase
             else "Drawdown from peak"
         )
-        if balance_read:
-            # Without a balance the governor read equity as 0, so these would be false.
+        if balance_read and state_ok:
+            # Without a balance or baselines these would be false.
             lines += [
                 f"| {dd_label} | {gov.get('drawdown_pct', 0)}% |",
                 f"| Day P&L | {_money(gov.get('daily_pnl_cents', 0) / 100)} |",
