@@ -325,6 +325,39 @@ def test_non_finite_count_fails_closed(tmp_path, kind, row):
     assert res["ok"] is False and "exposure_unreadable" in res["reason"]
 
 
+@pytest.mark.parametrize("kind,resp", [
+    ("positions", {"market_positions": [None]}),
+    ("positions", {"market_positions": ["KXT"]}),
+    ("positions", {"market_positions": [{"position_fp": "-88"}]}),
+    ("positions", {"market_positions": [{"ticker": "", "position_fp": "-88"}]}),
+    ("orders", {"orders": [None]}),
+    ("orders", {"orders": [{"remaining_count_fp": "88"}]}),
+])
+def test_malformed_row_fails_closed(tmp_path, kind, resp):
+    # A row we cannot attribute to a ticker must not count as zero exposure.
+    client = (_ExposureClient(positions={None: resp}) if kind == "positions"
+              else _ExposureClient(orders={None: resp}))
+    res = _buy(client, tmp_path)
+    assert res["ok"] is False and res["reason"].startswith("exposure_unreadable")
+
+
+def test_malformed_row_on_second_positions_page_fails_closed(tmp_path):
+    client = _ExposureClient(positions={
+        None: {"market_positions": [{"ticker": "OTHER", "position_fp": "5"}], "cursor": "p2"},
+        "p2": {"market_positions": [None]},
+    })
+    res = _buy(client, tmp_path)
+    assert client.position_cursors == [None, "p2"]
+    assert res["ok"] is False and res["reason"].startswith("exposure_unreadable")
+
+
+def test_well_formed_row_for_another_ticker_is_ignored(tmp_path):
+    client = _ExposureClient(positions={None: {"market_positions": [
+        {"ticker": "OTHER", "position_fp": "5"}]}})
+    res = _buy(client, tmp_path)
+    assert res["ok"] is True and res["count"] == 88
+
+
 def test_position_fp_wins_over_legacy_position(tmp_path):
     # fp says 1 contract held, legacy says 88: at 90c the cap leaves room for 87.
     client = _ExposureClient(positions={None: {"market_positions": [
