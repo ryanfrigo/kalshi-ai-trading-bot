@@ -285,3 +285,23 @@ def test_every_policy_derive_policy_writes_is_well_formed():
     assert policy["blocks"] and policy["warnings"] and len(policy["haircuts"]) == 2
     assert policy_is_well_formed(json.loads(json.dumps(policy)))
     assert policy_is_well_formed(derive_policy(_edge_breakdown(), [], date=DATE))
+
+
+def test_diff_policy_reports_haircuts_that_moved_appeared_or_disappeared():
+    old = {"blocks": [], "haircuts": [
+        {"band": "a", "shrink_to": 0.5},
+        {"band": "b", "shrink_to": 0.4},
+        {"band": "c", "shrink_to": 0.3},
+    ]}
+    new = {"blocks": [], "haircuts": [
+        {"band": "a", "shrink_to": 0.6},
+        {"band": "c", "shrink_to": 0.3},
+        {"band": "d", "shrink_to": 0.2},
+    ]}
+    d = diff_policy(old, new)
+    assert sorted(d["changed_haircuts"], key=lambda h: h["band"]) == [
+        {"band": "a", "was": 0.5, "now": 0.6},
+        {"band": "b", "was": 0.4, "now": None},
+        {"band": "d", "was": None, "now": 0.2},
+    ]
+    assert d["added_blocks"] == [] and d["removed_blocks"] == []
