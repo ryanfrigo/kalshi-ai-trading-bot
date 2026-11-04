@@ -509,3 +509,83 @@ def test_a_missing_policy_file_still_means_no_opinion(tmp_path):
             _NoMarketClient(), ticker="KXCPI-26JUN-3", side="no", count=10,
             price=0.95, est_prob=0.97, governor=_Governor(), dry=True,
             policy_path=str(tmp_path / "absent.json")))
+
+
+_MALFORMED_POLICIES = [
+    '{"blocks": {}}', '{"blocks": ""}', '{"blocks": null}', '{"blocks": 1}', '{"blocks": "x"}',
+    '{"blocks": [{}]}', '{"blocks": [1]}', '{"blocks": [{"dimension": "category"}]}',
+    '{"blocks": [{"dimension": 1, "label": "KXCPI"}]}',
+    '{"warnings": {}}', '{"warnings": [{}]}',
+    '{"haircuts": null}', '{"haircuts": [{}]}',
+    '{"haircuts": [{"lo": 0.9, "hi": 1.0}]}',
+    '{"haircuts": [{"lo": "x", "hi": 1.0, "shrink_to": 0.5}]}',
+    '{"haircuts": [{"lo": 0.9, "hi": "x", "shrink_to": 0.5}]}',
+    '{"haircuts": [{"lo": 0.9, "hi": 1.0, "shrink_to": 5.0}]}',
+    '{"haircuts": [{"lo": 0.9, "hi": 1.0, "shrink_to": -0.1}]}',
+    '{"haircuts": [{"lo": 0.9, "hi": 1.0, "shrink_to": true}]}',
+    '{"haircuts": [{"lo": 0.9, "hi": 1.0, "shrink_to": NaN}]}',
+    '{"haircuts": [{"lo": NaN, "hi": 1.0, "shrink_to": 0.5}]}',
+]
+
+
+@pytest.mark.parametrize("content", _MALFORMED_POLICIES)
+def test_a_malformed_policy_refuses_before_any_market_call(tmp_path, content):
+    p = tmp_path / "edge_policy.json"
+    p.write_text(content)
+    res = asyncio.run(place_guarded_order(
+        _NoMarketClient(), ticker="KXCPI-26JUN-3", side="no", count=10,
+        price=0.95, est_prob=0.97, governor=_Governor(), dry=True,
+        policy_path=str(p)))
+    assert res["ok"] is False
+    assert res["reason"] == "policy_unreadable"
+    assert res["policy_path"] == str(p)
+
+
+@pytest.mark.parametrize("content", _MALFORMED_POLICIES)
+def test_override_passes_a_malformed_policy_without_crashing(tmp_path, content):
+    p = tmp_path / "edge_policy.json"
+    p.write_text(content)
+    res = asyncio.run(place_guarded_order(
+        _MarketClient(no_ask=0.95), ticker="KXX-1", side="no", count=10, price=0.60,
+        est_prob=0.97, governor=_Governor(), dry=True, policy_path=str(p),
+        override_policy=True, journal_path=str(tmp_path / "journal.jsonl")))
+    assert res["ok"] is True
+    assert res["policy_note"] == {"overridden_unreadable_policy": str(p)}
+
+
+@pytest.mark.parametrize("content", [
+    '{}', '{"meta": {}}', '{"blocks": [], "warnings": [], "haircuts": []}',
+    '{"haircuts": [{"lo": null, "hi": null, "shrink_to": 0.5}]}',
+    '{"blocks": [{"dimension": "category", "label": "OTHER"}]}',
+])
+def test_a_well_formed_policy_with_no_matching_rule_proceeds(tmp_path, content):
+    p = tmp_path / "edge_policy.json"
+    p.write_text(content)
+    with pytest.raises(_ReachedMarket):
+        asyncio.run(place_guarded_order(
+            _NoMarketClient(), ticker="KXCPI-26JUN-3", side="no", count=10,
+            price=0.95, est_prob=0.97, governor=_Governor(), dry=True,
+            policy_path=str(p)))
+
+
+def test_a_directory_at_the_policy_path_refuses(tmp_path):
+    p = tmp_path / "edge_policy.json"
+    p.mkdir()
+    res = asyncio.run(place_guarded_order(
+        _NoMarketClient(), ticker="KXCPI-26JUN-3", side="no", count=10,
+        price=0.95, est_prob=0.97, governor=_Governor(), dry=True,
+        policy_path=str(p)))
+    assert res["reason"] == "policy_unreadable"
+
+
+def test_an_override_of_an_unreadable_policy_reaches_the_journal(tmp_path):
+    p = tmp_path / "edge_policy.json"
+    p.write_text("not json")
+    journal = tmp_path / "j.jsonl"
+    res = asyncio.run(place_guarded_order(
+        _MarketClient(no_ask=0.95), ticker="KXX-1", side="no", count=2, price=0.60,
+        est_prob=0.97, governor=_Governor(), dry=False, policy_path=str(p),
+        override_policy=True, journal_path=str(journal)))
+    assert res["ok"] is True
+    record = json.loads(journal.read_text().splitlines()[-1])
+    assert record["policy_note"] == {"overridden_unreadable_policy": str(p)}
