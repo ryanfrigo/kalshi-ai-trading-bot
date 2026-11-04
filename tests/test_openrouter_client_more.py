@@ -514,12 +514,15 @@ def test_parse_buy_with_invalid_side_or_price_is_rejected(parse, extra):
     assert d is None or d.action != "BUY"
 
 
-@pytest.mark.xfail(strict=True, reason="openrouter_client.py:732-737 the model's `reasoning` is "
-                   "dropped (TradingDecision.reasoning always None), so decide.py/positions record "
-                   "no rationale for a live BUY")
 def test_parse_keeps_reasoning(parse):
     d = parse('{"action":"BUY","side":"YES","limit_price":55,"confidence":0.9,"reasoning":"because"}')
     assert d.reasoning == "because"
+
+
+@pytest.mark.parametrize("raw", ['123', '""', '"   "', 'null', '["a"]'])
+def test_parse_non_string_or_blank_reasoning_is_none(parse, raw):
+    d = parse('{"action":"BUY","side":"YES","limit_price":55,"confidence":0.9,"reasoning":%s}' % raw)
+    assert d is not None and d.reasoning is None
 
 
 @pytest.mark.xfail(strict=True, reason="openrouter_client.py:693-698 greedy `\\{.*\\}` over a reply "

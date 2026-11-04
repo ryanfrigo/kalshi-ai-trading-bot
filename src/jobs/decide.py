@@ -449,7 +449,7 @@ async def make_decision_for_market(
             quantity = initial_quantity
 
             if quantity > 0:
-                rationale = getattr(decision, 'reasoning', 'No reasoning provided by LLM.')
+                rationale = getattr(decision, 'reasoning', None) or 'No reasoning provided by LLM.'
                 # Calculate exit strategy using Grok4 recommendations
                 from src.utils.stop_loss_calculator import StopLossCalculator
                 

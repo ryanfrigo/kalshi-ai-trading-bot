@@ -799,11 +799,15 @@ If you do not recommend trading, use action "SKIP":
                 limit_price = int(float(raw_price))
             side = side.upper()
 
+            reasoning = data.get("reasoning")
+            reasoning = reasoning.strip() if isinstance(reasoning, str) and reasoning.strip() else None
+
             return TradingDecision(
                 action=action,
                 side=side,
                 confidence=confidence,
                 limit_price=limit_price,
+                reasoning=reasoning,
             )
 
         except Exception as exc:
