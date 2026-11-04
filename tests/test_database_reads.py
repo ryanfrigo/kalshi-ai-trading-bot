@@ -1,12 +1,13 @@
 """Read-path tests for DatabaseManager: positions by column, strategy and LLM stats."""
 
 import asyncio
+import dataclasses
 from datetime import datetime, timedelta
 
 import aiosqlite
 import pytest
 
-from src.utils.database import DatabaseManager, LLMQuery, Position, TradeLog
+from src.utils.database import DatabaseManager, LLMQuery, Market, Position, TradeLog
 
 
 def _pos(**kw) -> Position:
@@ -229,6 +230,47 @@ def test_get_llm_stats_by_strategy(tmp_path):
         assert stats["x"]["total_tokens"] == 30
         assert stats["x"]["total_cost"] == pytest.approx(0.03)
         assert stats["x"]["avg_confidence"] == pytest.approx(0.7)
+
+    asyncio.run(run())
+
+
+async def _assert_columns_match(db_path, table, cls) -> None:
+    """Readers build cls(**dict(row)), so every column must be a dataclass field."""
+    async with aiosqlite.connect(db_path) as conn:
+        cursor = await conn.execute(f"PRAGMA table_info({table})")
+        columns = {row[1] for row in await cursor.fetchall()}
+    extra = columns - {f.name for f in dataclasses.fields(cls)}
+    assert not extra, f"{table} columns with no {cls.__name__} field: {sorted(extra)}"
+
+
+def test_positions_columns_match_dataclass_fields(tmp_path):
+    async def run():
+        await _db(tmp_path)
+        await _assert_columns_match(str(tmp_path / "t.db"), "positions", Position)
+
+    asyncio.run(run())
+
+
+def test_llm_queries_columns_match_dataclass_fields(tmp_path):
+    async def run():
+        await _db(tmp_path)
+        await _assert_columns_match(str(tmp_path / "t.db"), "llm_queries", LLMQuery)
+
+    asyncio.run(run())
+
+
+def test_trade_logs_columns_match_dataclass_fields(tmp_path):
+    async def run():
+        await _db(tmp_path)
+        await _assert_columns_match(str(tmp_path / "t.db"), "trade_logs", TradeLog)
+
+    asyncio.run(run())
+
+
+def test_markets_columns_match_dataclass_fields(tmp_path):
+    async def run():
+        await _db(tmp_path)
+        await _assert_columns_match(str(tmp_path / "t.db"), "markets", Market)
 
     asyncio.run(run())
 
