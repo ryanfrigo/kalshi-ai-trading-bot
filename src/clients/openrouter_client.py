@@ -174,7 +174,20 @@ class OpenRouterClient(TradingLoggerMixin):
         """Load or create a daily usage tracker from disk."""
         today = datetime.now().strftime("%Y-%m-%d")
         daily_limit = getattr(settings.trading, "daily_ai_cost_limit", 50.0)
-        os.makedirs("logs", exist_ok=True)
+        try:
+            os.makedirs("logs", exist_ok=True)
+        except OSError as exc:
+            # Fail closed: without the budget file the daily cap can't bind.
+            self.logger.error(
+                f"Budget dir unusable ({exc}); treating today's AI budget as exhausted"
+            )
+            return DailyUsageTracker(
+                date=today,
+                daily_limit=daily_limit,
+                total_cost=daily_limit,
+                is_exhausted=True,
+                last_exhausted_time=datetime.now(),
+            )
 
         if not os.path.exists(self.usage_file):
             return DailyUsageTracker(date=today, daily_limit=daily_limit)

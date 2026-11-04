@@ -260,10 +260,6 @@ async def test_stale_yesterday_tracker_resets(make, sleeps):
     assert await c.get_completion("hi") == "hello"
 
 
-@pytest.mark.xfail(strict=True, reason="openrouter_client.py:172 os.makedirs in _load_daily_tracker is "
-                   "outside any try: an unwritable logs/ dir makes get_completion/get_trading_decision "
-                   "raise PermissionError instead of returning None (no spend, but strategies that "
-                   "call get_completion bare crash)")
 async def test_unwritable_budget_dir_does_not_raise_into_the_caller(make, sleeps, monkeypatch):
     # decide.py / strategies call get_completion without a try for budget-store errors.
     c = make({SONNET: [resp()]})
