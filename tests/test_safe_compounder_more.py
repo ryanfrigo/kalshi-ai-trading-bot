@@ -300,7 +300,7 @@ def test_malformed_volume_skips_that_market_only():
 
 def test_null_title_does_not_abort_candidate_filtering():
     out = _compounder(FakeClient())._find_no_candidates([{**_market(), "title": None}])
-    assert len(out) == 1
+    assert out == []  # skipped, not aborted: the title exclusion filter can't vouch for it
 
 
 def test_null_close_time_does_not_abort_the_opportunity_scan():
@@ -313,7 +313,7 @@ def test_bad_rows_are_skipped_and_good_rows_kept_in_one_batch():
         _market(ticker="KXV", volume="n/a"),
         _market(ticker="KXOK"),
     ])
-    assert [c["ticker"] for c in out] == ["KXT", "KXOK"]
+    assert [c["ticker"] for c in out] == ["KXOK"]
 
 
 def test_confidence_gate_boundary_is_inclusive_at_the_threshold():

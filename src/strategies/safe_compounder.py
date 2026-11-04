@@ -483,7 +483,10 @@ class SafeCompounder:
             if should_skip(ticker):
                 continue
 
-            title_lower = (m.get("title") or "").lower()
+            title = m.get("title")
+            if not isinstance(title, str):
+                continue  # unreadable title: the exclusion filter can't run, so skip
+            title_lower = title.lower()
             if any(phrase in title_lower for phrase in SKIP_TITLE_PHRASES):
                 continue
 
