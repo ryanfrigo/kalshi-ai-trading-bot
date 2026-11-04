@@ -16,7 +16,9 @@ def db(tmp_path, monkeypatch):
 
 def test_empty_dashboard_labels_pnl_as_before_fees():
     html = generate_html()
+    assert "Win Rate (before fees)" in html
     assert "Total P&amp;L (before fees)" in html
+    assert "Avg Return / Trade (before fees)" in html
     assert "excludes Kalshi trading fees" in html
 
 
@@ -31,5 +33,7 @@ def test_dashboard_win_rate_label_and_total_after_one_win():
 def test_print_stats_labels_pnl_as_before_fees(capsys):
     paper_trader.print_stats()
     out = capsys.readouterr().out
+    assert "Win rate (before fees)" in out
     assert "Total P&L (before fees)" in out
+    assert "Avg return (before fees)" in out
     assert "excludes Kalshi trading fees" in out
