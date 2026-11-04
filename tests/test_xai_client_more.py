@@ -194,6 +194,15 @@ async def test_unreadable_budget_file_fails_closed(make, payload):
     assert t.is_exhausted and t.total_cost == 4.0
 
 
+async def test_unwritable_budget_dir_fails_closed_without_raising(make, monkeypatch):
+    d = FakeOR()
+    c = make(d, limit=4.0)
+    monkeypatch.setattr(xc.os, "makedirs", lambda *a, **k: (_ for _ in ()).throw(PermissionError("ro")))
+    assert await c.get_completion("p") is None
+    assert await c.get_trading_decision({}, {}) is None
+    assert d.calls == []
+
+
 async def test_new_day_resets_an_exhausted_tracker(make):
     c = make(FakeOR(), limit=3.0)
     old = DailyUsageTracker(date=(datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"),
