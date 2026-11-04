@@ -131,3 +131,8 @@ def test_an_uppercase_yes_side_from_the_db_still_nets_no_orders():
     body = {"orders": [order(outcome_side="no"),
                        order(outcome_side="yes", remaining_count_fp="5.00")]}
     assert sellable(client(held=10.0, body=body), side="YES") == 7.0
+
+
+def test_a_full_page_without_a_cursor_is_the_last_page_and_is_read():
+    body = {"orders": [order(ticker="OTHER")] * 100, "cursor": ""}
+    assert sellable(client(body=body)) == 10.0

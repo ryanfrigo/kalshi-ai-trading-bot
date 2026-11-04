@@ -228,3 +228,32 @@ def test_exit_row_changed_mid_replace_cancels_nothing(tmp_path):
     assert ("cancel_order", "o1") not in c.calls and c.sent == []
     assert res["orders_placed"] == 0
     assert pos.exit_order_id == "o9" and pos.quantity == 10
+
+
+class RowSwappedKalshi(FakeKalshi):
+    """Our row is closed and a new row on the same market, side and exit id replaces it."""
+    db = None
+
+    async def get_order(self, oid):
+        if self.db is not None:
+            db, self.db = self.db, None
+            (p,) = await db.get_open_live_positions()
+            await db.update_position_status(p.id, "closed")
+            new = Position(market_id=T, side="NO", entry_price=0.60, quantity=10,
+                           timestamp=datetime.now(), rationale="r2", live=True, status="open")
+            new.id = await db.add_position(new)
+            await db.set_exit_order(new.id, "o1", 0.0)
+        return await super().get_order(oid)
+
+
+def test_exit_row_swapped_mid_replace_cancels_nothing(tmp_path):
+    c = RowSwappedKalshi(no_bid_cents=30, o1_cents=50)
+
+    async def go():
+        db = await _db(tmp_path)
+        c.db = db
+        return await place_stop_loss_orders(db, c, stop_loss_threshold=-0.15, live=True)
+
+    res = asyncio.run(go())
+    assert ("cancel_order", "o1") not in c.calls and c.sent == []
+    assert res["orders_placed"] == 0
