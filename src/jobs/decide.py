@@ -146,6 +146,13 @@ async def make_decision_for_market(
                 estimated_cost = 0.01  # Rough estimate for simple analysis
                 total_analysis_cost += estimated_cost
 
+                if not decision:
+                    logger.warning(f"No decision was made for market {market.market_id}. Skipping.")
+                    await db_manager.record_market_analysis(
+                        market.market_id, "SKIP", 0.0, total_analysis_cost, "no_decision"
+                    )
+                    return None
+
                 if decision.side == "YES" and decision.confidence >= settings.trading.high_confidence_threshold:
                     logger.info(f"High-confidence YES opportunity found for {market.market_id}.")
 

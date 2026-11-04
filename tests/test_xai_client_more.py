@@ -327,10 +327,6 @@ def test_decide_db_budget_gate_runs_before_the_client_is_touched(cwd):
     assert pos is None and d.calls == []                    # fail closed
 
 
-@pytest.mark.xfail(strict=True, reason="decide.py:139-150 near-expiry branch dereferences "
-                   "`decision.side` with no None check; when XAIClient returns None (any LLM failure) "
-                   "this raises AttributeError and is logged as an ERROR row ($0.01 booked) instead of "
-                   "the clean 'no_decision' SKIP the standard path records")
 def test_near_expiry_branch_handles_a_none_decision_like_the_standard_path(cwd):
     m = _market(yes=0.92, no=0.08, days=0.25)
     pos, db, _ = _decide(m, FakeOR(decision=None))
