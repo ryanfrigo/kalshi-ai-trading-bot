@@ -14,6 +14,7 @@ from src.agent.learnings import (
     flag_rules,
     append_learnings,
     load_learnings,
+    _confidence,
 )
 
 
@@ -372,3 +373,36 @@ def test_append_learnings_distinguishes_by_kind_and_claim(tmp_path):
 
 def test_load_learnings_missing_file_is_empty(tmp_path):
     assert load_learnings(str(tmp_path / "nope.jsonl")) == []
+
+
+def test_a_settlement_with_nothing_usable_leaves_the_record_open():
+    rec = {"ticker": "KXA", "side": "no", "outcome": None}
+    unusable = [
+        None,  # skipped row
+        {"ticker": "KXA", "result": None},  # market not resolved
+    ]
+    for rows in ([], unusable[:1], unusable[1:], unusable):
+        out, newly = reconcile_outcomes([rec], rows)
+        assert out == [rec] and newly == 0
+
+
+def test_a_record_with_no_side_is_not_scored():
+    rec = {"ticker": "KXA", "outcome": None}
+    out, newly = reconcile_outcomes([rec], [{"ticker": "KXA", "result": "no"}])
+    assert out == [rec] and newly == 0
+
+
+def test_a_later_good_settlement_still_scores_after_a_none_row():
+    rec = {"ticker": "KXA", "side": "no", "price": 0.9, "count": 1, "outcome": None}
+    out, newly = reconcile_outcomes([rec], [None, {"ticker": "KXA", "result": "no"}])
+    assert newly == 1 and out[0]["outcome"]["won"] is True
+
+
+def test_load_learnings_skips_a_corrupt_line_and_keeps_the_rest(tmp_path):
+    p = tmp_path / "l.jsonl"
+    p.write_text('{"a": 1}\n{"truncated": \n\n{"b": 2}\n')
+    assert load_learnings(str(p)) == [{"a": 1}, {"b": 2}]
+
+
+def test_confidence_bands_at_their_edges():
+    assert [_confidence(n) for n in (4, 5, 14, 15)] == ["low", "med", "med", "high"]

@@ -15,6 +15,7 @@ from src.agent.edge import (
     edge_vs_book,
     forward_only,
     edge_report,
+    _verdict,
 )
 
 
@@ -338,3 +339,15 @@ def test_parse_ts_treats_junk_as_unknown_and_naive_as_utc():
     assert _parse_ts("not a date") is None
     assert _parse_ts("2026-10-01T12:00:00") == datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
     assert _parse_ts("2026-10-01T12:00:00Z") == _parse_ts("2026-10-01T12:00:00+00:00")
+
+
+def test_ten_forward_trades_without_ten_prices_claim_no_edge():
+    # Winners with no fill price can't be measured against the book. 10 trades, 9 priced.
+    settled = {"outcome": {"won": True}}
+    none_priced = [dict(settled) for _ in range(10)]
+    nine_priced = [dict(settled, price=0.5) for _ in range(9)] + [dict(settled)]
+    for records in (none_priced, nine_priced):
+        assert _verdict(records) == (
+            "INSUFFICIENT DATA (n=10 forward trades but too few carry a "
+            "fill price to measure edge vs. book)"
+        )

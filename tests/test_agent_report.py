@@ -289,3 +289,9 @@ def test_other_halts_still_publish_their_figures():
 def test_a_governor_with_no_reasons_key_still_publishes_its_figures():
     md = _account_md(governor={"halted": False, "drawdown_pct": 1.0, "daily_pnl_cents": 0})
     assert "| Drawdown from peak | 1.0% |" in md
+
+
+def test_a_policy_with_no_blocks_says_so():
+    md = _render(policy={"meta": {"settled_n": 3, "generated_date": "2026-07-02"}})
+    assert "_No blocks — no n≥5 group is net-negative._" in md
+    assert "| Blocked | n | P&L |" not in md

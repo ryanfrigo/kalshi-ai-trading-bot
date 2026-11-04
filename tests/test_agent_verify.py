@@ -318,3 +318,13 @@ def test_operator_llm_unknown_schema_raises():
     llm = make_operator_llm({"research": _research(), "skeptic": _skeptic()})
     with pytest.raises(ValueError, match="unknown schema"):
         asyncio.run(llm("any prompt", {"required": ["other"]}))
+
+
+def test_an_unknown_skeptic_recommend_is_a_pass_with_a_stated_reason():
+    # Every other gate clears (edge_pts = round(98 - 90) = 8), but BUY_NO needs the
+    # skeptic to say BUY_NO, so a missing or odd recommend never becomes a trade.
+    for said in (None, "HOLD"):
+        v = aggregate_verdict(_candidate(no_ask=0.90), _research(direction="none"),
+                              _skeptic(adjusted_true_yes_pct=2.0, survives=True, recommend=said))
+        assert v["recommend"] == "PASS" and v["size_hint"] == "none"
+        assert v["note"].startswith("PASS: gate not cleared (edge +8 pts")
