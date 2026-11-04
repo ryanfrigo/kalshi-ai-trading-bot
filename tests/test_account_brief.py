@@ -99,3 +99,88 @@ async def test_more_resting_pages_than_were_read_is_reported():
 async def test_a_flat_position_is_not_an_error():
     b = await _brief(FakeClient(pages=[{"market_positions": [_pos("FLAT", "0.00")]}]))
     assert b["positions"] == [] and b["read_errors"] == []
+
+
+class NoBalanceClient(FakeClient):
+    def __init__(self, bal, **kw):
+        super().__init__(**kw)
+        self.bal = bal
+
+    async def get_balance(self):
+        return self.bal
+
+
+@pytest.mark.parametrize("bal", [
+    {"status_code": 200, "empty_body": True},
+    {"balance": 1000},
+    {"portfolio_value": 250},
+    {"balance": None, "portfolio_value": 250},
+    {"balance": 1000, "portfolio_value": None},
+])
+async def test_a_balance_reply_missing_a_figure_is_reported(bal):
+    b = await _brief(NoBalanceClient(bal, pages=[{"market_positions": []}]))
+    assert b["read_errors"] == ["balance"]
+
+
+async def test_a_real_zero_balance_is_not_an_error():
+    b = await _brief(NoBalanceClient({"balance": 0, "portfolio_value": 0}, pages=[{"market_positions": []}]))
+    assert b["read_errors"] == []
+
+
+@pytest.mark.parametrize("page", [
+    {},
+    {"status_code": 200, "empty_body": True},
+    {"market_positions": None},
+    {"market_positions": "A"},
+    {"market_positions": {"ticker": "A"}},
+])
+async def test_a_positions_reply_with_no_list_is_reported(page):
+    b = await _brief(FakeClient(pages=[page]))
+    assert b["positions"] == [] and b["read_errors"] == ["positions: no list"]
+
+
+async def test_a_page_with_no_list_still_follows_the_cursor():
+    c = FakeClient(pages=[{"cursor": "next"}, {"market_positions": [_pos("A")]}])
+    b = await _brief(c)
+    assert [p["ticker"] for p in b["positions"]] == ["A"]
+    assert b["read_errors"] == ["positions: no list"]
+
+
+@pytest.mark.parametrize("row", [None, "A", 7, ["A"]])
+async def test_a_position_row_that_is_no_dict_is_reported(row):
+    b = await _brief(FakeClient(pages=[{"market_positions": [row, _pos("A")]}]))
+    assert [p["ticker"] for p in b["positions"]] == ["A"]
+    assert b["read_errors"] == ["positions: bad row"]
+
+
+@pytest.mark.parametrize("fp", [True, False])
+async def test_a_boolean_position_fp_is_reported(fp):
+    b = await _brief(FakeClient(pages=[{"market_positions": [_pos("BAD", fp)]}]))
+    assert b["positions"] == [] and b["read_errors"] == ["position BAD"]
+
+
+class OrdersReplyClient(FakeClient):
+    def __init__(self, reply, **kw):
+        super().__init__(**kw)
+        self.reply = reply
+
+    async def get_orders(self, status=None):
+        return self.reply
+
+
+@pytest.mark.parametrize("reply", [
+    {},
+    {"status_code": 200, "empty_body": True},
+    {"orders": None},
+    {"orders": "A", "cursor": "more"},
+    None,
+])
+async def test_a_resting_reply_with_no_list_is_reported(reply):
+    b = await _brief(OrdersReplyClient(reply, pages=[{"market_positions": []}]))
+    assert b["resting_orders"] == [] and b["read_errors"] == ["resting_orders"]
+
+
+async def test_a_resting_row_that_is_no_dict_is_reported():
+    b = await _brief(OrdersReplyClient({"orders": [None, {"ticker": "A"}]}, pages=[{"market_positions": []}]))
+    assert [o["ticker"] for o in b["resting_orders"]] == ["A"]
+    assert b["read_errors"] == ["resting_orders: bad row"]

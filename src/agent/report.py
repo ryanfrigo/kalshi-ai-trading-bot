@@ -37,6 +37,18 @@ def _account_section(equity: Optional[Dict[str, Any]]) -> List[str]:
             "",
         ]
     gov = equity.get("governor") or {}
+    # read_errors holds tickers, which this page doesn't publish: use it, never print it.
+    errors = equity.get("read_errors") or []
+    balance_read = "balance" not in errors
+    unavailable = "unavailable (read failed)"
+    equity_cell = f"${float(equity.get('equity', 0)):,.2f}" if balance_read else unavailable
+    cash_cell = f"${float(equity.get('cash', 0)):,.2f}" if balance_read else unavailable
+    n_open = len(equity.get("positions") or [])
+    open_cell = (
+        f"at least {n_open} (read incomplete)"
+        if any(e.startswith("position") for e in errors)
+        else str(n_open)
+    )
     lines = [
         "## Account (blended — operator + strategy)",
         "",
@@ -49,12 +61,12 @@ def _account_section(equity: Optional[Dict[str, Any]]) -> List[str]:
         "",
         "| Metric | Value |",
         "|---|---|",
-        f"| Equity | ${float(equity.get('equity', 0)):,.2f} |",
-        f"| Cash | ${float(equity.get('cash', 0)):,.2f} |",
-        f"| Open positions | {len(equity.get('positions') or [])} |",
+        f"| Equity | {equity_cell} |",
+        f"| Cash | {cash_cell} |",
+        f"| Open positions | {open_cell} |",
     ]
     rebase = equity.get("rebase")
-    if rebase:
+    if rebase and balance_read:
         # The governor's peak was re-baselined, so its drawdown restarts near 0.
         # Publish the all-time figure too — the page must never hide a drawdown.
         peak = rebase["prior_peak_cents"] / 100
@@ -65,12 +77,14 @@ def _account_section(equity: Optional[Dict[str, Any]]) -> List[str]:
             f"Drawdown since governor re-baseline ({rebase['date']})" if rebase
             else "Drawdown from peak"
         )
-        lines += [
-            f"| {dd_label} | {gov.get('drawdown_pct', 0)}% |",
-            f"| Day P&L | {_money(gov.get('daily_pnl_cents', 0) / 100)} |",
-            f"| Governor halted | {'YES' if gov.get('halted') else 'no'} |",
-        ]
-    if rebase:
+        if balance_read:
+            # Without a balance the governor read equity as 0, so these would be false.
+            lines += [
+                f"| {dd_label} | {gov.get('drawdown_pct', 0)}% |",
+                f"| Day P&L | {_money(gov.get('daily_pnl_cents', 0) / 100)} |",
+            ]
+        lines.append(f"| Governor halted | {'YES' if gov.get('halted') else 'no'} |")
+    if rebase and balance_read:
         lines += [
             "",
             "_The all-time drawdown includes money the operator withdrew and "
