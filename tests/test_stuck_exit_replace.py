@@ -212,6 +212,7 @@ def test_exit_no_longer_resting_is_not_cancelled_and_nothing_is_sold(tmp_path, s
     res, pos, _ = _stop(tmp_path, c)
     assert ("cancel_order", "o1") not in c.calls and c.sent == []
     assert res["orders_placed"] == 0
+    assert pos.exit_order_id == "o1"  # the replace pass books and clears nothing
 
 
 def test_exit_row_changed_mid_replace_cancels_nothing(tmp_path):
