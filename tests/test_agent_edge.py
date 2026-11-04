@@ -330,3 +330,11 @@ def test_edge_report_empty_journal_is_insufficient():
     assert "INSUFFICIENT DATA" in report["verdict"]
     assert report["brier"] is None
     assert report["log_loss"] is None
+
+
+def test_parse_ts_treats_junk_as_unknown_and_naive_as_utc():
+    from datetime import datetime, timezone
+    from src.agent.edge import _parse_ts
+    assert _parse_ts("not a date") is None
+    assert _parse_ts("2026-10-01T12:00:00") == datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
+    assert _parse_ts("2026-10-01T12:00:00Z") == _parse_ts("2026-10-01T12:00:00+00:00")
