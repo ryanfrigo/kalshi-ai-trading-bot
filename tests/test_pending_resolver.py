@@ -201,9 +201,10 @@ def test_avg_fill_price_with_zero_fill_returns_zero_not_a_crash():
 
 def test_a_negative_or_infinite_fill_stays_pending():
     for fill in ("-1.00", "inf", "nan"):
-        rec = _rec()
-        recs, changes = _run([rec], FakeClient(live=[_order(fill, "executed")]))
-        assert recs == [rec] and changes == [], fill
+        for status in ("executed", "canceled"):  # canceled: must not read as zero fills and void
+            rec = _rec()
+            recs, changes = _run([rec], FakeClient(live=[_order(fill, status)]))
+            assert recs == [rec] and changes == [], (fill, status)
 
 
 def test_a_fill_with_no_order_id_stays_pending():
