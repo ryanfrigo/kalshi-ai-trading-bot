@@ -367,7 +367,11 @@ class SafeCompounder:
         stats = await self._place_resting_orders(sorted_opps, portfolio, cash)
 
         elapsed = time.time() - start
-        bal = await self.client.get_balance()
+        try:
+            bal = await self.client.get_balance()
+        except Exception as e:
+            logger.warning("Final balance read failed after placing orders: %s", e)
+            bal = None
 
         print(f"\n{'='*70}", flush=True)
         print(f"📊 SAFE COMPOUNDER REPORT", flush=True)
@@ -382,8 +386,12 @@ class SafeCompounder:
         print(f"  Capital deployed:     ${stats['total_deployed']/100:.2f}", flush=True)
         print(f"  Potential profit:     ${stats['total_potential_profit']/100:.2f}", flush=True)
         print(f"  YES orders cancelled: {cancelled}", flush=True)
-        print(f"  Cash:                 ${bal.get('balance', 0)/100:.2f}", flush=True)
-        print(f"  Portfolio:            ${bal.get('portfolio_value', 0)/100:.2f}", flush=True)
+        if bal is None:
+            print("  Cash:                 unavailable (balance read failed)", flush=True)
+            print("  Portfolio:            unavailable (balance read failed)", flush=True)
+        else:
+            print(f"  Cash:                 ${bal.get('balance', 0)/100:.2f}", flush=True)
+            print(f"  Portfolio:            ${bal.get('portfolio_value', 0)/100:.2f}", flush=True)
         print(f"  Elapsed:              {elapsed:.0f}s", flush=True)
         print(f"{'='*70}\n", flush=True)
 

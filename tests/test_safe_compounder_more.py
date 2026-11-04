@@ -510,10 +510,6 @@ def test_balance_failure_at_start_places_nothing_and_raises():
     assert client.placed == []
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:370 the post-order get_balance() is unguarded: if it raises after orders were "
-    "placed, run() raises and the stats are lost (cli sees a crash although N orders are live). "
-    "No money moves wrongly; the audit trail does."))
 def test_run_still_returns_stats_when_the_final_balance_read_fails():
     class Flaky(Exchange):
         calls = 0
@@ -529,6 +525,23 @@ def test_run_still_returns_stats_when_the_final_balance_read_fails():
     client = Flaky()
     stats = _run(_compounder(client).run())
     assert stats["placed"] == 1
+
+
+def test_failed_final_balance_read_is_reported_as_unavailable(capsys):
+    class Flaky(Exchange):
+        calls = 0
+
+        async def get_balance(self):
+            Flaky.calls += 1
+            if Flaky.calls > 1:
+                raise RuntimeError("503")
+            return await super().get_balance()
+
+        async def _make_authenticated_request(self, *a, **k):
+            return {"events": [{"markets": [_market()]}]} if a[1].endswith("/events") else {"markets": []}
+    _run(_compounder(Flaky()).run())
+    out = capsys.readouterr().out
+    assert "Cash:                 unavailable (balance read failed)" in out
 
 
 # =====================================================================================
