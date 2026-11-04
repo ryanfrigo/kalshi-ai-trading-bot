@@ -402,6 +402,8 @@ class OpenRouterClient(TradingLoggerMixin):
                 "429",
                 "too many requests",
                 "timeout",
+                "timed out",
+                "quota",
                 "502",
                 "503",
                 "504",

@@ -347,9 +347,6 @@ async def test_empty_reply_is_not_retried_and_falls_through(make, sleeps):
         assert calls(c).models == [SONNET, GPT]
 
 
-@pytest.mark.xfail(strict=True, reason="openrouter_client.py:340-357 _is_retryable_error matches "
-                   "'timeout' but the openai SDK's APITimeoutError str is 'Request timed out.', so a "
-                   "120s SDK timeout is never retried and goes straight to the next (billed) model")
 async def test_sdk_timeout_is_retried_on_the_same_model(make, sleeps):
     exc = openai.APITimeoutError(request=httpx.Request("POST", "https://openrouter.invalid/x"))
     c = make({SONNET: [exc, resp("ok")]})
@@ -357,9 +354,6 @@ async def test_sdk_timeout_is_retried_on_the_same_model(make, sleeps):
     assert calls(c).models == [SONNET, SONNET]
 
 
-@pytest.mark.xfail(strict=True, reason="openrouter_client.py:340-357 'quota' counts as a rate-limit "
-                   "(line 333-338) but not as retryable, so a quota 429-less error skips the backoff "
-                   "and burns the next fallback model immediately")
 async def test_quota_error_backs_off_before_moving_on(make, sleeps):
     c = make({SONNET: [RuntimeError("quota exceeded"), resp("ok")]})
     await c.get_completion("hi", model=SONNET)
