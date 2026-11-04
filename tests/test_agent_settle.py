@@ -226,3 +226,19 @@ def test_a_non_numeric_field_reads_as_zero_not_a_crash():
     out = settlement_pnl(rec)
     assert out["fee"] == 0.0
     assert out["pnl"] == 0.2
+
+
+async def test_fetch_settlements_stops_at_the_limit_and_at_the_page_cap():
+    calls = []
+
+    class FakeKalshi:
+        async def _make_authenticated_request(self, method, path, params=None):
+            calls.append(dict(params))
+            return {"settlements": [{"ticker": "A"}], "cursor": "more"}
+
+    assert len(await fetch_settlements(FakeKalshi(), limit=1)) == 1
+    assert len(calls) == 1
+    calls.clear()
+    # A cursor that never runs out still stops after 10 pages.
+    assert len(await fetch_settlements(FakeKalshi(), limit=10_000)) == 10
+    assert len(calls) == 10
