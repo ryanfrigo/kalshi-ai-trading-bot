@@ -124,3 +124,10 @@ def test_resting_orders_can_leave_nothing_sellable():
     body = {"orders": [order(outcome_side="no", remaining_count_fp="6"),
                        order(book_side="ask", remaining_count_fp="4")]}
     assert sellable(client(held=10.0, body=body)) == 0.0
+
+
+def test_an_uppercase_yes_side_from_the_db_still_nets_no_orders():
+    # Position rows store side as "YES"/"NO"; the guard must lower-case it.
+    body = {"orders": [order(outcome_side="no"),
+                       order(outcome_side="yes", remaining_count_fp="5.00")]}
+    assert sellable(client(held=10.0, body=body), side="YES") == 7.0
