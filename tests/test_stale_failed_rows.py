@@ -252,3 +252,18 @@ def test_unreadable_order_entries_still_count_as_orders(db, order, qty):
     assert run(_read_ticker_state(client(ex), "MKT-1", MagicMock())) == (0.0, 1, qty)
     assert run(reconcile_stale_failed_rows(db, client(ex))) == 0
     assert status(db, pid) == ("open", 0)
+
+
+def test_one_row_that_fails_to_void_does_not_stop_the_others(db):
+    bad, good = add_row(db, 11, market_id="MKT-1"), add_row(db, 11, market_id="MKT-2")
+    real = db.update_position_status
+
+    async def flaky(pid, status_):
+        if pid == bad:
+            raise RuntimeError("db locked")
+        return await real(pid, status_)
+
+    db.update_position_status = flaky
+    assert run(reconcile_stale_failed_rows(db, client(Exchange()))) == 1
+    assert status(db, bad) == ("open", 0)
+    assert status(db, good) == ("voided", 0)

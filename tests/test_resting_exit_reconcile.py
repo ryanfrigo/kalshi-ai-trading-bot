@@ -434,3 +434,34 @@ def test_a_partial_ioc_exit_under_a_halt_stores_no_resting_id(tmp_path):
     row, logs = asyncio.run(go())
     assert row == ("open", 6, None, None)
     assert [l.quantity for l in logs] == [4]
+
+
+def test_one_crashing_reconcile_does_not_stop_the_others_or_the_exit_pass(tmp_path):
+    from src.jobs.track import run_tracking
+    seen = []
+
+    async def reconcile(position, client, db):
+        seen.append(position.market_id)
+        if position.market_id == "RX-1":
+            raise RuntimeError("reconcile crashed")
+
+    client = AsyncMock()
+    client.get_market = AsyncMock(return_value={"market": {"status": "active"}})
+    profit = AsyncMock(return_value={"orders_placed": 0})
+    stop = AsyncMock(return_value={"orders_placed": 0})
+
+    async def go():
+        db = await _db(tmp_path)
+        other = Position(market_id="RX-2", side="YES", entry_price=0.40, quantity=5,
+                         timestamp=datetime.now(), rationale="r", live=True, status="open")
+        other.id = await db.add_position(other)
+        await db.set_exit_order(other.id, "o2", 0.0)
+        with patch("src.jobs.track.KalshiClient", return_value=client), \
+             patch("src.jobs.execute.reconcile_resting_exit", reconcile), \
+             patch("src.jobs.execute.place_profit_taking_orders", profit), \
+             patch("src.jobs.execute.place_stop_loss_orders", stop):
+            await run_tracking(db_manager=db, live=True)
+    asyncio.run(go())
+    assert sorted(seen) == ["RX-1", "RX-2"]
+    profit.assert_awaited_once()
+    stop.assert_awaited_once()
