@@ -421,3 +421,16 @@ def test_a_partly_filled_exit_starts_with_zero_read_failures(tmp_path):
                                      "FROM positions WHERE market_id = 'RX-1'")
             return await cur.fetchone()
     assert asyncio.run(go()) == ("o1", 0)
+
+
+def test_a_partial_ioc_exit_under_a_halt_stores_no_resting_id(tmp_path):
+    # Immediate-or-cancel: the unfilled rest is gone, so there is nothing to track.
+    # A stored id here would block every later exit for this position.
+    async def go():
+        db = await _db(tmp_path, exit_order=None)
+        await place_profit_taking_orders(db, FakeKalshi(fill=4, yes_cents=60, ioc=True),
+                                         live=True)
+        return await _row(db), await db.get_all_trade_logs()
+    row, logs = asyncio.run(go())
+    assert row == ("open", 6, None, None)
+    assert [l.quantity for l in logs] == [4]
