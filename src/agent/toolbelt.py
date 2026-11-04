@@ -130,8 +130,8 @@ async def _committed_cents(kalshi_client, ticker: str, price_cents: int) -> int:
 
 async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
     """Structured situational awareness: governor verdict, equity, positions,
-    resting orders. Read-only. ``read_errors`` names what couldn't be read, so an
-    empty list below means none, not unknown."""
+    resting orders. Read-only. ``read_errors`` names any read that failed or was cut
+    short, so a listing with no matching entry there is complete."""
     from src.risk.risk_governor import RiskGovernor
 
     gov = governor or RiskGovernor(kalshi_client=kalshi_client)
@@ -152,8 +152,10 @@ async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
             "GET", "/trade-api/v2/portfolio/positions", params=params)
         for mp in resp.get("market_positions", []):
             try:
-                fp = float(mp.get("position_fp", "0") or 0)
-            except ValueError:
+                fp = float(mp["position_fp"])
+                if not math.isfinite(fp):
+                    raise ValueError(fp)
+            except (KeyError, TypeError, ValueError, OverflowError):
                 read_errors.append(f"position {mp.get('ticker')}")
                 continue
             if abs(fp) > 0.0001:
@@ -167,9 +169,14 @@ async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
         cursor = resp.get("cursor")
         if not cursor:
             break
+    else:
+        read_errors.append("positions: page cap")
 
     try:
-        orders = (await kalshi_client.get_orders(status="resting")).get("orders", [])
+        resp = await kalshi_client.get_orders(status="resting")
+        orders = resp.get("orders", [])
+        if resp.get("cursor"):
+            read_errors.append("resting_orders: first page only")
     except Exception:
         orders = []
         read_errors.append("resting_orders")
