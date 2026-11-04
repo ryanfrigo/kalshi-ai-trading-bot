@@ -511,6 +511,8 @@ def test_a_missing_policy_file_still_means_no_opinion(tmp_path):
             policy_path=str(tmp_path / "absent.json")))
 
 
+_TOO_BIG_FOR_A_FLOAT = "1" + "0" * 400
+
 _MALFORMED_POLICIES = [
     '{"blocks": {}}', '{"blocks": ""}', '{"blocks": null}', '{"blocks": 1}', '{"blocks": "x"}',
     '{"blocks": [{}]}', '{"blocks": [1]}', '{"blocks": [{"dimension": "category"}]}',
@@ -525,6 +527,9 @@ _MALFORMED_POLICIES = [
     '{"haircuts": [{"lo": 0.9, "hi": 1.0, "shrink_to": true}]}',
     '{"haircuts": [{"lo": 0.9, "hi": 1.0, "shrink_to": NaN}]}',
     '{"haircuts": [{"lo": NaN, "hi": 1.0, "shrink_to": 0.5}]}',
+    '{"haircuts": [{"lo": 0.9, "hi": 1.0, "shrink_to": ' + _TOO_BIG_FOR_A_FLOAT + '}]}',
+    '{"haircuts": [{"lo": ' + _TOO_BIG_FOR_A_FLOAT + ', "hi": 1.0, "shrink_to": 0.5}]}',
+    '{"haircuts": [{"lo": 0.9, "hi": ' + _TOO_BIG_FOR_A_FLOAT + ', "shrink_to": 0.5}]}',
 ]
 
 

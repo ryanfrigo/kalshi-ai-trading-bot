@@ -145,7 +145,12 @@ def derive_policy(
 # ---------------------------------------------------------------------------
 
 def _is_number(v: Any) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return False
+    try:
+        return math.isfinite(v)
+    except OverflowError:  # a JSON integer too large for a float
+        return False
 
 
 def _rule_is_well_formed(rule: Dict[str, Any]) -> bool:
