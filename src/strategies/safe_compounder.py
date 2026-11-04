@@ -121,8 +121,8 @@ def market_confidence_score(ticker: str, orderbook: dict, market: dict) -> Tuple
     reasons = []
 
     # Handle both new and old orderbook formats
-    no_side = orderbook.get("no_dollars", orderbook.get("no", []))
-    yes_side = orderbook.get("yes_dollars", orderbook.get("yes", []))
+    no_side = orderbook.get("no_dollars", orderbook.get("no", [])) or []
+    yes_side = orderbook.get("yes_dollars", orderbook.get("yes", [])) or []
 
     all_levels = []
     for price_data, qty_data in yes_side:
@@ -483,11 +483,15 @@ class SafeCompounder:
             if should_skip(ticker):
                 continue
 
-            title_lower = m.get("title", "").lower()
+            title_lower = (m.get("title") or "").lower()
             if any(phrase in title_lower for phrase in SKIP_TITLE_PHRASES):
                 continue
 
-            if int(float(m.get("volume_fp", 0) or m.get("volume", 0) or 0)) < MIN_VOLUME:
+            try:
+                vol = int(float(m.get("volume_fp", 0) or m.get("volume", 0) or 0))
+            except (ValueError, TypeError):
+                continue
+            if vol < MIN_VOLUME:
                 continue
 
             if not _has_last_price(m):
@@ -548,7 +552,7 @@ class SafeCompounder:
             try:
                 ob_resp = await self.client.get_orderbook(ticker, depth=10)
                 # Handle both new and old orderbook formats
-                ob = ob_resp.get("orderbook_fp", ob_resp.get("orderbook", {}))
+                ob = ob_resp.get("orderbook_fp", ob_resp.get("orderbook", {})) or {}
                 # No extra sleep — client already has 0.5s rate limiter
                 if (i + 1) % 50 == 0:
                     logger.info("Orderbook progress: %d/%d checked", i + 1, len(candidates))
@@ -630,7 +634,7 @@ class SafeCompounder:
                 "annualized_roi": annualized_roi,
                 "volume": int(float(m.get("volume_fp", 0) or m.get("volume", 0) or 0)),
                 "days_to_expiry": m["_days_to_expiry"],
-                "close_time": m.get("close_time", "")[:10],
+                "close_time": (m.get("close_time") or "")[:10],
                 "best_no_bid": best_no_bid,
             })
 

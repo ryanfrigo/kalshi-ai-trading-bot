@@ -283,44 +283,37 @@ def test_opportunity_carries_v2_volume_and_close_date():
     assert opp["roi_pct"] == pytest.approx(0.11 / 0.89 * 100)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:128,140 an empty side returned as null ({{'yes_dollars': None}}) makes "
-    "`for ... in None` raise TypeError outside any try: one empty book aborts the whole scan "
-    "(zero trades that day, fails closed)."))
 def test_null_orderbook_sides_skip_the_market_instead_of_aborting_the_scan():
     book = {"orderbook_fp": {"yes_dollars": None, "no_dollars": None}}
     assert _scan(_market(), book=book) == []
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:551,559 {{'orderbook_fp': null}} yields ob=None; ob.get raises AttributeError outside "
-    "the try: whole scan aborts."))
 def test_null_orderbook_payload_skips_the_market():
     assert _scan(_market(), book={"orderbook_fp": None}) == []
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:490 float('n/a') on a malformed volume string raises ValueError in the candidate "
-    "filter: one bad market row aborts the entire run (no trades, fails closed)."))
 def test_malformed_volume_skips_that_market_only():
     out = _compounder(FakeClient())._find_no_candidates(
         [_market(ticker="KXBAD", volume="n/a"), _market(ticker="KXOK")])
     assert [c["ticker"] for c in out] == ["KXOK"]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:486 `m.get('title','')` is None when the API sends title:null -> .lower() raises "
-    "AttributeError and aborts the run."))
 def test_null_title_does_not_abort_candidate_filtering():
     out = _compounder(FakeClient())._find_no_candidates([{**_market(), "title": None}])
     assert len(out) == 1
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:633 `m.get('close_time','')[:10]` with close_time:null raises TypeError after the "
-    "edge check passed: the run dies before ANY order is placed, including other good markets."))
 def test_null_close_time_does_not_abort_the_opportunity_scan():
     assert len(_scan({**_market(), "close_time": None})) == 1
+
+
+def test_bad_rows_are_skipped_and_good_rows_kept_in_one_batch():
+    out = _compounder(FakeClient())._find_no_candidates([
+        {**_market(ticker="KXT"), "title": None},
+        _market(ticker="KXV", volume="n/a"),
+        _market(ticker="KXOK"),
+    ])
+    assert [c["ticker"] for c in out] == ["KXT", "KXOK"]
 
 
 def test_confidence_gate_boundary_is_inclusive_at_the_threshold():
