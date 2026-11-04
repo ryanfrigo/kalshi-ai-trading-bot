@@ -475,3 +475,37 @@ def test_outcome_unknown_sell_survives_journal_failure(tmp_path, monkeypatch, ca
     assert res["journal_error"] == "disk full"
     assert res["journaled"] is False
     assert res["client_order_id"] in caplog.text
+
+
+@pytest.mark.parametrize("content", ['{"blocks": [{"dimens', '[1, 2]', '"text"', ''])
+def test_an_unreadable_policy_file_refuses_before_any_market_call(tmp_path, content):
+    # The file exists but can't be read as a policy, so its blocks are unknown.
+    # Trading on would silently switch the gate off.
+    p = tmp_path / "edge_policy.json"
+    p.write_text(content)
+    res = asyncio.run(place_guarded_order(
+        _NoMarketClient(), ticker="KXCPI-26JUN-3", side="no", count=10,
+        price=0.95, est_prob=0.97, governor=_Governor(), dry=True,
+        policy_path=str(p)))
+    assert res["ok"] is False
+    assert res["reason"] == "policy_unreadable"
+
+
+@pytest.mark.parametrize("content", ["not json", "[1, 2]"])
+def test_override_policy_passes_an_unreadable_policy_file_and_records_it(tmp_path, content):
+    p = tmp_path / "edge_policy.json"
+    p.write_text(content)
+    res = asyncio.run(place_guarded_order(
+        _MarketClient(no_ask=0.95), ticker="KXX-1", side="no", count=10, price=0.60,
+        est_prob=0.97, governor=_Governor(), dry=True, policy_path=str(p),
+        override_policy=True, journal_path=str(tmp_path / "journal.jsonl")))
+    assert res["ok"] is True
+    assert res["policy_note"] == {"overridden_unreadable_policy": str(p)}
+
+
+def test_a_missing_policy_file_still_means_no_opinion(tmp_path):
+    with pytest.raises(_ReachedMarket):
+        asyncio.run(place_guarded_order(
+            _NoMarketClient(), ticker="KXCPI-26JUN-3", side="no", count=10,
+            price=0.95, est_prob=0.97, governor=_Governor(), dry=True,
+            policy_path=str(tmp_path / "absent.json")))
