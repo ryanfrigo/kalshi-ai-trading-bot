@@ -170,7 +170,7 @@ def reconcile_fills(
         ):
             out.append(rec)
             continue
-        filled = filled_by_order.get(oid, 0.0)
+        filled = round(filled_by_order.get(oid, 0.0), 6)
         if filled >= float(rec.get("count", 0)):
             out.append(rec)  # fully filled — the record is honest as written
             continue

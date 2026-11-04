@@ -82,7 +82,8 @@ def settlement_to_record(settlement: Dict[str, Any]) -> Optional[Dict[str, Any]]
     result = settlement.get("result")
     if not side or result is None:
         return None
-    count = int(settlement.get("count") or 0)
+    x = float(settlement.get("count") or 0)
+    count = int(x) if x == int(x) else x
     cost = float(settlement.get("cost") or 0.0)
     price = round(cost / count, 6) if count else 0.0
     return {

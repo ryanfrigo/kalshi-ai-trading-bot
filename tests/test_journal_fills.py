@@ -208,3 +208,15 @@ def test_make_decision_record_integral_count_stays_int():
     count = _rec(count=3.0)["count"]
     assert count == 3
     assert isinstance(count, int)
+
+
+def test_many_hundredth_fills_sum_to_count_do_not_shrink():
+    # 250 x "0.01" accumulates float drift; a fully filled order must not look partial.
+    rec = _rec(count=2.5)
+    updated, changes = reconcile_fills(
+        [rec],
+        fills=[_fill_fp("oid-1", "0.01") for _ in range(250)],
+        resting_order_ids=set(),
+    )
+    assert updated[0] is rec
+    assert changes == []
