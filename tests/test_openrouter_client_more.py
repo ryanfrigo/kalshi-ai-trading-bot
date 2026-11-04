@@ -525,6 +525,11 @@ def test_parse_non_string_or_blank_reasoning_is_none(parse, raw):
     assert d is not None and d.reasoning is None
 
 
+def test_parse_caps_reasoning_at_1000_chars(parse):
+    d = parse('{"action":"BUY","side":"YES","limit_price":55,"confidence":0.9,"reasoning":"%s"}' % ("x" * 5000))
+    assert d is not None and d.reasoning == "x" * 1000
+
+
 @pytest.mark.xfail(strict=True, reason="openrouter_client.py:693-698 greedy `\\{.*\\}` over a reply "
                    "with a second brace group (e.g. a trailing example '{like this}') builds invalid "
                    "JSON; json_repair gives up and the parse returns None, "

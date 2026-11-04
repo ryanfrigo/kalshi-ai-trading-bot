@@ -800,7 +800,8 @@ If you do not recommend trading, use action "SKIP":
             side = side.upper()
 
             reasoning = data.get("reasoning")
-            reasoning = reasoning.strip() if isinstance(reasoning, str) and reasoning.strip() else None
+            # Model text (market titles can steer it): stored and copied into exit rows, so cap it.
+            reasoning = reasoning.strip()[:1000] if isinstance(reasoning, str) and reasoning.strip() else None
 
             return TradingDecision(
                 action=action,
