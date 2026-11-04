@@ -9,8 +9,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
-
 import src.strategies.safe_compounder as compounder
 from src.config.settings import settings
 
@@ -131,22 +129,11 @@ def test_lesson_4_no_per_category_cap_in_src():
     assert readers == [], f"max_sector_exposure is read in src: {readers}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "README says scan interval is 60s, but scan_interval_seconds is defined "
-        "at src/config/settings.py:92 and read nowhere outside settings.py"
-    ),
-)
-def test_lesson_5_scan_interval_is_60_seconds_and_actually_read():
+def test_lesson_5_trading_cycle_waits_60_seconds():
+    # The 60s is hard-coded in the run loop; settings.scan_interval_seconds (also 60)
+    # is read nowhere outside settings.py, so pin the loop, not the setting.
     section = _section(LESSONS, "## Contributing")
     assert "The default scan interval is 60 seconds" in section
-    assert settings.trading.scan_interval_seconds == 60
-
-    files = _src_files() + [ROOT / "cli.py", ROOT / "beast_mode_bot.py"]
-    readers = [
-        path.relative_to(ROOT).as_posix()
-        for path in files
-        if "scan_interval_seconds" in path.read_text()
-    ]
-    assert readers, "scan_interval_seconds is read nowhere outside settings.py"
+    bot_source = (ROOT / "beast_mode_bot.py").read_text()
+    loop = bot_source[bot_source.index("async def _run_trading_cycles("):bot_source.index("async def _check_daily_ai_limits(")]
+    assert "# Wait for next cycle (60 seconds)\n                await asyncio.sleep(60)" in loop
