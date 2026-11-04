@@ -110,7 +110,7 @@ def _pnl_from_my_side(record: Dict[str, Any], settlement: Dict[str, Any], won: b
             return 0.0
     # Reconstruct from the journal: my entry price and size.
     try:
-        count = int(record.get("count") or 0)
+        count = float(record.get("count") or 0)
         price = float(record.get("price") or 0.0)
     except (TypeError, ValueError):
         return 0.0

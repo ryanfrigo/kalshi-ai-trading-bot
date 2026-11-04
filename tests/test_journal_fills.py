@@ -134,3 +134,77 @@ def test_voided_record_never_earns_an_outcome():
     reconciled, newly = reconcile_outcomes(voided, [settlement])
     assert newly == 0
     assert reconciled[0].get("outcome") is None
+
+
+# ---------------------------------------------------------------------------
+# Fractional contract counts must survive reconciliation
+# ---------------------------------------------------------------------------
+
+def _fill_fp(order_id, count_fp):
+    return {"order_id": order_id, "count_fp": count_fp}
+
+
+def test_fractional_count_fully_filled_is_untouched():
+    rec = _rec(count=2.5)
+    updated, changes = reconcile_fills(
+        [rec],
+        fills=[_fill_fp("oid-1", "1.25"), _fill_fp("oid-1", "1.25")],
+        resting_order_ids=set(),
+    )
+    assert updated[0] is rec
+    assert changes == []
+
+
+def test_fractional_fills_that_sum_to_count_do_not_shrink():
+    rec = _rec(count=2.5)
+    updated, changes = reconcile_fills(
+        [rec],
+        fills=[_fill_fp("oid-1", "0.75"), _fill_fp("oid-1", "1.75")],
+        resting_order_ids=set(),
+    )
+    assert updated[0] is rec
+    assert changes == []
+
+
+def test_fractional_partial_fill_keeps_fractional_count():
+    updated, _ = reconcile_fills(
+        [_rec(count=2.5)],
+        fills=[_fill_fp("oid-1", "1.5")],
+        resting_order_ids=set(),
+    )
+    assert updated[0]["count"] == 1.5
+    assert updated[0]["original_count"] == 2.5
+
+
+def test_integral_fractional_fill_stays_int():
+    updated, _ = reconcile_fills(
+        [_rec(count=3)],
+        fills=[_fill_fp("oid-1", "1.00"), _fill_fp("oid-1", "1.00")],
+        resting_order_ids=set(),
+    )
+    assert updated[0]["count"] == 2
+    assert isinstance(updated[0]["count"], int)
+    assert updated[0]["original_count"] == 3
+
+
+def test_legacy_integer_fill_shrinks_count():
+    updated, _ = reconcile_fills(
+        [_rec(count=3)],
+        fills=[{"order_id": "oid-1", "count": 2}],
+        resting_order_ids=set(),
+    )
+    assert updated[0]["count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# make_decision_record keeps fractional counts
+# ---------------------------------------------------------------------------
+
+def test_make_decision_record_keeps_fractional_count():
+    assert _rec(count=2.5)["count"] == 2.5
+
+
+def test_make_decision_record_integral_count_stays_int():
+    count = _rec(count=3.0)["count"]
+    assert count == 3
+    assert isinstance(count, int)

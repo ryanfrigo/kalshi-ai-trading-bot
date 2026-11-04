@@ -17,6 +17,12 @@ from typing import Any, Dict, List, Optional
 DEFAULT_JOURNAL_PATH = "data/runtime/decision_journal.jsonl"
 
 
+def _count(raw) -> float | int:
+    """Kalshi counts can be fractional; keep an integral value an int."""
+    x = float(raw)
+    return int(x) if x == int(x) else x
+
+
 def make_decision_record(
     ticker: str,
     side: str,
@@ -49,7 +55,7 @@ def make_decision_record(
         "ticker": ticker,
         "side": side,
         "action": action,
-        "count": int(count),
+        "count": _count(count),
         "price": float(price),
         "est_prob": est_prob,
         "edge": edge,
@@ -143,14 +149,14 @@ def reconcile_fills(
     Returns ``(updated_records, changes)`` where ``changes`` is a list of
     ``{ticker, order_id, change}`` dicts describing what moved.
     """
-    filled_by_order: Dict[str, int] = {}
+    filled_by_order: Dict[str, float] = {}
     for f in fills:
         oid = f.get("order_id")
         if oid:
             # Kalshi fills carry ``count_fp`` (fixed-point string, e.g. "45.00");
             # older shapes used integer ``count``. Accept both.
             raw = f.get("count_fp", f.get("count", 0))
-            filled_by_order[oid] = filled_by_order.get(oid, 0) + int(float(raw))
+            filled_by_order[oid] = filled_by_order.get(oid, 0.0) + float(raw)
 
     out: List[Dict[str, Any]] = []
     changes: List[Dict[str, Any]] = []
@@ -164,8 +170,8 @@ def reconcile_fills(
         ):
             out.append(rec)
             continue
-        filled = filled_by_order.get(oid, 0)
-        if filled >= int(rec.get("count", 0)):
+        filled = filled_by_order.get(oid, 0.0)
+        if filled >= float(rec.get("count", 0)):
             out.append(rec)  # fully filled — the record is honest as written
             continue
         updated = dict(rec)
@@ -175,10 +181,10 @@ def reconcile_fills(
             changes.append({"ticker": rec.get("ticker"), "order_id": oid,
                             "change": "voided (0 fills)"})
         else:
-            updated["original_count"] = int(rec.get("count", 0))
-            updated["count"] = filled
+            updated["original_count"] = _count(rec.get("count", 0))
+            updated["count"] = _count(filled)
             changes.append({"ticker": rec.get("ticker"), "order_id": oid,
-                            "change": f"count {rec.get('count')} -> {filled} (partial fill)"})
+                            "change": f"count {rec.get('count')} -> {updated['count']} (partial fill)"})
         out.append(updated)
     return out, changes
 
