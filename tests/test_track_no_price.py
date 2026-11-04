@@ -96,3 +96,73 @@ async def test_run_tracking_nan_entry_or_stop_skips_that_position_and_continues(
          patch("src.jobs.execute.place_stop_loss_orders", AsyncMock(return_value={"orders_placed": 0})):
         await run_tracking(db, live=False)
     assert seen == ["BAD-ENTRY", "BAD-STOP", "GOOD"]  # loop reached the last position
+
+
+# ---- issue #49: a $0 exit on a non-resolution path is refused, live or paper ----------
+LIVE_BOOK = {"status": "active", "yes_bid_dollars": 0.55, "no_bid_dollars": 0.45}
+
+
+async def _track(mock_client, market, decision, live):
+    db = MagicMock()
+    db.get_open_live_positions = AsyncMock(return_value=[_pos("YES")])
+    db.add_trade_log = AsyncMock()
+    db.update_position_status = AsyncMock()
+    mock_client.return_value.get_market = AsyncMock(return_value={"market": market})
+    mock_client.return_value.close = AsyncMock()
+    paper = MagicMock(return_value=True)
+    with patch("src.jobs.execute.place_profit_taking_orders", AsyncMock(return_value={"orders_placed": 0})), \
+         patch("src.jobs.execute.place_stop_loss_orders", AsyncMock(return_value={"orders_placed": 0})), \
+         patch("src.jobs.execute.log_paper_exit", paper), \
+         patch("src.jobs.track.should_exit_position", AsyncMock(return_value=decision)):
+        await run_tracking(db, live=live)
+    return db, paper
+
+
+@pytest.mark.parametrize("price", [0.0, -0.01])
+@pytest.mark.parametrize("reason", ["time_based", "stop_loss_triggered"])
+@patch("src.jobs.execute.place_sell_limit_order", new_callable=AsyncMock)
+@patch("src.jobs.track.KalshiClient")
+async def test_live_zero_price_non_resolution_exit_is_refused(mock_client, mock_sell, reason, price):
+    db, paper = await _track(mock_client, LIVE_BOOK, (True, reason, price), live=True)
+    mock_sell.assert_not_called()
+    paper.assert_not_called()
+    db.add_trade_log.assert_not_called()
+    db.update_position_status.assert_not_called()
+
+
+@patch("src.jobs.execute.place_sell_limit_order", new_callable=AsyncMock)
+@patch("src.jobs.track.KalshiClient")
+async def test_paper_zero_price_exit_is_refused_too(mock_client, mock_sell):
+    db, paper = await _track(mock_client, LIVE_BOOK, (True, "time_based", 0.0), live=False)
+    paper.assert_not_called()
+    mock_sell.assert_not_called()
+
+
+@patch("src.jobs.execute.place_sell_limit_order", new_callable=AsyncMock)
+@patch("src.jobs.track.KalshiClient")
+async def test_paper_priced_exit_is_logged_as_paper_only(mock_client, mock_sell):
+    # control: the same path with a real price reaches the paper exit, so the guard above is what stops it
+    db, paper = await _track(mock_client, LIVE_BOOK, (True, "time_based", 0.55), live=False)
+    paper.assert_called_once()
+    mock_sell.assert_not_called()
+    db.add_trade_log.assert_not_called()
+    db.update_position_status.assert_not_called()
+
+
+@patch("src.jobs.execute.place_sell_limit_order", new_callable=AsyncMock)
+@patch("src.jobs.track.KalshiClient")
+async def test_missing_market_data_skips_the_position(mock_client, mock_sell):
+    exit_check = AsyncMock(return_value=(True, "time_based", 0.55))
+    db = MagicMock()
+    db.get_open_live_positions = AsyncMock(return_value=[_pos("YES")])
+    db.add_trade_log = AsyncMock()
+    db.update_position_status = AsyncMock()
+    mock_client.return_value.get_market = AsyncMock(return_value={"market": {}})
+    mock_client.return_value.close = AsyncMock()
+    with patch("src.jobs.execute.place_profit_taking_orders", AsyncMock(return_value={"orders_placed": 0})), \
+         patch("src.jobs.execute.place_stop_loss_orders", AsyncMock(return_value={"orders_placed": 0})), \
+         patch("src.jobs.track.should_exit_position", exit_check):
+        await run_tracking(db, live=True)
+    exit_check.assert_not_awaited()
+    mock_sell.assert_not_called()
+    db.update_position_status.assert_not_called()
