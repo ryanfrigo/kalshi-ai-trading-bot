@@ -203,3 +203,14 @@ def test_journal_file_has_one_json_line_per_record(tmp_path):
     assert len(lines) == 6
     for line in lines:
         assert isinstance(json.loads(line), dict)
+
+
+def test_load_journal_skips_a_corrupt_line_and_keeps_the_rest(tmp_path):
+    p = tmp_path / "j.jsonl"
+    p.write_text('{"a": 1}\n{"truncated": \n\n{"b": 2}\n')
+    assert load_journal(str(p)) == [{"a": 1}, {"b": 2}]
+
+
+def test_a_decision_record_carries_method_only_when_given():
+    assert make_decision_record("KXA", "no", 1, 0.95, method="workflow")["method"] == "workflow"
+    assert "method" not in make_decision_record("KXA", "no", 1, 0.95)

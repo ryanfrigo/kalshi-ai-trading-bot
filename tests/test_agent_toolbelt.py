@@ -4,7 +4,7 @@ cap_count caps an intended contract count so the order never exceeds the
 per-position equity cap or available cash — a hard backstop independent of
 whatever size the agent (or strategy) asks for.
 """
-from src.agent.toolbelt import cap_count
+from src.agent.toolbelt import _normalize_ticker, cap_count
 
 
 def test_cap_count_allows_within_limits():
@@ -608,3 +608,15 @@ def test_an_override_of_an_unreadable_policy_reaches_the_journal(tmp_path):
     assert res["ok"] is True
     record = json.loads(journal.read_text().splitlines()[-1])
     assert record["policy_note"] == {"overridden_unreadable_policy": str(p)}
+
+
+def test_cap_count_refuses_a_zero_or_negative_price():
+    # Dividing by a bad price would size an order from nonsense, or crash.
+    assert cap_count(5, price_cents=0, equity_cents=80000, cash_cents=60000) == (0, "invalid price")
+    assert cap_count(5, price_cents=-1, equity_cents=80000, cash_cents=60000) == (0, "invalid price")
+
+
+def test_a_non_string_ticker_never_reaches_a_request_path():
+    for bad in (None, 7, ["KXA"], b"KXA"):
+        assert _normalize_ticker(bad) is None
+    assert _normalize_ticker(" kxa-1 ") == "KXA-1"
