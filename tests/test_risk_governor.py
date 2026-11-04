@@ -7,10 +7,11 @@ must honor a manual kill-switch file the owner can drop at any time.
 """
 import asyncio
 import os
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.risk.risk_governor import RiskGovernor, evaluate_risk, roll_state
+from src.risk.risk_governor import RiskGovernor, equity_cents_from_balance, evaluate_risk, roll_state
 
 
 # --- pure evaluate_risk -----------------------------------------------------
@@ -271,3 +272,69 @@ def test_trip_manual_halt_creates_missing_parent_dirs(tmp_path):
     gov.trip_manual_halt("x")
     assert gov.is_manually_halted() is True
     assert flag.read_text() == "x"
+
+
+# --- a balance reply missing a figure is a failed read, never a baseline ------
+
+@pytest.mark.parametrize("bal", [
+    {},
+    {"status_code": 200, "empty_body": True},
+    {"balance": 10000},
+    {"portfolio_value": 90000},
+    {"balance": 10000, "portfolio_value": None},
+    {"balance": None, "portfolio_value": 90000},
+])
+def test_part_of_a_balance_is_no_equity(bal):
+    assert equity_cents_from_balance(bal) == 0
+
+
+def test_a_whole_balance_is_cash_plus_portfolio():
+    assert equity_cents_from_balance({"balance": 10000, "portfolio_value": 90000}) == 100000
+    assert equity_cents_from_balance({"balance": 0, "portfolio_value": 90000}) == 90000
+    assert equity_cents_from_balance({"balance": 10000, "portfolio_value": 0}) == 10000
+
+
+class _BalanceClient:
+    def __init__(self, bal):
+        self.bal = bal
+
+    async def get_balance(self):
+        return self.bal
+
+
+def test_a_partial_balance_never_loosens_the_daily_limit(tmp_path):
+    today = [datetime(2026, 11, 4, 12, tzinfo=timezone.utc)]
+    state = tmp_path / "state.json"
+    client = _BalanceClient({"balance": 10000, "portfolio_value": 90000})
+    gov = RiskGovernor(
+        kalshi_client=client, state_path=str(state), halt_flag_path=str(tmp_path / "halt"),
+        max_daily_loss_pct=10.0, max_drawdown_pct=90.0, clock=lambda: today[0],
+    )
+    assert asyncio.run(gov.check()).halted is False
+
+    today[0] += timedelta(days=1)
+    before = state.read_text()
+    client.bal = {"balance": 10000}
+    partial = asyncio.run(gov.check())
+    assert partial.halted is True and partial.reasons[0].startswith("EQUITY_UNREADABLE")
+    assert state.read_text() == before
+
+    client.bal = {"balance": 10000, "portfolio_value": 70000}
+    assert asyncio.run(gov.check()).sod_equity_cents == 80000
+    client.bal = {"balance": 10000, "portfolio_value": 60000}
+    down = asyncio.run(gov.check())
+    assert down.halted is True and down.reasons[0].startswith("DAILY_LOSS")
+
+
+def test_a_partial_balance_refuses_a_guarded_order(tmp_path):
+    from src.agent.toolbelt import place_guarded_order
+
+    class Client(_BalanceClient):
+        async def get_market(self, ticker):
+            raise AssertionError("the governor must refuse before the market is read")
+
+    client = Client({"balance": 10000})
+    gov = RiskGovernor(kalshi_client=client, state_path=str(tmp_path / "s.json"), halt_flag_path=str(tmp_path / "h"))
+    res = asyncio.run(place_guarded_order(client, "T", "no", 1, price=0.5, est_prob=0.6, governor=gov, dry=True))
+    assert res["ok"] is False and res["reason"] == "governor_halted"
+    assert not (tmp_path / "s.json").exists()

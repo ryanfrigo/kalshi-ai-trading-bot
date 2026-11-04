@@ -164,6 +164,14 @@ def roll_state(prev: Optional[Dict], current: int, today: str) -> Dict:
     }
 
 
+def equity_cents_from_balance(bal: Dict) -> int:
+    """Cash + portfolio value, or 0 when either is missing: part of a balance is not
+    an equity, and a baseline saved from it would loosen the daily limit all day."""
+    if bal.get("balance") is None or bal.get("portfolio_value") is None:
+        return 0
+    return int(bal["balance"]) + int(bal["portfolio_value"])
+
+
 def _valid_state(state: object) -> bool:
     """True only for the shape ``roll_state`` relies on."""
     if not isinstance(state, dict) or not isinstance(state.get("date"), str):
@@ -254,10 +262,7 @@ class RiskGovernor:
     async def current_equity_cents(self) -> int:
         if self.kalshi_client is None:
             raise RuntimeError("RiskGovernor needs a kalshi_client to read live equity")
-        bal = await self.kalshi_client.get_balance()
-        cash = int(bal.get("balance", 0) or 0)
-        portfolio = int(bal.get("portfolio_value", 0) or 0)
-        return cash + portfolio
+        return equity_cents_from_balance(await self.kalshi_client.get_balance())
 
     # --- the check ----------------------------------------------------------
     async def check(self, current_equity_cents: Optional[int] = None) -> GovernorDecision:

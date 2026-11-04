@@ -223,3 +223,10 @@ async def test_an_empty_balance_reply_cannot_slip_past_with_a_real_governor(tmp_
     assert b["governor"]["halted"] is True
     assert b["governor"]["reasons"][0].startswith("EQUITY_UNREADABLE")
     assert state.read_text() == before
+
+
+async def test_a_partial_balance_reaches_the_governor_as_unreadable():
+    gov = FakeGovernor()
+    c = CountingClient([{"balance": 1000}], pages=[{"market_positions": []}])
+    b = await account_brief(c, governor=gov)
+    assert gov.equity == 0 and b["read_errors"] == ["balance"]

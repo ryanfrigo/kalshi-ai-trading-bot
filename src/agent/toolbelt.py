@@ -133,7 +133,7 @@ async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
     resting orders. Read-only. ``read_errors`` names reads this noticed failed, came back
     malformed or were cut short. It holds tickers, so don't publish it as is. An empty
     list isn't proof of completeness: it only means none of these checks tripped."""
-    from src.risk.risk_governor import RiskGovernor
+    from src.risk.risk_governor import RiskGovernor, equity_cents_from_balance
 
     gov = governor or RiskGovernor(kalshi_client=kalshi_client)
 
@@ -141,7 +141,7 @@ async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
     cash = int(bal.get("balance", 0) or 0)
     pv = int(bal.get("portfolio_value", 0) or 0)
     # One balance reply for both, so read_errors describes what the governor computed from.
-    decision = await gov.check(current_equity_cents=cash + pv)
+    decision = await gov.check(current_equity_cents=equity_cents_from_balance(bal))
 
     read_errors = []
     if bal.get("balance") is None or bal.get("portfolio_value") is None:
