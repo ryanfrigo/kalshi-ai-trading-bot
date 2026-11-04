@@ -183,8 +183,8 @@ def aggregate_verdict(
 
     BUY_NO requires ALL of: the fade SURVIVES, edge_pts >= 5, the catalyst
     direction is not ``positive`` or ``live``, this is not an election
-    frontrunner, AND the skeptic did not itself say PASS (we never override a
-    skeptic PASS into a BUY_NO). Otherwise PASS.
+    frontrunner, AND the skeptic said BUY_NO (a skeptic PASS, or a missing or odd
+    recommend, is never turned into a BUY_NO). Otherwise PASS.
 
     ``size_hint``: ``none`` on PASS; ``full`` ONLY for a genuine sub-5% adverse/
     none-catalyst structural longshot; else ``half`` when edge_pts >= 10; else

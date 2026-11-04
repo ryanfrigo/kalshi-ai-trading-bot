@@ -480,3 +480,10 @@ async def test_enforce_limits_if_needed_never_writes_or_orders():
 async def test_get_max_position_size_is_pct_of_portfolio():
     c = FakeClient(balance_cents=100_000)
     assert await get_max_position_size(FakeDB(), c) == pytest.approx(50.0)
+
+
+async def test_status_is_error_when_the_balance_reply_is_not_an_object():
+    m, _, _ = _mgr(client=FakeClient(balance_resp=["not", "a", "dict"]))
+    st = await m.get_position_limits_status()
+    assert st["status"] == "ERROR"
+    assert st["message"] == "balance response is not an object"
