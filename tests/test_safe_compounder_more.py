@@ -936,10 +936,6 @@ def test_check_fills_balance_failure_propagates():
         _run(SafeCompounder(NoBal()).check_fills())
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:823-825 check_fills reads v1 fields `count` and `yes_price` (cents): a v2 fill "
-    "(count_fp '5.00', no_price_dollars '0.8900') prints 'x0 @ $0.00'. Display only; the owner "
-    "reads this to confirm fills."))
 def test_check_fills_reads_v2_fill_fields(capsys):
     out = _cf(FillsClient(fills=[{"ticker": "KXA", "side": "no", "count_fp": "5.00",
                                   "no_price_dollars": "0.8900", "yes_price_dollars": "0.1100",
@@ -947,13 +943,17 @@ def test_check_fills_reads_v2_fill_fields(capsys):
     assert "no x5.00 @ $0.89" in out or "no x5 @ $0.89" in out
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:825 price = fill.get('yes_price', fill.get('no_price')): yes_price is present on every "
-    "fill, so a NO buy at 89c is shown at its YES-leg price 11c. Misreports the cost basis."))
 def test_check_fills_shows_the_no_price_for_a_no_fill(capsys):
     out = _cf(FillsClient(fills=[{"ticker": "KXA", "side": "no", "count": 5, "yes_price": 11,
                                   "no_price": 89, "created_time": "2026-11-02T10:11:12Z"}]), capsys)
     assert "no x5 @ $0.89" in out
+
+
+def test_check_fills_v2_yes_fill_uses_the_yes_leg_price(capsys):
+    out = _cf(FillsClient(fills=[{"ticker": "KXB", "side": "yes", "count_fp": "2.50",
+                                  "yes_price_dollars": "0.0700", "no_price_dollars": "0.9300",
+                                  "created_time": "2026-11-02T10:11:12Z"}]), capsys)
+    assert "yes x2.5 @ $0.07 | KXB" in out
 
 
 def test_v1_cent_last_price_is_normalised_in_the_reported_opportunity():

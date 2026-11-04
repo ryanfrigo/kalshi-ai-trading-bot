@@ -829,7 +829,21 @@ class SafeCompounder:
                 ticker = f.get("ticker", "")
                 side = f.get("side", "")
                 count = f.get("count", 0)
-                price = f.get("yes_price", f.get("no_price", 0))
+                if f.get("count_fp") is not None:
+                    try:
+                        c = float(f["count_fp"])
+                        count = int(c) if c == int(c) else c
+                    except (ValueError, TypeError):
+                        count = f["count_fp"]
+                leg = "no" if side == "no" else "yes"
+                price = f.get(f"{leg}_price_dollars")
+                if price is not None:
+                    try:
+                        price = float(price)
+                    except (ValueError, TypeError):
+                        pass
+                else:
+                    price = f.get(f"{leg}_price", f.get("yes_price", f.get("no_price", 0)))
                 created = f.get("created_time", "")[:16]
                 # Convert cents to dollars if needed for display
                 if isinstance(price, (int, float)) and price > 1.0:
