@@ -182,3 +182,48 @@ def test_cancel_lands_but_response_lost_sends_nothing(tmp_path):
     c.on_cancel = lost
     res, pos, logs = _stop(tmp_path, c)
     assert c.sent == [] and pos.exit_order_id == "o1" and logs == []
+
+
+class RowChangesKalshi(FakeKalshi):
+    """Another pass re-points the row's exit order while we read ours."""
+    db = None
+
+    async def get_order(self, oid):
+        if self.db is not None:
+            (p,) = await self.db.get_open_live_positions()
+            await self.db.set_exit_order(p.id, "o9", 0.0)
+            self.db = None
+        return await super().get_order(oid)
+
+
+def test_exit_that_filled_in_full_before_the_cancel_closes_and_sells_nothing(tmp_path):
+    c = FakeKalshi(no_bid_cents=30, held=0.0, o1_cents=50, o1_filled=10.0)
+    res, pos, logs = _stop(tmp_path, c)
+    assert ("cancel_order", "o1") not in c.calls and c.sent == []
+    assert res["orders_placed"] == 0
+    assert [(l.quantity, l.exit_price) for l in logs] == [(10, 0.50)]
+    assert pos is None or pos.status == "closed"
+
+
+@pytest.mark.parametrize("status", ["canceled", "executed"])
+def test_exit_no_longer_resting_is_not_cancelled_and_nothing_is_sold(tmp_path, status):
+    c = FakeKalshi(no_bid_cents=30, o1_cents=50)
+    c.o1["status"] = status
+    res, pos, _ = _stop(tmp_path, c)
+    assert ("cancel_order", "o1") not in c.calls and c.sent == []
+    assert res["orders_placed"] == 0
+
+
+def test_exit_row_changed_mid_replace_cancels_nothing(tmp_path):
+    c = RowChangesKalshi(no_bid_cents=30, o1_cents=50)
+
+    async def go():
+        db = await _db(tmp_path)
+        c.db = db
+        res = await place_stop_loss_orders(db, c, stop_loss_threshold=-0.15, live=True)
+        return res, await db.get_position_by_market_id(T)
+
+    res, pos = asyncio.run(go())
+    assert ("cancel_order", "o1") not in c.calls and c.sent == []
+    assert res["orders_placed"] == 0
+    assert pos.exit_order_id == "o9" and pos.quantity == 10
