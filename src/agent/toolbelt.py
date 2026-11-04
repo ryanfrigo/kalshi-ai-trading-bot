@@ -130,7 +130,8 @@ async def _committed_cents(kalshi_client, ticker: str, price_cents: int) -> int:
 
 async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
     """Structured situational awareness: governor verdict, equity, positions,
-    resting orders. Read-only."""
+    resting orders. Read-only. ``read_errors`` names what couldn't be read, so an
+    empty list below means none, not unknown."""
     from src.risk.risk_governor import RiskGovernor
 
     gov = governor or RiskGovernor(kalshi_client=kalshi_client)
@@ -140,6 +141,7 @@ async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
     cash = int(bal.get("balance", 0) or 0)
     pv = int(bal.get("portfolio_value", 0) or 0)
 
+    read_errors = []
     positions = []
     cursor = None
     for _ in range(30):
@@ -152,7 +154,8 @@ async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
             try:
                 fp = float(mp.get("position_fp", "0") or 0)
             except ValueError:
-                fp = 0.0
+                read_errors.append(f"position {mp.get('ticker')}")
+                continue
             if abs(fp) > 0.0001:
                 positions.append({
                     "ticker": mp.get("ticker"),
@@ -169,6 +172,7 @@ async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
         orders = (await kalshi_client.get_orders(status="resting")).get("orders", [])
     except Exception:
         orders = []
+        read_errors.append("resting_orders")
     resting = [{
         "ticker": o.get("ticker"),
         "outcome_side": o.get("outcome_side"),
@@ -184,6 +188,7 @@ async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
         "equity": (cash + pv) / 100.0,
         "positions": positions,
         "resting_orders": resting,
+        "read_errors": read_errors,
     }
 
 
