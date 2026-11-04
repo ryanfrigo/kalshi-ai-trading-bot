@@ -153,14 +153,21 @@ def _is_number(v: Any) -> bool:
         return False
 
 
-def _rule_is_well_formed(rule: Dict[str, Any]) -> bool:
-    return isinstance(rule.get("dimension"), str) and "label" in rule
+def _block_is_well_formed(rule: Dict[str, Any]) -> bool:
+    return rule.get("dimension") in ("category", "method") and isinstance(rule.get("label"), str)
+
+
+def _warning_is_well_formed(rule: Dict[str, Any]) -> bool:
+    return rule.get("dimension") == "side" and isinstance(rule.get("label"), str)
 
 
 def _haircut_is_well_formed(rule: Dict[str, Any]) -> bool:
     shrink_to, lo, hi = rule.get("shrink_to"), rule.get("lo"), rule.get("hi")
-    return (_is_number(shrink_to) and 0.0 <= shrink_to <= 1.0
-            and (lo is None or _is_number(lo)) and (hi is None or _is_number(hi)))
+    if not (_is_number(shrink_to) and 0.0 <= shrink_to <= 1.0):
+        return False
+    if lo is None or hi is None:  # _in_band: a band with no edge matches nothing
+        return (lo is None or _is_number(lo)) and (hi is None or _is_number(hi))
+    return _is_number(lo) and _is_number(hi) and lo <= hi
 
 
 def policy_is_well_formed(policy: Any) -> bool:
@@ -172,8 +179,8 @@ def policy_is_well_formed(policy: Any) -> bool:
     """
     if not isinstance(policy, dict):
         return False
-    for key, rule_ok in (("blocks", _rule_is_well_formed),
-                         ("warnings", _rule_is_well_formed),
+    for key, rule_ok in (("blocks", _block_is_well_formed),
+                         ("warnings", _warning_is_well_formed),
                          ("haircuts", _haircut_is_well_formed)):
         rules = policy.get(key, [])
         if not isinstance(rules, list):
@@ -338,7 +345,7 @@ def load_policy(path: str = DEFAULT_POLICY_PATH) -> Optional[Dict[str, Any]]:
         return None
     try:
         return json.loads(p.read_text())
-    except (ValueError, OSError):
+    except (ValueError, OSError, RecursionError):  # RecursionError: JSON nested too deep
         return None
 
 

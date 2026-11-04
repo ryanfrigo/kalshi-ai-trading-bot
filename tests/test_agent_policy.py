@@ -13,8 +13,10 @@ They cover:
 The inputs mirror the real shapes emitted by ``learnings.edge_breakdown`` and
 ``learnings.calibration_table`` so the policy stays a thin, honest consumer.
 """
+import json
+
 from src.agent.policy import (
-    derive_policy, apply_policy, diff_policy, build_settled_records,
+    derive_policy, apply_policy, diff_policy, build_settled_records, policy_is_well_formed,
 )
 
 
@@ -268,3 +270,18 @@ def test_demo_fixture_shows_all_three_mechanisms():
     assert "KXALIENS" not in blocked                        # winner stays allowed
     assert any(w["label"] == "yes" for w in policy["warnings"])  # side warning
     assert policy["haircuts"], "demo must show an overconfident band"
+    assert policy_is_well_formed(policy)
+
+
+def test_every_policy_derive_policy_writes_is_well_formed():
+    # A false refusal would stop live orders, so a real derived policy must pass,
+    # after a JSON round trip, whichever rules it holds.
+    policy = derive_policy(
+        _edge_breakdown(by_category={"KXCPI": _grp(6, -5.0)}, by_side={"no": _grp(9, -1.0)},
+                        by_method={"m": _grp(5, -2.0)}),
+        [_calib("[0.90,0.95)", 0.90, 0.95, 8, 0.92, 0.70),
+         _calib("[0.95,1.00]", 0.95, 1.00, 8, 0.97, 0.0)],
+        date=DATE)
+    assert policy["blocks"] and policy["warnings"] and len(policy["haircuts"]) == 2
+    assert policy_is_well_formed(json.loads(json.dumps(policy)))
+    assert policy_is_well_formed(derive_policy(_edge_breakdown(), [], date=DATE))

@@ -517,6 +517,15 @@ _MALFORMED_POLICIES = [
     '{"blocks": {}}', '{"blocks": ""}', '{"blocks": null}', '{"blocks": 1}', '{"blocks": "x"}',
     '{"blocks": [{}]}', '{"blocks": [1]}', '{"blocks": [{"dimension": "category"}]}',
     '{"blocks": [{"dimension": 1, "label": "KXCPI"}]}',
+    '{"blocks": [{"dimension": "categry", "label": "KXCPI"}]}',
+    '{"blocks": [{"dimension": "side", "label": "no"}]}',
+    '{"blocks": [{"dimension": "category", "label": ["KXCPI"]}]}',
+    '{"warnings": [{"dimension": "category", "label": "KXCPI"}]}',
+    '{"warnings": [{"dimension": "side", "label": 1}]}',
+    '{"haircuts": [{"lo": 1.0, "hi": 0.9, "shrink_to": 0.5}]}',
+    '{"haircuts": [{"lo": null, "hi": "x", "shrink_to": 0.5}]}',
+    '{"haircuts": [{"lo": "x", "hi": null, "shrink_to": 0.5}]}',
+    '{"blocks": [], "meta": ' + "[" * 10000 + "0" + "]" * 10000 + '}',
     '{"warnings": {}}', '{"warnings": [{}]}',
     '{"haircuts": null}', '{"haircuts": [{}]}',
     '{"haircuts": [{"lo": 0.9, "hi": 1.0}]}',
@@ -562,6 +571,11 @@ def test_override_passes_a_malformed_policy_without_crashing(tmp_path, content):
     '{}', '{"meta": {}}', '{"blocks": [], "warnings": [], "haircuts": []}',
     '{"haircuts": [{"lo": null, "hi": null, "shrink_to": 0.5}]}',
     '{"blocks": [{"dimension": "category", "label": "OTHER"}]}',
+    '{"blocks": [{"dimension": "method", "label": "OTHER"}]}',
+    '{"warnings": [{"dimension": "side", "label": "yes"}]}',
+    '{"haircuts": [{"lo": 0.1, "hi": 0.1, "shrink_to": 0.5}]}',
+    '{"haircuts": [{"lo": null, "hi": 0.5, "shrink_to": 0.5}]}',
+    '{"haircuts": [{"lo": 0.5, "hi": null, "shrink_to": 0.5}]}',
 ])
 def test_a_well_formed_policy_with_no_matching_rule_proceeds(tmp_path, content):
     p = tmp_path / "edge_policy.json"
