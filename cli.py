@@ -323,7 +323,7 @@ def cmd_fills(args: argparse.Namespace) -> None:
 
     A journal record is written at order placement, but a resting maker order
     can be cancelled unfilled (or partially filled) afterwards. This command
-    pulls the account's fills and resting orders, voids journal records whose
+    reads each open order and the resting list, voids journal records whose
     orders never filled, and shrinks partially-filled counts — so calibration
     and the Edge Policy only ever learn from trades that actually executed.
     Pass --dry for a read-only preview.
@@ -337,7 +337,7 @@ def cmd_fills(args: argparse.Namespace) -> None:
     async def _f() -> None:
         from src.clients.kalshi_client import KalshiClient
         from src.agent.journal import load_journal, reconcile_fills, write_journal
-        from src.agent.pending import resolve_pending
+        from src.agent.pending import resolve_pending, _fill, _TERMINAL
         from src.strategies.safe_compounder import _fetch_all_pages
 
         journal = load_journal()
@@ -352,23 +352,24 @@ def cmd_fills(args: argparse.Namespace) -> None:
                 r for r in journal
                 if r.get("order_id") and not r.get("outcome") and not r.get("voided")
             ]
-            # Every page, and raise on a bad reply: an order missing from this set
-            # with no fills gets voided, and a voided record never comes back.
+            # Every page, and raise on a bad reply. An order in this set is left alone.
             resting = await _fetch_all_pages(client.get_orders, "orders", status="resting")
             resting_ids = {o.get("order_id") for o in resting if o.get("order_id")}
-            # Per-order queries: exact evidence for each order, immune to the
-            # recency window of the unscoped fills endpoint (absence of a fill
-            # in the last-N window is NOT evidence the order never filled).
+            # Ask the order itself. Only an order that says it ended, with a fill count
+            # that fits its status, is evidence: a void is permanent, and an empty
+            # list reply can't be told from a real empty result.
             for rec in candidates:
                 oid = rec["order_id"]
                 if oid in resting_ids:
                     continue
                 try:
-                    reply = await client.get_fills(order_id=oid, limit=200)
-                    rows = reply.get("fills")
-                    if not isinstance(rows, list) or (reply.get("cursor") and len(rows) >= 200):
-                        raise ValueError("no complete fills list")
-                    fills.extend(rows)
+                    order = (await client.get_order(oid))["order"]
+                    filled = _fill(order)
+                    status = order["status"]
+                    if order["order_id"] != oid or status not in _TERMINAL \
+                            or (status == "executed" and filled == 0):
+                        raise ValueError("order hasn't proved it ended")
+                    fills.append({"order_id": oid, "count_fp": filled})
                 except Exception:
                     # Fail safe: no evidence -> record stays untouched.
                     skipped.append({"ticker": rec.get("ticker"), "order_id": oid})
