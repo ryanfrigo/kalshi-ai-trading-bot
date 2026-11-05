@@ -595,20 +595,52 @@ def _resting_exit_columns(position: Position, order: Dict, logger) -> Dict:
             "exit_order_read_failures": 0}
 
 
-_MAX_EXIT_READ_FAILURES = 3
+_EXIT_READ_ALERT_EVERY = 3
 
 
 async def _exit_read_failed(position: Position, db_manager: DatabaseManager, logger) -> str:
-    """Count one bad read of the stored exit order; drop the id on the third in a row."""
+    """Count one bad read of the stored exit order. The id and fill baseline are kept.
+
+    Dropping the id on failed reads would lose a fill that happened meanwhile (the DB
+    still shows the contracts open and settlement would book them again). So the id is
+    only cleared by a good read; here we retry next pass and shout every 3rd failure.
+    """
     oid = position.exit_order_id
     failures = (position.exit_order_read_failures or 0) + 1
-    if failures >= _MAX_EXIT_READ_FAILURES:
-        await db_manager.set_exit_order(position.id, None, None)
-        logger.error(f"Exit order {oid} on {position.market_id} unreadable {failures} times "
-                     f"in a row: late fills of {oid} will not be booked; check the trade log.")
-        return "abandoned"
     await db_manager.set_exit_order(position.id, oid, position.exit_order_filled, failures)
+    if failures % _EXIT_READ_ALERT_EVERY == 0:
+        logger.error(f"Exit order {oid} on {position.market_id} unreadable {failures} times "
+                     f"in a row: late fills of {oid} are NOT booked yet and new exits are "
+                     f"blocked; still retrying, check the order on Kalshi.")
     return "unchanged"
+
+
+_HISTORICAL_ORDER_PAGES = 5
+
+
+async def _read_exit_order(oid: str, ticker: str, kalshi_client: KalshiClient) -> Dict:
+    """get_order, plus an archive lookup when (and only when) Kalshi answers a definitive 404.
+
+    A 5xx, a timeout or any other error propagates: the order is just unreadable.
+    On a 404 the order may have been archived, so page the historical orders for the
+    ticker (capped) and match the id locally. Not found, or the lookup failing, raises
+    so the caller keeps the id and counts a failure.
+    """
+    try:
+        return await kalshi_client.get_order(oid)
+    except KalshiAPIError as e:
+        if getattr(e, "status_code", None) != 404:
+            raise
+    cursor = None
+    for _ in range(_HISTORICAL_ORDER_PAGES):
+        page = await kalshi_client.get_historical_orders(ticker, limit=1000, cursor=cursor)
+        for o in page.get("orders") or []:
+            if isinstance(o, dict) and o.get("order_id") == oid:
+                return {"order": o}
+        cursor = page.get("cursor")
+        if not cursor:
+            break
+    raise LookupError(f"order {oid} is 404 on get_order and not in the historical orders")
 
 
 async def reconcile_resting_exit(position: Position, kalshi_client: KalshiClient,
@@ -616,14 +648,13 @@ async def reconcile_resting_exit(position: Position, kalshi_client: KalshiClient
     """Book fills of the position's stored exit order since we last looked.
 
     Returns "closed", "shrunk", "cleared" (order done, nothing new filled),
-    "unchanged" or "abandoned". A read or field problem books nothing and counts
-    one failure; a good read resets the count. The third failure in a row drops
-    the stored id, so the row falls back to the sellable guard.
+    or "unchanged". A read or field problem books nothing, counts one failure and
+    keeps the stored id and baseline for the next pass; only a good read clears it.
     """
     logger = get_trading_logger("exit_fill")
     oid, ticker = position.exit_order_id, position.market_id
     try:
-        order = (await kalshi_client.get_order(oid)).get("order")
+        order = (await _read_exit_order(oid, ticker, kalshi_client)).get("order")
         filled = float(order["fill_count_fp"])
         price = float(order[f"{position.side.lower()}_price_dollars"])
         status = order["status"]
