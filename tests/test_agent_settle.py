@@ -167,3 +167,78 @@ def test_held_side_is_larger_yes_count_when_both_sides_held():
     assert out["held_side"] == "yes"
     assert out["count"] == 3
     assert out["won"] is True
+
+
+from src.agent.settle import (fetch_settlements, load_settlements,
+                              record_settlements, summarize_settlements)
+
+
+def test_record_settlements_never_books_the_same_settlement_twice(tmp_path):
+    # The policy's block signal reads this log; a double-booked loss would count twice.
+    path = str(tmp_path / "s.jsonl")
+    a = {"ticker": "A", "settled_time": "t1", "won": False, "pnl": -1.0}
+    b = {"ticker": "B", "settled_time": "t1", "won": True, "pnl": 0.5}
+    assert record_settlements([a], path) == [a]
+    assert record_settlements([a, b], path) == [b]
+    assert record_settlements([a, b], path) == []
+    assert load_settlements(path) == [a, b]
+
+
+def test_load_settlements_skips_a_torn_line_and_keeps_the_rest(tmp_path):
+    p = tmp_path / "s.jsonl"
+    assert load_settlements(str(p)) == []
+    p.write_text('{"ticker": "A"}\n{"ticker": "B", "settl\n\n{"ticker": "C"}\n')
+    assert load_settlements(str(p)) == [{"ticker": "A"}, {"ticker": "C"}]
+
+
+async def test_fetch_settlements_follows_the_cursor_until_it_runs_out():
+    pages = [{"settlements": [{"ticker": "A"}], "cursor": "c1"},
+             {"settlements": [{"ticker": "B"}], "cursor": ""}]
+    calls = []
+
+    class FakeKalshi:
+        async def _make_authenticated_request(self, method, path, params=None):
+            calls.append((method, path, dict(params)))
+            return pages[len(calls) - 1]
+
+    out = await fetch_settlements(FakeKalshi(), limit=500)
+    assert out == [{"ticker": "A"}, {"ticker": "B"}]
+    assert calls == [
+        ("GET", "/trade-api/v2/portfolio/settlements", {"limit": 200}),
+        ("GET", "/trade-api/v2/portfolio/settlements", {"limit": 200, "cursor": "c1"}),
+    ]
+
+
+def test_summarize_settlements_splits_wins_and_pnl_by_held_side():
+    rows = [{"held_side": "no", "won": True, "pnl": 0.25},
+            {"held_side": "no", "won": False, "pnl": -2.0},
+            {"held_side": "yes", "won": True, "pnl": 1.0}]
+    s = summarize_settlements(rows)
+    assert s["n"] == 3 and s["wins"] == 2 and s["pnl"] == -0.75
+    assert s["by_side"] == {"no": {"n": 2, "wins": 1, "pnl": -1.75},
+                            "yes": {"n": 1, "wins": 1, "pnl": 1.0}}
+    assert summarize_settlements([])["win_rate"] is None
+
+
+def test_a_non_numeric_field_reads_as_zero_not_a_crash():
+    rec = {"ticker": "X", "market_result": "no", "no_count_fp": "2",
+           "no_total_cost_dollars": "1.80", "revenue": 200, "fee_cost": "n/a"}
+    out = settlement_pnl(rec)
+    assert out["fee"] == 0.0
+    assert out["pnl"] == 0.2
+
+
+async def test_fetch_settlements_stops_at_the_limit_and_at_the_page_cap():
+    calls = []
+
+    class FakeKalshi:
+        async def _make_authenticated_request(self, method, path, params=None):
+            calls.append(dict(params))
+            return {"settlements": [{"ticker": "A"}], "cursor": "more"}
+
+    assert len(await fetch_settlements(FakeKalshi(), limit=1)) == 1
+    assert len(calls) == 1
+    calls.clear()
+    # A cursor that never runs out still stops after 10 pages.
+    assert len(await fetch_settlements(FakeKalshi(), limit=10_000)) == 10
+    assert len(calls) == 10

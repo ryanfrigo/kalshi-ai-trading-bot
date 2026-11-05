@@ -229,3 +229,45 @@ def test_schema_invalid_state_halts_and_leaves_file_untouched(tmp_path, payload)
     assert d.halted is True
     assert d.reasons == [f"STATE_CORRUPT: {gov.state_path}"]
     assert gov.state_path.read_text() == payload
+
+
+# --- manual halt flag edge cases ---------------------------------------------
+
+def test_an_empty_halt_flag_still_halts_with_a_default_reason(tmp_path):
+    gov = _gov(tmp_path)
+    (tmp_path / "TRADING_HALTED").write_text("   \n")
+    d = asyncio.run(gov.check(current_equity_cents=100_000))
+    assert d.halted is True
+    assert d.reasons == ["MANUAL_HALT: manual halt flag present"]
+
+
+def test_an_unreadable_halt_flag_still_halts(tmp_path):
+    gov = _gov(tmp_path)
+    (tmp_path / "TRADING_HALTED").mkdir()  # exists, but read_text raises OSError
+    d = asyncio.run(gov.check(current_equity_cents=100_000))
+    assert d.halted is True
+    assert d.reasons == ["MANUAL_HALT: manual halt flag present"]
+
+
+def test_the_manual_halt_reason_comes_first_and_keeps_limit_reasons(tmp_path):
+    gov = _gov(tmp_path)
+    asyncio.run(gov.check(current_equity_cents=100_000))
+    gov.trip_manual_halt("  owner stop  ")
+    d = asyncio.run(gov.check(current_equity_cents=88_000))
+    assert d.halted is True
+    assert d.reasons[0] == "MANUAL_HALT: owner stop"
+    assert any(r.startswith("DAILY_LOSS") for r in d.reasons[1:])
+
+
+def test_clearing_a_halt_that_is_not_set_is_a_no_op(tmp_path):
+    gov = _gov(tmp_path)
+    gov.clear_manual_halt()
+    assert gov.is_manually_halted() is False
+
+
+def test_trip_manual_halt_creates_missing_parent_dirs(tmp_path):
+    flag = tmp_path / "a" / "b" / "TRADING_HALTED"
+    gov = RiskGovernor(state_path=str(tmp_path / "s.json"), halt_flag_path=str(flag))
+    gov.trip_manual_halt("x")
+    assert gov.is_manually_halted() is True
+    assert flag.read_text() == "x"

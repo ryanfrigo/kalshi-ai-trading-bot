@@ -7,7 +7,7 @@ test_reduce_only_exit.py). The position cap is
 checked against the price of the leg being bought.
 """
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -97,3 +97,65 @@ def test_buy_yes_over_cap_blocked():
         with pytest.raises(KalshiAPIError, match="POSITION_CAP"):
             _place(client, "buy", side="yes", count=20, yes_price=80)
     client._make_authenticated_request.assert_not_called()
+
+
+def _place_recording_governor_args(client):
+    """Place a buy past a healthy governor; return the kwargs the governor got."""
+    with patch("src.risk.risk_governor.RiskGovernor") as gov:
+        gov.return_value.check = AsyncMock(return_value=_healthy_decision())
+        _place(client, "buy")
+    return gov.call_args.kwargs
+
+
+def test_the_gate_takes_its_drawdown_limit_from_config():
+    client = _client_with_mocked_request()
+    with patch("src.config.settings.max_drawdown", 0.10):
+        kwargs = _place_recording_governor_args(client)
+    assert kwargs["max_drawdown_pct"] == pytest.approx(10.0)
+    assert kwargs["max_daily_loss_pct"] == settings.trading.max_daily_loss_pct
+
+
+class _UnreadableConfig:
+    @property
+    def max_drawdown(self):
+        raise RuntimeError("config broken")
+
+
+def test_an_unreadable_drawdown_setting_keeps_the_limit_at_20_percent():
+    client = _client_with_mocked_request()
+    with patch("src.config.settings", _UnreadableConfig()):
+        kwargs = _place_recording_governor_args(client)
+    assert kwargs["max_drawdown_pct"] == 20.0
+    client._make_authenticated_request.assert_called_once()
+
+
+def _broken_logger():
+    logger = MagicMock()
+    logger.warning.side_effect = OSError("log disk full")
+    return logger
+
+
+def test_a_broken_logger_cannot_lift_the_default_drawdown_limit():
+    client = _client_with_mocked_request()
+    with patch("src.config.settings", _UnreadableConfig()), \
+            patch.object(KalshiClient, "logger", _broken_logger(), create=True):
+        kwargs = _place_recording_governor_args(client)
+    assert kwargs["max_drawdown_pct"] == 20.0
+
+
+def test_a_broken_logger_cannot_open_the_gate_when_the_governor_fails():
+    client = _client_with_mocked_request()
+    with patch.object(KalshiClient, "logger", _broken_logger(), create=True), \
+            patch("src.risk.risk_governor.RiskGovernor.check",
+                  new=AsyncMock(side_effect=RuntimeError("balance endpoint down"))):
+        with pytest.raises(KalshiAPIError, match="RISK_GATE_UNAVAILABLE"):
+            _place(client, "buy")
+    client._make_authenticated_request.assert_not_called()
+
+
+def test_get_fills_scopes_the_request_to_one_order():
+    client = _client_with_mocked_request()
+    asyncio.run(client.get_fills(ticker="KXTEST", limit=5, order_id="o1"))
+    client._make_authenticated_request.assert_called_once_with(
+        "GET", "/trade-api/v2/portfolio/fills",
+        params={"limit": 5, "ticker": "KXTEST", "order_id": "o1"})

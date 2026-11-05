@@ -336,3 +336,134 @@ def test_volatility_of_a_fifty_cent_market_is_high():
 def test_time_to_expiry_floor_and_default():
     assert decide.get_time_to_expiry_days(_market(days=-5)) == 0.1
     assert decide.get_time_to_expiry_days(_market(days=2)) == pytest.approx(2, abs=0.01)
+
+
+# ---- news search path: search result, fallbacks, per-decision cost cap ---------------
+def _run_search(market, decision, search, db=None):
+    db, kalshi = db or Db(), Kalshi()
+    xai = SimpleNamespace(get_trading_decision=AsyncMock(return_value=decision), search=search)
+    with patch(LIMITS, AsyncMock(return_value=(True, "ok"))), \
+         patch(CASH, AsyncMock(return_value=(True, "ok"))), \
+         patch("src.utils.position_limits.PositionLimitsManager", LimitsManager):
+        pos = asyncio.run(make_decision_for_market(market, db, xai, kalshi))
+    kalshi.place_order.assert_not_awaited()
+    return pos, db, xai
+
+
+@pytest.fixture
+def no_sentiment(monkeypatch):
+    # volume >= news threshold would otherwise build a SentimentAnalyzer (network)
+    monkeypatch.setattr(settings.sentiment, "enabled", False)
+    monkeypatch.setattr(settings, "sentiment_analysis", False, raising=False)
+
+
+def test_search_result_reaches_the_llm(no_sentiment):
+    search = AsyncMock(return_value="fresh news")
+    pos, db, xai = _run_search(_market(volume=1500), _decision(), search)
+    assert pos is not None
+    search.assert_awaited_once()
+    assert xai.get_trading_decision.await_args.kwargs["news_summary"] == "fresh news"
+
+
+def test_low_volume_market_skips_the_search(no_sentiment):
+    search = AsyncMock(return_value="fresh news")
+    pos, db, xai = _run_search(_market(volume=600), _decision(), search)
+    assert pos is not None
+    search.assert_not_awaited()
+    assert xai.get_trading_decision.await_args.kwargs["news_summary"].startswith("Low volume market")
+
+
+@pytest.mark.parametrize("exc, prefix", [
+    (asyncio.TimeoutError(), "Search timeout"),
+    (RuntimeError("search down"), "News search unavailable"),
+])
+def test_search_failure_falls_back_to_market_data_only(no_sentiment, exc, prefix):
+    pos, db, xai = _run_search(_market(volume=1500), _decision(), AsyncMock(side_effect=exc))
+    assert pos is not None
+    assert xai.get_trading_decision.await_args.kwargs["news_summary"].startswith(prefix)
+
+
+def test_search_cost_over_the_per_decision_cap_skips_before_the_llm(no_sentiment, monkeypatch):
+    monkeypatch.setattr(T, "max_ai_cost_per_decision", 0.01)   # search alone costs 0.02
+    pos, db, xai = _run_search(_market(volume=1500), _decision(), AsyncMock(return_value="news"))
+    assert pos is None
+    xai.get_trading_decision.assert_not_awaited()
+    last = db.record_market_analysis.await_args_list[-1].args
+    assert last[1] == "SKIP" and last[-1] == "cost_limited"
+
+
+def test_failed_search_costs_nothing_so_the_cap_does_not_trip(no_sentiment, monkeypatch):
+    monkeypatch.setattr(T, "max_ai_cost_per_decision", 0.01)
+    pos, db, xai = _run_search(_market(volume=1500), _decision(),
+                               AsyncMock(side_effect=RuntimeError("down")))
+    assert pos is not None
+    xai.get_trading_decision.assert_awaited_once()
+
+
+# ---- sentiment pipeline branch: used first, its spend booked once, fallback on failure ----
+SENT = "src.data.sentiment_analyzer.SentimentAnalyzer"
+
+
+def _fake_sentiment(summary="sentiment: up", cost=0.0, raises=None):
+    class FakeSentiment:
+        instances = []
+
+        def __init__(self, *a, **k):
+            self.total_cost = 0.0
+            FakeSentiment.instances.append(self)
+
+        async def get_market_sentiment_summary(self, title):
+            self.total_cost = cost
+            if raises is not None:
+                raise raises
+            return summary
+    return FakeSentiment
+
+
+@pytest.fixture
+def with_sentiment(monkeypatch):
+    monkeypatch.setattr(settings.sentiment, "enabled", True)
+
+
+def test_sentiment_summary_is_used_and_search_is_skipped(with_sentiment):
+    fake, search = _fake_sentiment(cost=0.004), AsyncMock(return_value="news")
+    with patch(SENT, fake):
+        pos, db, xai = _run_search(_market(volume=1500), _decision(), search)
+    assert pos is not None
+    search.assert_not_awaited()
+    assert xai.get_trading_decision.await_args.kwargs["news_summary"] == "sentiment: up"
+    db.upsert_daily_cost.assert_awaited_once_with(0.004)
+
+
+@pytest.mark.parametrize("exc", [RuntimeError("feed down"), asyncio.TimeoutError()])
+def test_sentiment_failure_falls_back_to_search_and_still_books_its_spend(with_sentiment, exc):
+    fake, search = _fake_sentiment(cost=0.003, raises=exc), AsyncMock(return_value="news")
+    with patch(SENT, fake):
+        pos, db, xai = _run_search(_market(volume=1500), _decision(), search)
+    assert pos is not None
+    search.assert_awaited_once()
+    assert xai.get_trading_decision.await_args.kwargs["news_summary"] == "news"
+    db.upsert_daily_cost.assert_awaited_once_with(0.003)
+
+
+def test_free_sentiment_run_books_no_spend(with_sentiment):
+    with patch(SENT, _fake_sentiment(cost=0.0)):
+        pos, db, xai = _run_search(_market(volume=1500), _decision(), AsyncMock(return_value="news"))
+    assert pos is not None
+    db.upsert_daily_cost.assert_not_awaited()
+
+
+def test_sentiment_cost_counts_toward_the_per_decision_cap(with_sentiment, monkeypatch):
+    monkeypatch.setattr(T, "max_ai_cost_per_decision", 0.01)
+    with patch(SENT, _fake_sentiment(cost=0.05)):
+        pos, db, xai = _run_search(_market(volume=1500), _decision(), AsyncMock(return_value="news"))
+    assert pos is None
+    xai.get_trading_decision.assert_not_awaited()
+    assert db.record_market_analysis.await_args_list[-1].args[-1] == "cost_limited"
+
+
+def test_low_volume_market_never_builds_the_sentiment_analyzer(with_sentiment):
+    fake = _fake_sentiment()
+    with patch(SENT, fake):
+        pos, *_ = _run_search(_market(volume=600), _decision(), AsyncMock(return_value="news"))
+    assert pos is not None and fake.instances == []

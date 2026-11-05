@@ -167,3 +167,103 @@ def test_unified_cycle_runs_the_pass_first(db):
                side_effect=RuntimeError("stop here")):
         run(s.execute_unified_trading_strategy())
     m.assert_awaited_once()
+
+
+class RawExchange:
+    """Returns the given raw bodies, so malformed responses can be fed in."""
+
+    def __init__(self, positions_body, orders_body=None):
+        self.positions_body = positions_body
+        self.orders_body = {"orders": []} if orders_body is None else orders_body
+        self.requests = []
+
+    async def __call__(self, method, path, **kw):
+        self.requests.append((method, path))
+        if path.endswith("/portfolio/positions"):
+            return self.positions_body
+        if path.endswith("/portfolio/orders"):
+            return self.orders_body
+        raise AssertionError(f"unexpected request {method} {path}")
+
+
+def _unknown_and_left_open(db, ex):
+    pid = add_row(db, 11)
+    assert run(_read_ticker_state(client(ex), "MKT-1", MagicMock())) is None
+    assert run(reconcile_stale_failed_rows(db, client(ex))) == 0
+    assert status(db, pid) == ("open", 0)
+
+
+@pytest.mark.parametrize("positions_body", [
+    {"market_positions": None}, {"market_positions": "x"}, {}, [], None,
+])
+def test_unreadable_positions_response_is_unknown(db, positions_body):
+    _unknown_and_left_open(db, RawExchange(positions_body))
+
+
+@pytest.mark.parametrize("orders_body", [
+    {"orders": None}, {"orders": {}}, {}, ["x"],
+])
+def test_unreadable_orders_response_is_unknown(db, orders_body):
+    _unknown_and_left_open(db, RawExchange({"market_positions": []}, orders_body))
+
+
+@pytest.mark.parametrize("fp", ["nan", "inf", "-inf"])
+def test_non_finite_position_is_unknown(db, fp):
+    _unknown_and_left_open(db, Exchange(positions=[{"ticker": "MKT-1", "position_fp": fp}]))
+
+
+def _orders(n, ticker="MKT-1"):
+    return [{"ticker": ticker, "remaining_count_fp": "1.00"} for _ in range(n)]
+
+
+def test_full_orders_page_with_a_cursor_is_unknown(db):
+    _unknown_and_left_open(
+        db, RawExchange({"market_positions": []}, {"orders": _orders(100), "cursor": "next"}))
+
+
+@pytest.mark.parametrize("body", [
+    {"orders": _orders(99), "cursor": "next"},  # short page: complete
+    {"orders": _orders(100), "cursor": ""},     # no cursor: last page
+])
+def test_short_or_last_orders_page_is_read(body):
+    ex = RawExchange({"market_positions": []}, body)
+    n = len(body["orders"])
+    assert run(_read_ticker_state(client(ex), "MKT-1", MagicMock())) == (0.0, n, float(n))
+
+
+def test_resting_orders_on_other_tickers_do_not_count(db):
+    pid = add_row(db, 11)
+    ex = Exchange(orders=[{"ticker": "OTHER", "remaining_count_fp": "5.00"}])
+    assert run(_read_ticker_state(client(ex), "MKT-1", MagicMock())) == (0.0, 0, 0.0)
+    assert run(reconcile_stale_failed_rows(db, client(ex))) == 1
+    assert status(db, pid)[0] == "voided"
+
+
+@pytest.mark.parametrize("order, qty", [
+    ({"ticker": "MKT-1", "remaining_count_fp": "4.00"}, 4.0),
+    ({"ticker": "MKT-1", "remaining_count_fp": "junk", "remaining_count": 3}, 3.0),
+    ({"ticker": "MKT-1", "remaining_count": 2}, 2.0),
+    ({"ticker": "MKT-1"}, 0.0),
+    ("garbage", 0.0),
+])
+def test_unreadable_order_entries_still_count_as_orders(db, order, qty):
+    pid = add_row(db, 11)
+    ex = Exchange(orders=[order])
+    assert run(_read_ticker_state(client(ex), "MKT-1", MagicMock())) == (0.0, 1, qty)
+    assert run(reconcile_stale_failed_rows(db, client(ex))) == 0
+    assert status(db, pid) == ("open", 0)
+
+
+def test_one_row_that_fails_to_void_does_not_stop_the_others(db):
+    bad, good = add_row(db, 11, market_id="MKT-1"), add_row(db, 11, market_id="MKT-2")
+    real = db.update_position_status
+
+    async def flaky(pid, status_):
+        if pid == bad:
+            raise RuntimeError("db locked")
+        return await real(pid, status_)
+
+    db.update_position_status = flaky
+    assert run(reconcile_stale_failed_rows(db, client(Exchange()))) == 1
+    assert status(db, bad) == ("open", 0)
+    assert status(db, good) == ("voided", 0)
