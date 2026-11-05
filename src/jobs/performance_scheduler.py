@@ -327,11 +327,11 @@ Manual monitoring may be required until the issue is resolved.
         weekly_report = {
             'timestamp': datetime.now().isoformat(),
             'type': 'weekly_summary',
-            'period': 'last_7_days',
+            'period': 'all_recorded_trades',  # the analyzer has no date filter
             'current_analysis': report,
             'summary': {
                 'health_score': report['summary']['overall_health_score'],
-                'health_trend': 'stable',  # Could be calculated from historical data
+                'health_trend': 'unknown',  # not calculated
                 'total_action_items': len(report['action_items']),
                 'critical_actions': len([a for a in report['action_items'] if a['priority'] == 'CRITICAL']),
                 'system_recommendations': []
