@@ -77,3 +77,41 @@ async def test_get_markets_signs_the_path_without_the_query_string(rig):
     key.public_key().verify(base64.b64decode(headers["KALSHI-ACCESS-SIGNATURE"]),
                             (headers["KALSHI-ACCESS-TIMESTAMP"] + "GET/trade-api/v2/markets").encode(),
                             PSS, hashes.SHA256())
+
+
+async def test_get_market_history_sends_only_the_limit_by_default(rig):
+    client, seen, _, _ = rig
+    await client.get_market_history("T-1", limit=9)
+    assert urlsplit(str(seen[0].url)).path == "/trade-api/v2/markets/T-1/history"
+    assert parse_qs(urlsplit(str(seen[0].url)).query) == {"limit": ["9"]}
+
+
+async def test_get_market_history_sends_the_time_window(rig):
+    client, seen, _, _ = rig
+    await client.get_market_history("T-1", start_ts=100, end_ts=200, limit=9)
+    assert parse_qs(urlsplit(str(seen[0].url)).query) == {
+        "limit": ["9"], "start_ts": ["100"], "end_ts": ["200"]}
+
+
+async def test_get_trades_sends_only_the_limit_by_default(rig):
+    client, seen, _, _ = rig
+    await client.get_trades(limit=4)
+    assert seen[0].method == "GET"
+    assert urlsplit(str(seen[0].url)).path == "/trade-api/v2/portfolio/trades"
+    assert parse_qs(urlsplit(str(seen[0].url)).query) == {"limit": ["4"]}
+
+
+async def test_get_trades_sends_ticker_and_cursor(rig):
+    client, seen, _, _ = rig
+    await client.get_trades(ticker="T-1", limit=4, cursor="c2")
+    assert parse_qs(urlsplit(str(seen[0].url)).query) == {
+        "limit": ["4"], "ticker": ["T-1"], "cursor": ["c2"]}
+
+
+async def test_the_context_manager_closes_the_http_client_even_on_error(rig):
+    client, _, _, _ = rig
+    with pytest.raises(RuntimeError):
+        async with client as entered:
+            assert entered is client
+            raise RuntimeError("boom")
+    assert client.client.is_closed

@@ -166,3 +166,32 @@ async def test_missing_market_data_skips_the_position(mock_client, mock_sell):
     exit_check.assert_not_awaited()
     mock_sell.assert_not_called()
     db.update_position_status.assert_not_called()
+
+
+@patch("src.jobs.execute.place_sell_limit_order", new_callable=AsyncMock)
+@patch("src.jobs.track.KalshiClient")
+async def test_paper_exit_that_fails_leaves_the_position_open(mock_client, mock_sell):
+    db = MagicMock()
+    db.get_open_live_positions = AsyncMock(return_value=[_pos("YES")])
+    db.add_trade_log = AsyncMock()
+    db.update_position_status = AsyncMock()
+    mock_client.return_value.get_market = AsyncMock(return_value={"market": LIVE_BOOK})
+    mock_client.return_value.close = AsyncMock()
+    with patch("src.jobs.execute.place_profit_taking_orders", AsyncMock(return_value={"orders_placed": 0})), \
+         patch("src.jobs.execute.place_stop_loss_orders", AsyncMock(return_value={"orders_placed": 0})), \
+         patch("src.jobs.execute.log_paper_exit", MagicMock(return_value=False)) as paper, \
+         patch("src.jobs.track.should_exit_position", AsyncMock(return_value=(True, "time_based", 0.55))):
+        await run_tracking(db, live=False)
+    paper.assert_called_once()
+    mock_sell.assert_not_called()
+    db.add_trade_log.assert_not_called()
+    db.update_position_status.assert_not_called()
+
+
+@patch("src.jobs.track.KalshiClient")
+async def test_a_failed_db_read_still_closes_the_client(mock_client):
+    db = MagicMock()
+    db.get_open_live_positions = AsyncMock(side_effect=RuntimeError("db down"))
+    mock_client.return_value.close = AsyncMock()
+    await run_tracking(db, live=False)
+    mock_client.return_value.close.assert_awaited_once()

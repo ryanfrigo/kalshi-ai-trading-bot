@@ -338,3 +338,15 @@ def test_a_partial_balance_refuses_a_guarded_order(tmp_path):
     res = asyncio.run(place_guarded_order(client, "T", "no", 1, price=0.5, est_prob=0.6, governor=gov, dry=True))
     assert res["ok"] is False and res["reason"] == "governor_halted"
     assert not (tmp_path / "s.json").exists()
+
+
+def test_a_temp_file_already_gone_still_raises_the_real_write_error(tmp_path, monkeypatch):
+    gov = _gov(tmp_path)
+
+    def boom(src, dst):
+        os.unlink(src)
+        raise OSError("simulated crash before rename")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(OSError, match="simulated crash"):
+        gov.save_state({"date": "2026-06-18", "sod_equity_cents": 1, "peak_equity_cents": 1})

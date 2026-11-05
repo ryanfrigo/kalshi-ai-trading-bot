@@ -465,3 +465,18 @@ def test_one_crashing_reconcile_does_not_stop_the_others_or_the_exit_pass(tmp_pa
     assert sorted(seen) == ["RX-1", "RX-2"]
     profit.assert_awaited_once()
     stop.assert_awaited_once()
+
+
+def test_an_ioc_exit_that_filled_nothing_books_nothing(tmp_path):
+    from src.jobs.execute import reconcile_exit_fill
+
+    async def go():
+        db = await _db(tmp_path, exit_order=None)
+        (pos,) = await db.get_open_live_positions()
+        response = {"order": {"status": "canceled", "fill_count_fp": "0.00"}, "reduce_only_ioc": True}
+        result = await reconcile_exit_fill(pos, response, False, 0.60, db, "test")
+        return result, await _row(db), await db.get_all_trade_logs()
+
+    result, row, logs = asyncio.run(go())
+    assert result == "none"
+    assert row == ("open", 10, None, None) and logs == []
