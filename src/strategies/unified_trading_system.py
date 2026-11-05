@@ -185,8 +185,8 @@ class UnifiedAdvancedTradingSystem:
                 self.logger.warning(f"⚠️ Total capital too low: ${self.total_capital:.2f} - may limit trading")
 
         except Exception as e:
-            self.logger.error(f"Failed to get portfolio value, using default: {e}")
-            self.total_capital = 100  # Conservative fallback
+            self.logger.error(f"Failed to read portfolio value; capital set to 0, no new buys: {e}")
+            self.total_capital = 0  # Unreadable balance must not invent capital
 
         # Update capital allocation based on actual balance
         self.market_making_capital = self.total_capital * self.config.market_making_allocation
@@ -214,6 +214,10 @@ class UnifiedAdvancedTradingSystem:
         self.logger.info("🚀 Executing Unified Advanced Trading Strategy")
         
         try:
+            # Step -1: free slots held by stale failed rows the exchange shows flat (GET-only)
+            from src.jobs.execute import reconcile_stale_failed_rows
+            await reconcile_stale_failed_rows(self.db_manager, self.kalshi_client)
+
             # Step 0: Check and enforce position limits AND cash reserves
             from src.utils.position_limits import PositionLimitsManager
             from src.utils.cash_reserves import CashReservesManager, is_cash_emergency
@@ -502,7 +506,11 @@ class UnifiedAdvancedTradingSystem:
                         continue
                     
                     # Calculate quantity
-                    quantity = max(1, int(position_value / price))
+                    quantity = int(position_value / price)
+                    if quantity < 1:
+                        # One contract costs more than this allotment; never round up past it.
+                        self.logger.info(f"⏭️ SKIPPING {market_id} {intended_side} - allotment ${position_value:.2f} cannot buy 1 contract @ ${price:.2f}")
+                        continue
                     
                     # Calculate proper stop-loss levels using Grok4 recommendations
                     from src.utils.stop_loss_calculator import StopLossCalculator
@@ -556,22 +564,15 @@ class UnifiedAdvancedTradingSystem:
                     live_mode = getattr(settings.trading, 'live_trading_enabled', False)
                     self.logger.info(f"🎛️ Trading mode check: live_mode={live_mode} for market {opportunity.market_id}")
                     
-                    from src.jobs.execute import void_position_if_exchange_flat
-                    try:
-                        success = await execute_position(
-                            position=position,
-                            live_mode=live_mode,
-                            db_manager=self.db_manager,
-                            kalshi_client=self.kalshi_client
-                        )
-                    except Exception:
-                        await void_position_if_exchange_flat(
-                            self.db_manager, self.kalshi_client, position_id, market_id)
-                        raise
-                    if not success:
-                        # No order is known to have gone out; void only if the exchange agrees.
-                        await void_position_if_exchange_flat(
-                            self.db_manager, self.kalshi_client, position_id, market_id)
+                    # A failed buy leaves its row open (live=0): the order may have been
+                    # accepted but not yet visible. The stale-row pass voids it later only
+                    # if the exchange is flat.
+                    success = await execute_position(
+                        position=position,
+                        live_mode=live_mode,
+                        db_manager=self.db_manager,
+                        kalshi_client=self.kalshi_client
+                    )
 
                     if success:
                         results['successful_executions'] += 1
@@ -691,7 +692,7 @@ class UnifiedAdvancedTradingSystem:
             expected_annual_return = portfolio_expected_return * (365 / 30)
             
             # Capital efficiency
-            capital_efficiency = total_capital_used / self.total_capital
+            capital_efficiency = total_capital_used / self.total_capital if self.total_capital > 0 else 0.0
             
             # Total positions
             total_positions = (
