@@ -117,6 +117,14 @@ def test_opposite_check_fails_closed_on_a_junk_orders_response(db, response):
     assert run(holds_or_rests_opposite_side(db, kalshi, "MKT-1", "YES")) is True
 
 
+def test_immediate_one_side_at_99_is_not_a_collection_ticker(db):
+    # Wide book with a real NO edge: only both sides at 99c marks a collection ticker.
+    with Captured() as cap:
+        immediate(db, FakeKalshi(v2_market(0.95, 0.99, 0.01, 0.05)), make_opp(0.60, 0.30))
+    assert cap.execute.await_count == 1
+    assert cap.position.side == "NO"
+
+
 # --------------------------------------- allocation path: live ask and status
 
 @pytest.mark.parametrize("predicted, book", [

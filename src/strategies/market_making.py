@@ -144,6 +144,15 @@ class AdvancedMarketMaker:
                 if current_no_price > 1.0:
                     current_no_price = current_no_price / 100.0
                 
+                # NaN slips past the range check below, and a NaN bid clamps up to 0.99.
+                if not all(math.isfinite(x) and x >= 0 for x in (current_yes_price, current_no_price)):
+                    self.logger.warning(f"Unusable prices for {market.market_id}, skipping")
+                    continue
+
+                if market_data.get('status') not in ('active', 'open'):
+                    self.logger.info(f"Skipping {market.market_id} - market status {market_data.get('status')}")
+                    continue
+
                 # Same-side asks (dollars) cap our bids; 0 = no ask on that side
                 yes_ask = self._book_ask(market_data, 'yes_ask_dollars', 'yes_ask')
                 no_ask = self._book_ask(market_data, 'no_ask_dollars', 'no_ask')
@@ -388,6 +397,11 @@ class AdvancedMarketMaker:
         max_markets = getattr(settings.trading, 'max_concurrent_markets', 10)
         top_opportunities = opportunities[:max_markets]
         
+        # NaN compares false against the cost check, which would skip scaling altogether.
+        if capital is not None and not math.isfinite(capital):
+            self.logger.warning(f"Market making capital is {capital}, placing nothing")
+            return results
+
         budget = capital / len(top_opportunities) if capital is not None and top_opportunities else None
         for opportunity in top_opportunities:
             try:
@@ -580,8 +594,11 @@ class AdvancedMarketMaker:
                         probability = parsed_response.get('probability')
                         confidence = parsed_response.get('confidence')
                         
-                        if (isinstance(probability, (int, float)) and 0 <= probability <= 1 and
-                            isinstance(confidence, (int, float)) and 0 <= confidence <= 1):
+                        # bool is an int in Python: a JSON true must not read as probability 1.0.
+                        if (isinstance(probability, (int, float)) and not isinstance(probability, bool)
+                                and 0 <= probability <= 1
+                                and isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
+                                and 0 <= confidence <= 1):
                             return parsed_response
                         else:
                             self.logger.warning(f"Invalid AI response format for {market.market_id}")

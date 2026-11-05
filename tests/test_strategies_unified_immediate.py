@@ -868,7 +868,7 @@ def test_mm_side_with_one_cent_or_missing_ask_is_not_quoted():
 
 
 def test_mm_cents_only_book_picks_unit_by_key_not_magnitude():
-    cents = {"yes_price": 40, "no_price": 58, "yes_ask": 42, "no_ask": 60}
+    cents = {"status": "active", "yes_price": 40, "no_price": 58, "yes_ask": 42, "no_ask": 60}
     assert _mm_bid_sent(0.7, "yes", default_spread=True, market=cents) <= 41
     assert _mm_bid_sent(0.2, "no", default_spread=True, market=cents) <= 59
     # yes_ask=1 is 1c, not $1.00: that side must not be quoted.
