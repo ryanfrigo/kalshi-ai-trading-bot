@@ -96,7 +96,7 @@ This is the loop, closed: **decide → trade → settle → measure → re-deriv
 # 1. Clone and set up
 git clone https://github.com/ryanfrigo/kalshi-ai-trading-bot.git
 cd kalshi-ai-trading-bot
-python setup_env.py    # creates .venv, installs deps
+python setup_env.py    # creates .venv, installs deps (asks y/n on stdin)
 
 # 2. Add your API keys
 cp env.template .env
@@ -110,7 +110,7 @@ python cli.py run --paper                  # AI directional (LLM-driven)
 python cli.py run --safe-compounder        # Edge-based NO-side, no LLM
 ```
 
-Open the dashboard in another terminal:
+Open the dashboard in another terminal (needs the `[dashboard]` extra: `pip install -e ".[dashboard]"`):
 
 ```bash
 python cli.py dashboard
@@ -272,7 +272,7 @@ cd kalshi-ai-trading-bot
 python setup_env.py
 ```
 
-Creates a virtual env, installs dependencies, and prints next steps.
+Creates a virtual env, installs dependencies, and prints next steps. It asks y/n questions on stdin (create the venv? install missing dependencies?), so run it in an interactive terminal.
 
 ### Manual Setup
 
@@ -426,6 +426,8 @@ python cli.py status                 # Live balance + open positions from Kalshi
 ## Development
 
 ### Running Tests
+
+Install the dev extra first (`pip install -e ".[dev]"`); the MCP server needs `pip install -e ".[mcp]"`.
 
 ```bash
 pytest                 # safe suite (no credentials needed; never touches the live API)
