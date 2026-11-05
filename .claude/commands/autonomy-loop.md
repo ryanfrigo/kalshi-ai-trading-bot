@@ -22,7 +22,7 @@ fills, daemon logs) before managing anything — and never exit or resize a
 position you didn't place without asking him.
 
 Non-negotiables:
-- Respect the governor and the kill switch (`data/runtime/TRADING_HALTED`).
+- Respect the governor and the kill switch (`data/runtime/TRADING_HALTED`, or `$KALSHI_RUNTIME_DIR/TRADING_HALTED` if KALSHI_RUNTIME_DIR is set).
 - Respect the Edge Policy gate and the adversarial-verify gate (`cli.py verify`).
 - An honest no-trade tick after a rigorous hunt is a valid, often-correct outcome.
 - Near a drawdown limit, deploy conservatively; halted ⇒ hold the sound book, no new buys.

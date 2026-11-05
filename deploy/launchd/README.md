@@ -44,7 +44,8 @@ To halt all new buys immediately (the next run still settles/exits, just no new
 positions), drop the manual halt file:
 
 ```bash
-mkdir -p data/runtime && echo "manual stop $(date)" > data/runtime/TRADING_HALTED
+# Respects $KALSHI_RUNTIME_DIR (must be an absolute path if set); defaults to the repo's data/runtime
+mkdir -p "${KALSHI_RUNTIME_DIR:-data/runtime}" && echo "manual stop $(date)" > "${KALSHI_RUNTIME_DIR:-data/runtime}/TRADING_HALTED"
 ```
 
 Remove it to resume. The governor also auto-halts at -10% day / -15% drawdown.

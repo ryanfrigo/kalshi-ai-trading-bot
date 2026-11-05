@@ -101,7 +101,7 @@ model beating the book.**
 
 ## Hard rules (never break)
 - Respect the governor. Halted ⇒ no new buys. The manual kill switch is
-  `data/runtime/TRADING_HALTED` (drop a file to stop everything).
+  `data/runtime/TRADING_HALTED`, or `$KALSHI_RUNTIME_DIR/TRADING_HALTED` if KALSHI_RUNTIME_DIR is set (drop a file to stop everything).
 - Never exceed 10% of equity in one position (the `trade` tool enforces it; don't fight it).
 - **No prediction, no trade.** Every order needs `--est-prob` + `--rationale`.
 - Edge floor ≥ 5¢ against YOUR probability estimate. Below fees you lose money slowly.
