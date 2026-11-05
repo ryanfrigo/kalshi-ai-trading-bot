@@ -107,9 +107,9 @@ class NewsAggregator(TradingLoggerMixin):
         Respects per-feed rate limiting based on cache TTL.
         """
         now = time.monotonic()
-        last_fetch = self._feed_timestamps.get(url, 0.0)
+        last_fetch = self._feed_timestamps.get(url)
 
-        if (now - last_fetch) < self._cache_ttl_seconds:
+        if last_fetch is not None and (now - last_fetch) < self._cache_ttl_seconds:
             self.logger.debug("Skipping feed (rate limited)", feed_url=url)
             return []
 
@@ -218,12 +218,17 @@ class NewsAggregator(TradingLoggerMixin):
 
     @staticmethod
     def _deduplicate(articles: List[NewsArticle]) -> List[NewsArticle]:
-        """Remove duplicate articles based on normalized title."""
+        """
+        Remove duplicate articles based on normalized title. An untitled
+        article is keyed by its link instead; one with neither is never merged.
+        """
         seen: set = set()
         unique: List[NewsArticle] = []
         for article in articles:
-            key = article.normalized_title
-            if key not in seen:
+            key = article.normalized_title or article.url.strip()
+            if not key:
+                unique.append(article)
+            elif key not in seen:
                 seen.add(key)
                 unique.append(article)
         return unique
@@ -265,5 +270,8 @@ class NewsAggregator(TradingLoggerMixin):
             return 0.0
 
         article_text = f"{article.title} {article.summary}".lower()
-        matches = sum(1 for kw in keywords if kw in article_text)
+        matches = sum(
+            1 for kw in keywords
+            if re.search(rf"\b{re.escape(kw)}\b", article_text)
+        )
         return matches / len(keywords)
