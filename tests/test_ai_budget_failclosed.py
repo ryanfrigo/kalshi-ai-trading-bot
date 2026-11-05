@@ -139,3 +139,89 @@ def test_update_daily_cost_without_event_loop_logs_and_keeps_pickle(tmp_path):
     c.logger.error.assert_called_once()
     assert "DB cost update" in c.logger.error.call_args[0][0]
     db.upsert_daily_cost.assert_not_called()
+
+
+# --- The cap binds on recorded spend, not only on the stored flag ---
+
+
+def _store(client, **fields):
+    defaults = dict(date=TODAY, daily_limit=50.0, total_cost=0.0)
+    with open(client.usage_file, "wb") as fh:
+        pickle.dump(DailyUsageTracker(**{**defaults, **fields}), fh)
+
+
+def _stored(client):
+    with open(client.usage_file, "rb") as fh:
+        return pickle.load(fh)
+
+
+@pytest.mark.asyncio
+async def test_limit_lowered_below_todays_spend_refuses_and_persists(client, monkeypatch):
+    monkeypatch.setattr(settings.trading, "daily_ai_cost_limit", 20.0)
+    _store(client, total_cost=30.0)  # flag unset: $30 was under the old $50 limit
+    assert await client._check_daily_limits() is False
+    assert client.daily_tracker.last_exhausted_time is not None
+    saved = _stored(client)  # src/jobs/evaluate.py reads this file for trading_paused
+    assert saved.is_exhausted is True
+    assert saved.total_cost == 30.0
+    assert saved.daily_limit == 20.0
+
+
+@pytest.mark.asyncio
+async def test_spend_at_cap_with_the_flag_unset_refuses(client, monkeypatch):
+    """A crash between the two saves in _update_daily_cost leaves exactly this on disk."""
+    monkeypatch.setattr(settings.trading, "daily_ai_cost_limit", 20.0)
+    _store(client, daily_limit=20.0, total_cost=20.0)
+    assert await client._check_daily_limits() is False
+
+
+@pytest.mark.asyncio
+async def test_spend_just_under_the_cap_is_allowed_and_not_flagged(client, monkeypatch):
+    monkeypatch.setattr(settings.trading, "daily_ai_cost_limit", 20.0)
+    _store(client, daily_limit=20.0, total_cost=19.99)
+    assert await client._check_daily_limits() is True
+    assert _stored(client).is_exhausted is False
+
+
+@pytest.mark.asyncio
+async def test_limit_raised_above_spend_clears_the_flag(client, monkeypatch):
+    monkeypatch.setattr(settings.trading, "daily_ai_cost_limit", 50.0)
+    _store(client, daily_limit=20.0, total_cost=20.0, is_exhausted=True)
+    assert await client._check_daily_limits() is True
+    assert client.daily_tracker.daily_limit == 50.0
+    assert client.daily_tracker.is_exhausted is False
+
+
+@pytest.mark.asyncio
+async def test_limit_raised_to_exactly_spend_stays_exhausted(client, monkeypatch):
+    monkeypatch.setattr(settings.trading, "daily_ai_cost_limit", 20.0)
+    _store(client, daily_limit=10.0, total_cost=20.0, is_exhausted=True)
+    assert await client._check_daily_limits() is False
+
+
+@pytest.mark.asyncio
+async def test_zero_limit_refuses_even_with_no_budget_file(client, monkeypatch):
+    monkeypatch.setattr(settings.trading, "daily_ai_cost_limit", 0.0)
+    assert await client._check_daily_limits() is False
+
+
+@pytest.mark.asyncio
+async def test_new_day_clears_yesterdays_spend_under_a_lower_limit(client, monkeypatch):
+    monkeypatch.setattr(settings.trading, "daily_ai_cost_limit", 20.0)
+    _store(client, date=YESTERDAY, total_cost=30.0, is_exhausted=True)
+    assert await client._check_daily_limits() is True
+    assert client.daily_tracker.total_cost == 0.0
+
+
+@pytest.mark.asyncio
+async def test_unwritable_budget_file_still_refuses(client, tmp_path):
+    """Load and the fail-closed save both fail on a directory; the refusal must survive that."""
+    client.usage_file = str(tmp_path)
+    assert await client._check_daily_limits() is False
+
+
+def test_unwritable_budget_file_does_not_stop_spend_being_counted(client, tmp_path):
+    client.usage_file = str(tmp_path)
+    before = client.daily_tracker.total_cost
+    client._update_daily_cost(0.5)
+    assert client.daily_tracker.total_cost == before + 0.5

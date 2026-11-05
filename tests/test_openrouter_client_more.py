@@ -651,3 +651,53 @@ async def test_billed_empty_reply_is_booked_exactly_once_per_attempt(make, sleep
                                   '"side":"YES","limit_price":150'])
 def test_parse_sell_with_bad_side_or_price_is_rejected(parse, body):
     assert parse('{"action":"SELL",%s,"confidence":0.9}' % body) is None
+
+
+# --------------------------------------------------------------------------- cap on recorded spend
+async def test_limit_lowered_below_spend_means_no_http_call(make, sleeps):
+    c = make({SONNET: [resp()]}, limit=5.0)
+    with open(c.usage_file, "wb") as fh:
+        pickle.dump(DailyUsageTracker(date=datetime.now().strftime("%Y-%m-%d"), total_cost=6.0,
+                                      daily_limit=50.0), fh)
+    assert await c.get_completion("hi", model=SONNET) is None
+    assert await c.get_trading_decision({"title": "t"}, {"cash": 1}, model=SONNET) is None
+    assert calls(c).calls == []
+
+
+async def test_budget_spent_during_a_decision_retry_stops_the_fallback_chain(make, sleeps):
+    c = make({SONNET: [RuntimeError("503 service unavailable"), resp(GOOD_JSON)],
+              GPT: [resp(GOOD_JSON)]}, limit=1.0)
+    n = {"i": 0}
+
+    async def gate():
+        n["i"] += 1
+        return n["i"] == 1        # open for the entry check, closed for the retry
+    c._check_daily_limits = gate
+    assert await c.get_trading_decision({"title": "t"}, {"cash": 1}, model=SONNET) is None
+    assert calls(c).models == [SONNET]
+
+
+def test_track_model_cost_creates_a_tracker_for_a_new_model(make):
+    c = make()
+    c.model_costs.pop(GPT, None)
+    c._track_model_cost(GPT, 1000, 500, 0.01)
+    assert c.model_costs[GPT].input_tokens == 1000
+
+
+async def test_close_survives_a_failing_sdk_close(make):
+    c = make()
+
+    async def boom():
+        raise RuntimeError("socket gone")
+    c.client = SimpleNamespace(close=boom)
+    await c.close()
+
+
+async def test_a_query_log_failure_does_not_lose_the_decision(make, sleeps):
+    class BrokenLogDb(FakeDb):
+        def log_llm_query(self, q):
+            raise RuntimeError("db down")
+
+    c = make({SONNET: [resp(GOOD_JSON)]}, db=BrokenLogDb())
+    d = await c.get_trading_decision({"title": "t"}, {"cash": 1}, model=SONNET)
+    assert d is not None and d.action == "BUY"

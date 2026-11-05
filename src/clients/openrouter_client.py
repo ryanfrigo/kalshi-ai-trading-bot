@@ -287,6 +287,16 @@ class OpenRouterClient(TradingLoggerMixin):
         """Return True if we are within the daily spending limit."""
         self.daily_tracker = self._load_daily_tracker()
 
+        # The flag alone is not enough: a limit lowered below today's spend, or a crash
+        # between the two saves in _update_daily_cost, leaves spend at the cap and the flag unset.
+        if (
+            not self.daily_tracker.is_exhausted
+            and self.daily_tracker.total_cost >= self.daily_tracker.daily_limit
+        ):
+            self.daily_tracker.is_exhausted = True
+            self.daily_tracker.last_exhausted_time = datetime.now()
+            self._save_daily_tracker()
+
         if self.daily_tracker.is_exhausted:
             now = datetime.now()
             if self.daily_tracker.date != now.strftime("%Y-%m-%d"):
