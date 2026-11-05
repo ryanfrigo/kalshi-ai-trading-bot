@@ -136,12 +136,15 @@ async def calculate_dynamic_exit_levels(position: Position) -> dict:
     
     return exit_levels
 
-async def run_tracking(db_manager: Optional[DatabaseManager] = None):
+async def run_tracking(db_manager: Optional[DatabaseManager] = None, live: bool = False):
     """
     Enhanced position tracking with smart exit strategies and sell limit orders.
     
     Args:
         db_manager: Optional DatabaseManager instance for testing.
+        live: False (default) never calls place_order/cancel_order and makes NO DB write on
+            any exit path (log lines only); a live=1 row may be a real holding. True sends
+            and records real sells.
     """
     logger = get_trading_logger("position_tracking")
     logger.info("Starting enhanced position tracking job with sell limit orders.")
@@ -157,7 +160,7 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
         # filled exit closes here and never reaches the settlement log below.
         from src.jobs.execute import (place_profit_taking_orders, place_stop_loss_orders,
                                       reconcile_resting_exit)
-        for position in await db_manager.get_open_live_positions():
+        for position in (await db_manager.get_open_live_positions()) if live else []:
             if position.exit_order_id:
                 try:
                     await reconcile_resting_exit(position, kalshi_client, db_manager)
@@ -170,14 +173,16 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
         profit_results = await place_profit_taking_orders(
             db_manager=db_manager,
             kalshi_client=kalshi_client,
-            profit_threshold=0.20  # 20% profit target
+            profit_threshold=0.20,  # 20% profit target
+            live=live,
         )
         
         logger.info("🛡️ Checking for stop-loss protection...")
         stop_loss_results = await place_stop_loss_orders(
             db_manager=db_manager,
             kalshi_client=kalshi_client,
-            stop_loss_threshold=-0.15  # 15% stop loss
+            stop_loss_threshold=-0.15,  # 15% stop loss
+            live=live,
         )
         
         total_sell_orders = profit_results['orders_placed'] + stop_loss_results['orders_placed']
@@ -256,7 +261,14 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
                             exit_sell_failures += 1
                             continue
 
-                        from src.jobs.execute import place_sell_limit_order, reconcile_exit_fill
+                        from src.jobs.execute import (place_sell_limit_order, reconcile_exit_fill,
+                                                      log_paper_exit)
+                        if not live:
+                            if log_paper_exit(position, exit_price, exit_reason):
+                                exit_sell_orders_placed += 1
+                            else:
+                                exit_sell_failures += 1
+                            continue
                         order = {}
                         sell_ok = await place_sell_limit_order(
                             position=position,
@@ -264,6 +276,7 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
                             db_manager=db_manager,
                             kalshi_client=kalshi_client,
                             order_out=order,
+                            live=live,
                         )
                         # Close only what the fill count says sold; a resting sell
                         # stays open and the sellable guard stops a second one.
@@ -273,6 +286,11 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
                             exit_sell_orders_placed += 1
                         else:
                             exit_sell_failures += 1
+                        continue
+
+                    if not live:
+                        logger.info(f"PAPER: would record {position.market_id} closed via "
+                                    f"{exit_reason}; no DB write in paper mode.")
                         continue
 
                     # Calculate PnL

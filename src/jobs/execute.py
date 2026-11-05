@@ -200,12 +200,27 @@ async def _record_ioc_exit(position: Position, order: Dict, limit_price: float,
     return False
 
 
+def log_paper_exit(position: Position, limit_price: float, reason: str) -> bool:
+    """Paper-mode exit: a log line and NOTHING else.
+
+    No exchange request and no DB write. The DB cannot tell a paper-simulated row from a
+    real holding (execute_position's paper branch also stores live=1), so closing or
+    logging a P&L for the row would corrupt a real position's management.
+    """
+    cents = int(round(limit_price * 100))
+    get_trading_logger("paper_exit").info(
+        f"PAPER: would sell {position.quantity} {position.side} {position.market_id} "
+        f"at {cents}c ({reason})")
+    return True
+
+
 async def place_sell_limit_order(
     position: Position,
     limit_price: float,
     db_manager: DatabaseManager,
     kalshi_client: KalshiClient,
     order_out: Optional[Dict] = None,
+    live: bool = False,
 ) -> bool:
     """
     Place a sell limit order to close an existing position.
@@ -217,12 +232,19 @@ async def place_sell_limit_order(
         kalshi_client: Kalshi API client
         order_out: If given, filled with the order response so the caller can
             reconcile fills (see reconcile_exit_fill)
+        live: must be True to send. False (default) refuses before any request.
     
     Returns:
         True if order placed successfully, False otherwise
     """
     logger = get_trading_logger("sell_limit_order")
-    
+
+    # Lowest-layer paper guard: no caller can send a sell without live=True.
+    if not live:
+        logger.warning(f"Not selling {position.market_id}: paper mode (live=False); "
+                       f"no order sent.")
+        return False
+
     try:
         # Convert price to cents for Kalshi API; round, since int() truncates
         # float error (0.29 * 100 == 28.999...) and would sell 1c low.
@@ -516,7 +538,8 @@ _PCT_EPS = 1e-9
 async def place_profit_taking_orders(
     db_manager: DatabaseManager,
     kalshi_client: KalshiClient,
-    profit_threshold: float = 0.25  # 25% profit target
+    profit_threshold: float = 0.25,  # 25% profit target
+    live: bool = False,
 ) -> Dict[str, int]:
     """
     Place sell limit orders for positions that have reached profit targets.
@@ -527,7 +550,8 @@ async def place_profit_taking_orders(
         profit_threshold: Minimum profit percentage to trigger sell order
     
     Returns:
-        Dictionary with results: {'orders_placed': int, 'positions_processed': int}
+        Dictionary with results: {'orders_placed': int, 'positions_processed': int}; paper mode adds 'simulated': int
+        (live=False, the default, sends nothing and writes nothing: exits are log-only)
     """
     logger = get_trading_logger("profit_taking")
     
@@ -574,6 +598,10 @@ async def place_profit_taking_orders(
                         
                         logger.info(f"💰 PROFIT TARGET HIT: {position.market_id} - {profit_pct:.1%} profit (${unrealized_pnl:.2f})")
                         
+                        if not live:
+                            if log_paper_exit(position, sell_price, "profit_take"):
+                                results['simulated'] = results.get('simulated', 0) + 1
+                            continue
                         # Place sell limit order
                         order = {}
                         success = await place_sell_limit_order(
@@ -582,6 +610,7 @@ async def place_profit_taking_orders(
                             db_manager=db_manager,
                             kalshi_client=kalshi_client,
                             order_out=order,
+                            live=live,
                         )
                         # Logs the outcome; closes or shrinks the position only on a fill.
                         await reconcile_exit_fill(position, order, success, sell_price,
@@ -604,7 +633,8 @@ async def place_profit_taking_orders(
 async def place_stop_loss_orders(
     db_manager: DatabaseManager,
     kalshi_client: KalshiClient,
-    stop_loss_threshold: float = -0.10  # 10% stop loss
+    stop_loss_threshold: float = -0.10,  # 10% stop loss
+    live: bool = False,
 ) -> Dict[str, int]:
     """
     Place sell limit orders for positions that need stop-loss protection.
@@ -615,7 +645,8 @@ async def place_stop_loss_orders(
         stop_loss_threshold: Maximum loss percentage before triggering stop loss
     
     Returns:
-        Dictionary with results: {'orders_placed': int, 'positions_processed': int}
+        Dictionary with results: {'orders_placed': int, 'positions_processed': int}; paper mode adds 'simulated': int
+        (live=False, the default, sends nothing and writes nothing: exits are log-only)
     """
     logger = get_trading_logger("stop_loss_orders")
     
@@ -661,6 +692,10 @@ async def place_stop_loss_orders(
                         
                         logger.info(f"🛡️ STOP LOSS TRIGGERED: {position.market_id} - {loss_pct:.1%} loss (${unrealized_pnl:.2f})")
                         
+                        if not live:
+                            if log_paper_exit(position, stop_price, "stop_loss"):
+                                results['simulated'] = results.get('simulated', 0) + 1
+                            continue
                         # Place stop-loss sell order
                         order = {}
                         success = await place_sell_limit_order(
@@ -669,6 +704,7 @@ async def place_stop_loss_orders(
                             db_manager=db_manager,
                             kalshi_client=kalshi_client,
                             order_out=order,
+                            live=live,
                         )
                         # Logs the outcome; closes or shrinks the position only on a fill.
                         await reconcile_exit_fill(position, order, success, stop_price,
