@@ -1386,22 +1386,33 @@ def cmd_close_all(args: argparse.Namespace) -> None:
     async def _close() -> int:
         """Returns how many positions it could not sell or could not read."""
         from src.clients.kalshi_client import KalshiClient
-        from src.jobs.execute import _sellable_contracts
+        from src.jobs.execute import _order_outcome, _sellable_contracts
         from src.strategies.safe_compounder import _fetch_all_pages
         client = KalshiClient()
+        rows: list = []
 
         async def positions_page(**kw) -> dict:
             # A null list can't be told from a bad reply: never report "no positions" on one.
             resp = await client.get_positions(**kw)
             if not isinstance(resp, dict) or not isinstance(resp.get("market_positions"), list):
                 raise RuntimeError("positions reply has no market_positions list")
+            rows.extend(resp["market_positions"])
             return resp
 
         try:
             placed = 0
             failed = 0
             market_positions = []
-            for row in await _fetch_all_pages(positions_page, "market_positions"):
+            try:
+                await _fetch_all_pages(positions_page, "market_positions")
+            except Exception as exc:
+                if not rows:
+                    raise
+                # Each sell is capped by a fresh read of that ticker, so a stop can
+                # still sell what it did read. What it didn't read counts as failed.
+                print(f"  ❌ more positions may exist, not read — {exc}")
+                failed += 1
+            for row in rows:
                 try:
                     market_positions.extend(open_positions_from_v2([row]))
                 except (AttributeError, TypeError, ValueError) as exc:
@@ -1415,7 +1426,8 @@ def cmd_close_all(args: argparse.Namespace) -> None:
             print(f"  Found {len(market_positions)} open position(s).")
             print()
 
-            for ticker, contracts in market_positions:   # contracts signed: + YES, - NO
+            # One sell per ticker, even if a repeated page listed it twice.
+            for ticker, contracts in dict(market_positions).items():   # signed: + YES, - NO
                 side = "yes" if contracts > 0 else "no"
                 quantity = round(abs(contracts), 2)    # v2 counts are 2-dp decimals; never truncate
                 if quantity <= 0:
@@ -1491,6 +1503,22 @@ def cmd_close_all(args: argparse.Namespace) -> None:
                     failed += 1
 
             print()
+            # A resting order on the held side can fill after the sell and rebuild the
+            # position. close-all cancels nothing, so it only names them.
+            sides = {t: "yes" if c > 0 else "no" for t, c in market_positions}
+            try:
+                resting = await _fetch_all_pages(client.get_orders, "orders", status="resting")
+                add_back = sorted({
+                    o["ticker"] for o in resting
+                    if isinstance(o, dict) and o.get("ticker") in sides
+                    and _order_outcome(o) == sides[o["ticker"]]
+                })
+                if add_back:
+                    print(f"  ⚠️  Resting orders can add back to: {', '.join(add_back)}. "
+                          "close-all doesn't cancel them. Cancel them on Kalshi.")
+            except Exception as exc:
+                print(f"  ⚠️  Couldn't check for resting orders that add back — {exc}")
+
             print(f"  {'Placed' if live_mode else 'Would place'}: {placed} | Failed: {failed}")
             print()
             print("  Sell orders are limit-priced — they may rest unfilled if the book")

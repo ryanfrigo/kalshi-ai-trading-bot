@@ -17,6 +17,7 @@ class Fake:
     default_book = V2_BOOK
     place_reply = {"order": {"order_id": "o"}}
     resting: dict = {}    # ticker -> rows, or a whole reply when it isn't a list
+    all_resting: dict = {"orders": []}   # reply to the account-wide resting read
     held_override = None  # a value for _held_on_side to return, or an exception to raise
     position_calls: list = []
     placed: list = []
@@ -46,6 +47,10 @@ class Fake:
 
     async def get_orders(self, ticker=None, status=None, **kw):
         assert status == "resting"
+        if ticker is None:   # the account-wide read for the add-back warning
+            if isinstance(Fake.all_resting, Exception):
+                raise Fake.all_resting
+            return Fake.all_resting
         reply = Fake.resting.get(ticker, [])
         if isinstance(reply, Exception):
             raise reply
@@ -70,7 +75,7 @@ class Fake:
 @pytest.fixture
 def run(monkeypatch, capsys):
     Fake.pages, Fake.books, Fake.position_calls, Fake.placed = [], {}, [], []
-    Fake.resting, Fake.held_override = {}, None
+    Fake.resting, Fake.held_override, Fake.all_resting = {}, None, {"orders": []}
     Fake.default_book, Fake.place_reply, Fake.closed = V2_BOOK, {"order": {"order_id": "o"}}, 0
     monkeypatch.setattr(kc, "KalshiClient", Fake)
 
@@ -189,16 +194,35 @@ def test_a_bad_positions_reply_is_never_reported_as_no_positions(run, reply):
     assert "No open positions" not in out and "Error:" in out
 
 
+def test_a_null_positions_list_says_the_reply_was_bad(run):
+    _, out = run({"market_positions": None})
+    assert "positions reply has no market_positions list" in out
+
+
 @pytest.mark.parametrize("page2", [{}, {"market_positions": None}, RuntimeError("503")])
-def test_a_bad_later_page_stops_with_exit_1_and_sells_nothing(run, page2):
+def test_a_bad_later_page_sells_what_it_read_and_exits_1(run, page2):
     code, out = run({**_rows(("A", "1.00")), "cursor": "c1"}, page2)
-    assert code == 1 and Fake.placed == [] and "Error:" in out
+    assert code == 1 and [o["ticker"] for o in Fake.placed] == ["A"]
+    assert "more positions may exist, not read" in out and "Failed: 1" in out
+    assert "No open positions" not in out
 
 
-def test_a_repeated_cursor_stops_with_exit_1(run):
+def test_a_repeated_cursor_sells_each_ticker_once_and_exits_1(run):
     page = {**_rows(("A", "1.00")), "cursor": "same"}
     code, out = run(page, page, page)
-    assert code == 1 and Fake.placed == [] and "Error:" in out
+    assert code == 1 and [o["ticker"] for o in Fake.placed] == ["A"]
+    assert "more positions may exist, not read" in out
+
+
+def test_an_empty_first_page_then_a_bad_page_is_not_no_positions(run):
+    code, out = run({"market_positions": [], "cursor": "c1"}, {})
+    assert code == 1 and Fake.placed == []
+    assert "No open positions" not in out and "Error:" in out
+
+
+def test_a_ticker_listed_twice_in_one_reply_sells_once(run):
+    code, _ = run(_rows(("A", "1.00"), ("A", "1.00")))
+    assert code == 0 and [o["ticker"] for o in Fake.placed] == ["A"]
 
 
 def test_a_real_empty_account_says_so_and_exits_0(run):
@@ -336,6 +360,51 @@ def test_a_held_read_that_fails_sends_nothing(run, held):
     Fake.held_override = held
     code, out = run(_rows(("A", "1.00")))
     assert code == 1 and Fake.placed == [] and "A:" in out
+
+
+# ---- resting orders that can rebuild a position are named, never cancelled ----
+
+def _order(ticker, outcome):
+    return {"ticker": ticker, "outcome_side": outcome, "remaining_count_fp": "1.00"}
+
+
+def test_a_resting_order_on_the_held_side_is_named_and_nothing_is_cancelled(run):
+    Fake.all_resting = {"orders": [_order("B", "yes"), _order("A", "yes")]}
+    code, out = run(_rows(("A", "1.00"), ("B", "1.00")))
+    assert code == 0 and len(Fake.placed) == 2
+    assert "Resting orders can add back to: A, B." in out
+    assert not hasattr(Fake, "cancel_order")
+
+
+def test_the_add_back_warning_shows_in_a_dry_run(run):
+    Fake.all_resting = {"orders": [_order("A", "yes")]}
+    code, out = run(_rows(("A", "1.00")), live=False)
+    assert code == 0 and Fake.placed == [] and "add back to: A." in out
+
+
+@pytest.mark.parametrize("order", [
+    _order("A", "no"),          # the sell side: it closes the position, doesn't rebuild it
+    _order("OTHER", "yes"),     # a ticker we hold nothing on
+    "not a row", {"outcome_side": "yes"},
+])
+def test_other_resting_orders_are_not_named(run, order):
+    Fake.all_resting = {"orders": [order]}
+    _, out = run(_rows(("A", "1.00")))
+    assert "add back" not in out
+
+
+def test_a_no_holding_names_a_resting_no_order(run):
+    Fake.all_resting = {"orders": [_order("A", "no"), _order("B", "yes")]}
+    _, out = run(_rows(("A", "-1.00"), ("B", "-1.00")))
+    assert "add back to: A." in out
+
+
+@pytest.mark.parametrize("reply", [RuntimeError("503"), {}, {"orders": "x"}])
+def test_a_failed_add_back_read_warns_and_the_sells_still_stand(run, reply):
+    Fake.all_resting = reply
+    code, out = run(_rows(("A", "1.00")))
+    assert code == 0 and len(Fake.placed) == 1
+    assert "Couldn't check for resting orders" in out
 
 
 # ---- dry run sends nothing, and reports what a live run would do ----
