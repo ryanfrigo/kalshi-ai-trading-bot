@@ -42,7 +42,8 @@ def _client(order_resp=_DEFAULT, market=None, balance=1_000_000):
 
 def _bids(yes=0, no=0):
     """A v2 market object: *_dollars fixed-point strings only, bids given in cents."""
-    return {"yes_bid_dollars": f"{yes / 100:.4f}", "no_bid_dollars": f"{no / 100:.4f}"}
+    return {"status": "active", "yes_bid_dollars": f"{yes / 100:.4f}",
+            "no_bid_dollars": f"{no / 100:.4f}"}
 
 
 def _db(positions=()):
@@ -297,3 +298,36 @@ async def test_execute_paper_mode_never_touches_exchange():
     c.get_market.assert_not_called()
     c.get_balance.assert_not_called()
     d.update_position_to_live.assert_awaited_once()
+
+
+# ------------------------------------------------- non-active markets place no exit
+def _no_status(yes):
+    m = _bids(yes=yes)
+    del m["status"]
+    return m
+
+
+@pytest.mark.parametrize("status", ["disputed", "inactive", "initialized", "closed", "", None, "missing"])
+@pytest.mark.parametrize("fn,yes,entry", [(place_profit_taking_orders, 80, 0.50),
+                                          (place_stop_loss_orders, 30, 0.50)])
+async def test_non_active_market_places_no_exit(fn, yes, entry, status):
+    market = _no_status(yes) if status == "missing" else {**_bids(yes=yes), "status": status}
+    c = _client(market=market)
+    res = await fn(_db([_pos("YES", entry)]), c, live=True)
+    assert res["orders_placed"] == 0
+    c.place_order.assert_not_called()
+
+
+@pytest.mark.parametrize("fn,yes", [(place_profit_taking_orders, 80), (place_stop_loss_orders, 30)])
+async def test_non_active_market_skips_paper_exit_too(fn, yes):
+    c = _client(market={**_bids(yes=yes), "status": "disputed"})
+    res = await fn(_db([_pos("YES", 0.50)]), c, live=False)
+    assert res.get("simulated", 0) == 0
+
+
+@pytest.mark.parametrize("fn,yes", [(place_profit_taking_orders, 80), (place_stop_loss_orders, 30)])
+@pytest.mark.parametrize("status", ["active", "ACTIVE", "Active"])
+async def test_active_market_still_places_exit(fn, yes, status):
+    c = _client(market={**_bids(yes=yes), "status": status})
+    res = await fn(_db([_pos("YES", 0.50)]), c, live=True)
+    assert res["orders_placed"] == 1
