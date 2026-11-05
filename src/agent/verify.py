@@ -30,6 +30,7 @@ lives only in the CLI layer (``cli.py verify``).
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 
@@ -168,6 +169,37 @@ adjusted_true_yes_pct, survives, recommend, size_hint. No markdown, no prose."""
 # 2. Calibrator — THE deterministic verdict gate
 # ---------------------------------------------------------------------------
 
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def check_probability(name: str, value: Any) -> None:
+    """Raise ValueError unless ``value`` is a real number from 0 to 100. PURE."""
+    if not _is_number(value) or not 0 <= value <= 100:
+        raise ValueError(f"{name} must be a number from 0 to 100, got {value!r}")
+
+
+def _check_gate_inputs(candidate: Any, research: Any, skeptic: Any) -> None:
+    """Raise ValueError on anything outside the schemas. PURE.
+
+    These values come from an LLM or an operator file. A malformed one must refuse,
+    never read as BUY_NO: bool("false") is True, and a negative probability is a huge edge.
+    """
+    if not isinstance(research, dict) or not isinstance(skeptic, dict):
+        raise ValueError("research and skeptic must be JSON objects")
+    no_ask = candidate.get("no_ask")
+    if not _is_number(no_ask) or not 0 < no_ask <= 1:
+        raise ValueError(f"no_ask must be a price above 0 and up to 1, got {no_ask!r}")
+    check_probability("true_yes_pct", research.get("true_yes_pct"))
+    check_probability("adjusted_true_yes_pct", skeptic.get("adjusted_true_yes_pct"))
+    for name, section in (("survives", skeptic), ("is_frontrunner", research)):
+        if not isinstance(section.get(name), bool):
+            raise ValueError(f"{name} must be true or false, got {section.get(name)!r}")
+    direction = research.get("direction")
+    if direction not in RESEARCH_SCHEMA["properties"]["direction"]["enum"]:
+        raise ValueError(f"direction must be one of the schema values, got {direction!r}")
+
+
 def aggregate_verdict(
     candidate: Dict[str, Any],
     research: Dict[str, Any],
@@ -191,12 +223,13 @@ def aggregate_verdict(
     ``quarter``. Pure / deterministic. ``true_yes`` in the returned dict is the
     skeptic's post-stress-test number — the one the verdict is actually based on.
     """
+    _check_gate_inputs(candidate, research, skeptic)
     no_ask = float(candidate["no_ask"])
     adjusted_true_yes_pct = float(skeptic["adjusted_true_yes_pct"])
     edge_pts = round((100.0 - adjusted_true_yes_pct) - no_ask * 100.0)
-    survives = bool(skeptic["survives"])
+    survives = skeptic["survives"]
     direction = research["direction"]
-    is_frontrunner = bool(research.get("is_frontrunner", False))
+    is_frontrunner = research["is_frontrunner"]
     skeptic_recommend = skeptic.get("recommend")
 
     blocked_direction = direction in {"positive", "live"}
