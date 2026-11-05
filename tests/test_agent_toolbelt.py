@@ -201,3 +201,133 @@ def test_no_expiry_by_default(tmp_path):
         governor=_Governor(), dry=False, journal_path=str(tmp_path / "j.jsonl"),
         policy_path=str(tmp_path / "none.json")))
     assert "expiration_ts" not in client.placed[0]
+
+
+# ---------------------------------------------------------------------------
+# Aggregate exposure: held + resting on a ticker must be read fail-closed
+# ---------------------------------------------------------------------------
+
+class _ExposureClient(_MarketClient):
+    """Fake whose position/order pages are scripted per cursor (None = first page)."""
+    def __init__(self, positions=None, orders=None, **kw):
+        super().__init__(**kw)
+        self._positions = positions if positions is not None else {None: {"market_positions": []}}
+        self._orders = orders if orders is not None else {None: {"orders": []}}
+        self.position_cursors, self.order_cursors = [], []
+    async def get_positions(self, ticker=None, cursor=None, **kw):
+        self.position_cursors.append(cursor)
+        return self._positions[cursor]
+    async def get_orders(self, ticker=None, status=None, cursor=None, **kw):
+        self.order_cursors.append(cursor)
+        return self._orders[cursor]
+
+
+def _buy(client, tmp_path):
+    # $800 equity -> 10% cap = 8000c; at 90c one ticker may hold at most 88 contracts.
+    return asyncio.run(place_guarded_order(
+        client, ticker="KXT", side="no", count=88, price=0.90, est_prob=0.99,
+        governor=_Governor(), dry=True, journal_path=str(tmp_path / "j.jsonl"),
+        policy_path=str(tmp_path / "none.json")))
+
+
+def test_legacy_position_field_counts_as_held(tmp_path):
+    client = _ExposureClient(positions={None: {"market_positions": [
+        {"ticker": "KXT", "position": -88}]}})
+    res = _buy(client, tmp_path)
+    assert res["ok"] is False
+    assert "capped to 0" in res["reason"]
+
+
+def test_legacy_remaining_count_counts_as_resting(tmp_path):
+    client = _ExposureClient(orders={None: {"orders": [
+        {"ticker": "KXT", "remaining_count": 88}]}})
+    res = _buy(client, tmp_path)
+    assert res["ok"] is False
+    assert "capped to 0" in res["reason"]
+
+
+def test_v2_fp_fields_still_count(tmp_path):
+    client = _ExposureClient(
+        positions={None: {"market_positions": [{"ticker": "KXT", "position_fp": "-44.00"}]}},
+        orders={None: {"orders": [{"ticker": "KXT", "remaining_count_fp": "44.00"}]}})
+    assert _buy(client, tmp_path)["ok"] is False
+
+
+def test_matching_row_without_any_count_field_fails_closed(tmp_path):
+    client = _ExposureClient(positions={None: {"market_positions": [{"ticker": "KXT"}]}})
+    res = _buy(client, tmp_path)
+    assert res["ok"] is False and res["reason"].startswith("exposure_unreadable")
+
+
+def test_unparseable_count_fails_closed(tmp_path):
+    client = _ExposureClient(orders={None: {"orders": [
+        {"ticker": "KXT", "remaining_count_fp": "lots"}]}})
+    res = _buy(client, tmp_path)
+    assert res["ok"] is False and res["reason"].startswith("exposure_unreadable")
+
+
+@pytest.mark.parametrize("bad", [{}, {"market_positions": None}, {"market_positions": {}}])
+def test_missing_or_odd_positions_list_fails_closed(tmp_path, bad):
+    res = _buy(_ExposureClient(positions={None: bad}), tmp_path)
+    assert res["ok"] is False and res["reason"].startswith("exposure_unreadable")
+
+
+@pytest.mark.parametrize("bad", [{}, {"orders": None}, {"orders": "x"}])
+def test_missing_or_odd_orders_list_fails_closed(tmp_path, bad):
+    res = _buy(_ExposureClient(orders={None: bad}), tmp_path)
+    assert res["ok"] is False and res["reason"].startswith("exposure_unreadable")
+
+
+def test_second_page_of_positions_is_consumed(tmp_path):
+    client = _ExposureClient(positions={
+        None: {"market_positions": [{"ticker": "OTHER", "position_fp": "5"}], "cursor": "p2"},
+        "p2": {"market_positions": [{"ticker": "KXT", "position_fp": "-88"}], "cursor": ""},
+    })
+    res = _buy(client, tmp_path)
+    assert client.position_cursors == [None, "p2"]
+    assert res["ok"] is False and "capped to 0" in res["reason"]
+
+
+def test_second_page_of_orders_is_consumed(tmp_path):
+    client = _ExposureClient(orders={
+        None: {"orders": [], "cursor": "o2"},
+        "o2": {"orders": [{"ticker": "KXT", "remaining_count_fp": "88"}]},
+    })
+    res = _buy(client, tmp_path)
+    assert client.order_cursors == [None, "o2"]
+    assert res["ok"] is False and "capped to 0" in res["reason"]
+
+
+def test_endless_cursor_fails_closed(tmp_path):
+    class Loop(_ExposureClient):
+        async def get_positions(self, ticker=None, cursor=None, **kw):
+            return {"market_positions": [], "cursor": "again"}
+    res = _buy(Loop(), tmp_path)
+    assert res["ok"] is False and res["reason"].startswith("exposure_unreadable")
+
+
+def test_empty_exposure_still_allows_the_buy(tmp_path):
+    res = _buy(_ExposureClient(), tmp_path)
+    assert res["ok"] is True and res["count"] == 88
+
+
+@pytest.mark.parametrize("kind,row", [
+    ("positions", {"ticker": "KXT", "position_fp": "nan"}),
+    ("positions", {"ticker": "KXT", "position_fp": "inf"}),
+    ("orders", {"ticker": "KXT", "remaining_count_fp": "nan"}),
+])
+def test_non_finite_count_fails_closed(tmp_path, kind, row):
+    if kind == "positions":
+        client = _ExposureClient(positions={None: {"market_positions": [row]}})
+    else:
+        client = _ExposureClient(orders={None: {"orders": [row]}})
+    res = _buy(client, tmp_path)
+    assert res["ok"] is False and "exposure_unreadable" in res["reason"]
+
+
+def test_position_fp_wins_over_legacy_position(tmp_path):
+    # fp says 1 contract held, legacy says 88: at 90c the cap leaves room for 87.
+    client = _ExposureClient(positions={None: {"market_positions": [
+        {"ticker": "KXT", "position_fp": "-1.00", "position": -88}]}})
+    res = _buy(client, tmp_path)
+    assert res["ok"] is True and res["count"] == 87
