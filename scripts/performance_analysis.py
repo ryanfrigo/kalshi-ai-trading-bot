@@ -4,6 +4,7 @@ import asyncio
 import sys
 sys.path.append('.')
 from src.clients.kalshi_client import KalshiClient
+from src.strategies.safe_compounder import _fetch_all_pages
 from src.utils.database import DatabaseManager
 from src.clients.xai_client import XAIClient
 from src.utils.market_prices import held_side_mid, signed_position
@@ -26,8 +27,7 @@ async def comprehensive_analysis():
         print("-" * 40)
         
         # Kalshi actual positions
-        positions_response = await kalshi_client.get_positions()
-        kalshi_positions = positions_response.get('market_positions', [])
+        kalshi_positions = await _fetch_all_pages(kalshi_client.get_positions, 'market_positions')
         
         non_zero_positions = [p for p in kalshi_positions if signed_position(p) != 0]
         total_contracts = sum(abs(signed_position(p)) for p in non_zero_positions)

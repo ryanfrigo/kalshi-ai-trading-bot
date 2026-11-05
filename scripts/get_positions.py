@@ -4,6 +4,7 @@ import asyncio
 import sys
 sys.path.append('.')
 from src.clients.kalshi_client import KalshiClient
+from src.strategies.safe_compounder import _fetch_all_pages
 from src.utils.database import DatabaseManager
 from src.utils.market_prices import signed_position
 
@@ -11,9 +12,9 @@ async def get_positions():
     # Get Kalshi positions
     kalshi_client = KalshiClient()
     try:
-        positions_response = await kalshi_client.get_positions()
+        rows = await _fetch_all_pages(kalshi_client.get_positions, 'market_positions')
         print('=== KALSHI POSITIONS ===')
-        market_positions = positions_response.get('market_positions', [])
+        market_positions = [p for p in rows if signed_position(p) != 0]
         print(f'Total positions: {len(market_positions)}')
         for pos in market_positions:
             print(f'{pos.get("ticker")}: {signed_position(pos)} contracts')

@@ -19,6 +19,7 @@ from typing import Dict, List
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.clients.kalshi_client import KalshiClient
+from src.strategies.safe_compounder import _fetch_all_pages
 from src.utils.database import DatabaseManager
 from src.utils.market_prices import held_side_mid, signed_position
 
@@ -34,8 +35,7 @@ async def get_portfolio_health() -> Dict:
         available_cash = balance_response.get('balance', 0) / 100
         
         # Get current positions
-        positions_response = await kalshi_client.get_positions()
-        market_positions = positions_response.get('market_positions', [])
+        market_positions = await _fetch_all_pages(kalshi_client.get_positions, 'market_positions')
         
         total_position_value = 0
         position_details = []

@@ -28,6 +28,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.database import DatabaseManager
 from src.clients.kalshi_client import KalshiClient
+from src.strategies.safe_compounder import _fetch_all_pages
 from src.utils.market_prices import held_side_mid, signed_position
 
 # Configure Streamlit page
@@ -99,8 +100,7 @@ def load_performance_data():
                     }
             
             # Get LIVE positions from Kalshi API (not just database)
-            positions_response = await kalshi_client.get_positions()
-            kalshi_positions = positions_response.get('market_positions', [])
+            kalshi_positions = await _fetch_all_pages(kalshi_client.get_positions, 'market_positions')
             
             # Convert Kalshi positions to simple dictionaries for caching
             positions = []
@@ -207,11 +207,10 @@ def load_system_health():
             available_cash = balance_response.get('balance', 0) / 100
             
             # Get current positions to calculate total portfolio value
-            positions_response = await kalshi_client.get_positions()
-            market_positions = positions_response.get('market_positions', [])
+            market_positions = await _fetch_all_pages(kalshi_client.get_positions, 'market_positions')
             
             total_position_value = 0
-            positions_count = len(market_positions)
+            positions_count = sum(1 for p in market_positions if signed_position(p) != 0)
             
             # Calculate current value of all positions
             for position in market_positions:

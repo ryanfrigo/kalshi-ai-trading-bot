@@ -6,6 +6,7 @@ import json
 sys.path.append('.')
 
 from src.clients.kalshi_client import KalshiClient
+from src.strategies.safe_compounder import _fetch_all_pages
 from src.clients.xai_client import XAIClient
 from src.utils.database import DatabaseManager
 from src.utils.market_prices import signed_position
@@ -29,8 +30,7 @@ async def run_quick_analysis():
         print("\n📊 Gathering portfolio data...")
         
         # Kalshi positions
-        positions_response = await kalshi_client.get_positions()
-        kalshi_positions = positions_response.get('market_positions', [])
+        kalshi_positions = await _fetch_all_pages(kalshi_client.get_positions, 'market_positions')
         active_positions = [p for p in kalshi_positions if signed_position(p) != 0]
         
         # Balance
