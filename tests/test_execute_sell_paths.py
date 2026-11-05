@@ -183,12 +183,12 @@ async def test_exit_jobs_price_a_v2_market_at_the_held_bid(side, job, kw):
 
 
 # ------------------------------------------------------------------ stop loss
-async def test_stop_loss_triggers_and_prices_below_entry():
+async def test_stop_loss_triggers_and_prices_at_the_bid():
     c = _client(market=_bids(yes=40))  # entry .50 -> -20%
     res = await place_stop_loss_orders(_db([_pos("YES", 0.50)]), c, stop_loss_threshold=-0.10, live=True)
     assert res["orders_placed"] == 1
-    # entry*(1 + -0.10*1.1) = 0.445 -> round(44.5) = 44c (half to even)
-    assert c.place_order.call_args.kwargs["yes_price"] == 44
+    # The YES bid, so the sell is marketable; never priced off entry.
+    assert c.place_order.call_args.kwargs["yes_price"] == 40
 
 
 async def test_stop_loss_not_triggered_above_threshold():
