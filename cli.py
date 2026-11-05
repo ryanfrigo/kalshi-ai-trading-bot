@@ -337,17 +337,20 @@ def cmd_fills(args: argparse.Namespace) -> None:
     async def _f() -> None:
         from src.clients.kalshi_client import KalshiClient
         from src.agent.journal import load_journal, reconcile_fills, write_journal
+        from src.agent.pending import resolve_pending
 
         journal = load_journal()
-        candidates = [
-            r for r in journal
-            if r.get("order_id") and not r.get("outcome") and not r.get("voided")
-        ]
-
         client = KalshiClient()
         skipped: list = []
         fills: list = []
         try:
+            # Resolve outcome_unknown records first (read-only GETs); resolved
+            # ones then flow through the normal fill reconciliation below.
+            journal, pending_changes = await resolve_pending(journal, client)
+            candidates = [
+                r for r in journal
+                if r.get("order_id") and not r.get("outcome") and not r.get("voided")
+            ]
             resting = (await client.get_orders(status="resting")).get("orders", [])
             resting_ids = {o.get("order_id") for o in resting if o.get("order_id")}
             # Per-order queries: exact evidence for each order, immune to the
@@ -369,6 +372,7 @@ def cmd_fills(args: argparse.Namespace) -> None:
             await client.close()
 
         updated, changes = reconcile_fills(journal, fills, resting_ids)
+        changes = pending_changes + changes
         if changes and not dry:
             write_journal(updated)
         print(json.dumps({
