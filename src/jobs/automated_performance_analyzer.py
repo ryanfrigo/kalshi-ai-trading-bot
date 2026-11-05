@@ -140,7 +140,7 @@ class AutomatedPerformanceAnalyzer:
                 'performance_metrics': performance_metrics.__dict__,
                 'risk_checks': [check.__dict__ for check in risk_checks],
                 'grok_analysis': grok_analysis,
-                'action_items': [item.__dict__ for item in action_items],
+                'action_items': [{**item.__dict__, 'priority': item.priority.value} for item in action_items],
                 'summary': {
                     'total_critical_issues': len([c for c in risk_checks if c.status == "CRITICAL"]),
                     'total_warnings': len([c for c in risk_checks if c.status == "WARNING"]),
@@ -259,14 +259,14 @@ class AutomatedPerformanceAnalyzer:
                 manual_win_rate=(manual_stats[1] / manual_trades) if manual_trades > 0 else 0,
                 automated_win_rate=(auto_stats[1] / auto_trades) if auto_trades > 0 else 0,
                 overall_win_rate=(trade_stats[1] / total_trades) if total_trades > 0 else 0,
-                total_pnl=trade_stats[3] if trade_stats else 0,
-                manual_pnl=manual_stats[2] if manual_stats else 0,
-                automated_pnl=auto_stats[2] if auto_stats else 0,
+                total_pnl=(trade_stats[3] or 0) if trade_stats else 0,
+                manual_pnl=(manual_stats[2] or 0) if manual_stats else 0,
+                automated_pnl=(auto_stats[2] or 0) if auto_stats else 0,
                 unrealized_pnl=0,  # Will be calculated from current positions
                 capital_utilization=((portfolio_data['total_portfolio_value'] - portfolio_data['available_cash']) / portfolio_data['total_portfolio_value']) * 100 if portfolio_data['total_portfolio_value'] > 0 else 0,
                 available_cash=portfolio_data['available_cash'],
                 active_positions=portfolio_data['active_positions'],
-                avg_position_size=position_stats[1] if position_stats else 0,
+                avg_position_size=(position_stats[1] or 0) if position_stats else 0,
                 largest_position_pct=(position_stats[2] / portfolio_data['total_portfolio_value']) * 100 if portfolio_data['total_portfolio_value'] > 0 and position_stats[2] else 0
             )
     
@@ -391,7 +391,7 @@ class AutomatedPerformanceAnalyzer:
         analysis_prompt = f"""
 You are an expert quantitative trading analyst. Analyze this Kalshi prediction market trading system:
 
-        **IMPORTANT DATA LIMITATION**: The trade_logs database only contains recent data from {getattr(self, 'trade_date_range', {}).get('earliest', 'today')} to {getattr(self, 'trade_date_range', {}).get('latest', 'today')}. Historical profitable manual trades are NOT included in this analysis.
+        **IMPORTANT DATA LIMITATION**: The trade_logs database only contains recent data from {getattr(self, 'trade_date_range', {}).get('earliest', 'today')} to {getattr(self, 'trade_date_range', {}).get('latest', 'today')}. Trades from before that range, or made outside the bot, are NOT included in this analysis.
 
 **CURRENT PORTFOLIO STATE:**
 - Active Positions: {portfolio_data['active_positions']}
@@ -428,6 +428,9 @@ Be concise and actionable. Focus on the top 3 priorities.
                 strategy="performance_analysis",
                 query_type="analysis",
             )
+            if not response_content:
+                # get_completion returns None when the daily cap is closed or the call failed.
+                raise ValueError("no completion returned")
             cost = getattr(self.xai_client, 'total_cost', 0.0)
 
             return {
@@ -477,11 +480,11 @@ Be concise and actionable. Focus on the top 3 priorities.
         
         # Performance summary with data limitation warning
         analysis += f"PERFORMANCE SUMMARY (WARNING - INCOMPLETE DATA):\n"
-        analysis += f"- Overall Win Rate: {metrics.overall_win_rate:.1%} (RECENT DATA ONLY - missing historical profitable manual trades)\n"
+        analysis += f"- Overall Win Rate: {metrics.overall_win_rate:.1%} (RECENT DATA ONLY)\n"
         analysis += f"- Manual vs Automated: {metrics.manual_win_rate:.1%} vs {metrics.automated_win_rate:.1%}\n"
         analysis += f"- Capital Utilization: {metrics.capital_utilization:.1f}%\n"
         analysis += f"- Available Cash: ${metrics.available_cash:.2f}\n"
-        analysis += f"- DATA LIMITATION: Analysis missing historical profitable manual trades\n"
+        analysis += f"- DATA LIMITATION: trade_logs holds only what this install recorded\n"
         
         return analysis
     
@@ -501,7 +504,8 @@ Be concise and actionable. Focus on the top 3 priorities.
                         impact="Prevents forced liquidations and enables opportunistic trading",
                         implementation_steps=[
                             "Close 2-3 lowest conviction positions",
-                            f"Target ${(metrics.available_cash * 0.15 / (check.current_value / 100)) - metrics.available_cash:.2f} additional cash",
+                            (f"Target ${(metrics.available_cash * 0.15 / (check.current_value / 100)) - metrics.available_cash:.2f} additional cash"
+                             if check.current_value > 0 else "Target cash at 15% of portfolio value"),
                             "Set automated cash threshold alerts",
                             "Review position sizing rules"
                         ],

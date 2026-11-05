@@ -19,7 +19,7 @@ def test_history_empty_db_no_tables(tmp_path, monkeypatch, capsys):
     assert con.execute("SELECT count(*) FROM sqlite_master").fetchone()[0] == 0  # no tables created
 
 
-def test_history_trade_logs_without_blocked_trades(tmp_path, monkeypatch, capsys):
+def test_history_empty_trade_logs_without_blocked_trades(tmp_path, monkeypatch, capsys):
     con = sqlite3.connect(tmp_path / "trading_system.db")
     con.execute("CREATE TABLE trade_logs (id INTEGER)")
     con.commit(); con.close()

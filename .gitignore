@@ -186,6 +186,9 @@ e2e_test_*.db
 
 # Temporary analysis files
 *_analysis_*.json
+daily_summary_*.json
+weekly_report_*.json
+alert_*.txt
 *_analysis_*.txt
 *_analysis_*.log
 

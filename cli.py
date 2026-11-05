@@ -1161,12 +1161,18 @@ def cmd_history(args: argparse.Namespace) -> None:
         async with aiosqlite.connect(str(db_path)) as db:
             db.row_factory = aiosqlite.Row
 
-            # Fresh installs lack these tables; don't create them, just say so.
+            # Fresh installs lack trade_logs; don't create it, just say so.
+            # blocked_trades only exists if PortfolioEnforcer has run, so it's optional.
             cur = await db.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' "
                 "AND name IN ('trade_logs', 'blocked_trades')"
             )
-            if {r[0] for r in await cur.fetchall()} != {"trade_logs", "blocked_trades"}:
+            tables = {r[0] for r in await cur.fetchall()}
+            if "trade_logs" not in tables:
+                print("No trade history yet.")
+                return
+            cur = await db.execute("SELECT COUNT(*) FROM trade_logs")
+            if not (await cur.fetchone())[0]:
                 print("No trade history yet.")
                 return
 
@@ -1243,12 +1249,13 @@ def cmd_history(args: argparse.Namespace) -> None:
                     )
 
             # Blocked trades summary
-            cursor2 = await db.execute("""
-                SELECT COUNT(*) FROM blocked_trades
-            """)
-            r2 = await cursor2.fetchone()
-            if r2 and r2[0]:
-                print(f"\n  ⛔ {r2[0]} trades blocked by portfolio enforcer (use 'python cli.py health' for details)")
+            if "blocked_trades" in tables:
+                cursor2 = await db.execute("""
+                    SELECT COUNT(*) FROM blocked_trades
+                """)
+                r2 = await cursor2.fetchone()
+                if r2 and r2[0]:
+                    print(f"\n  ⛔ {r2[0]} trades blocked by portfolio enforcer")
 
             print("=" * 70)
 
@@ -1493,7 +1500,6 @@ def cmd_health(args: argparse.Namespace) -> None:
         fail("Kalshi API connection", str(exc))
 
     # 4. Database
-    db_path = Path(__file__).parent / "trading_system.db"
     try:
         import aiosqlite
 
@@ -1501,7 +1507,7 @@ def cmd_health(args: argparse.Namespace) -> None:
             from src.utils.database import DatabaseManager
             db_manager = DatabaseManager()
             await db_manager.initialize()
-            ok("Database initialization", str(db_path))
+            ok("Database initialization", str(db_manager.db_path))
 
         asyncio.run(_check_db())
     except Exception as exc:
