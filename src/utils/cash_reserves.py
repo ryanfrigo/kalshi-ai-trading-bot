@@ -1,17 +1,18 @@
 """
 Cash Reserves Management Module
 
-Implements the 15% minimum cash reserve requirement recommended by Grok4 performance analysis.
+Implements a minimum cash reserve requirement (0.5% of portfolio; 1.0% optimal).
 Provides systematic cash management across all trading strategies to prevent liquidity crises.
 
 Key Features:
-- 15% minimum cash reserve enforcement
+- Minimum cash reserve enforcement (thresholds set in CashReservesManager)
 - Emergency trading halt when reserves critical
 - Integration with position limits system
 - Real-time cash monitoring and alerts
 - Automatic position closure for reserves
 """
 
+import math
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -71,19 +72,40 @@ class CashReservesManager:
         
     async def check_cash_reserves(
         self,
-        proposed_trade_value: float = 0.0,
+        proposed_trade_value: Optional[float] = None,
         portfolio_value: Optional[float] = None
     ) -> CashReserveResult:
         """
         Check if cash reserves meet requirements for trading.
         
         Args:
-            proposed_trade_value: Dollar value of proposed trade
+            proposed_trade_value: Dollar value of proposed trade. ``None`` means
+                a reserve-only check (no trade). An explicit value must be a
+                finite number > 0, otherwise the trade is refused.
             portfolio_value: Total portfolio value (fetched if not provided)
             
         Returns:
             CashReserveResult with decision and recommendations
         """
+        if proposed_trade_value is None:
+            proposed_trade_value = 0.0
+        else:
+            try:
+                valid = math.isfinite(float(proposed_trade_value)) and float(proposed_trade_value) > 0
+            except (TypeError, ValueError):
+                valid = False
+            if not valid:
+                return CashReserveResult(
+                    can_trade=False,
+                    reason=f"Invalid proposed trade value {proposed_trade_value!r}: must be a finite number > 0",
+                    current_cash=0.0,
+                    portfolio_value=0.0,
+                    cash_reserve_pct=0.0,
+                    required_reserve_pct=self.minimum_reserve_pct,
+                    emergency_status=False,
+                    recommended_actions=["Fix the upstream trade sizing; refusing to trade"],
+                )
+
         try:
             # Get current portfolio state
             if portfolio_value is None:
@@ -114,7 +136,7 @@ class CashReservesManager:
                 emergency_status = True
                 reason = f"EMERGENCY: Cash reserves {current_reserve_pct:.1f}% below emergency threshold {self.emergency_threshold_pct:.1f}%"
                 recommendations.append("Close 2-3 positions immediately")
-                recommendations.append("Suspend new trading until above 15%")
+                recommendations.append(f"Suspend new trading until above {self.minimum_reserve_pct:.1f}%")
                 
             elif reserve_after_trade < self.minimum_reserve_pct:
                 can_trade = False
@@ -279,32 +301,83 @@ class CashReservesManager:
             return {'status': 'ERROR', 'message': str(e)}
     
     async def _get_portfolio_value(self) -> float:
-        """Calculate total portfolio value (cash + positions)."""
+        """Calculate total portfolio value (cash + positions). Raises if it cannot be read."""
         try:
             # Get available cash
             balance_response = await self.kalshi_client.get_balance()
             available_cash = balance_response.get('balance', 0) / 100
             
             # Get current positions value
-            positions_response = await self.kalshi_client.get_positions()
-            positions = positions_response.get('positions', []) if isinstance(positions_response, dict) else []
-            total_position_value = 0
-            
+            positions = await self._fetch_all_positions()
+            total_position_value = 0.0
+
             for position in positions:
-                if not isinstance(position, dict):
-                    continue
-                quantity = position.get('quantity', 0)
-                if quantity != 0:
-                    # Estimate position value (could be improved with real-time pricing)
-                    position_value = abs(quantity) * 0.50  # Conservative estimate
-                    total_position_value += position_value
+                value = self._position_value(position)
+                if value:
+                    total_position_value += value
             
             return available_cash + total_position_value
             
         except Exception as e:
+            # No fallback value: an invented denominator (it used to be $100)
+            # overstates the reserve when cash is larger and lets small trades
+            # through. Callers fail closed on the raise.
             self.logger.error(f"Error calculating portfolio value: {e}")
-            return 100.0  # Conservative fallback
+            raise
     
+    POSITIONS_PAGE_LIMIT = 200
+    POSITIONS_MAX_PAGES = 20
+
+    async def _fetch_all_positions(self) -> List[Any]:
+        """Every ``market_positions`` row, following the cursor.
+
+        Raises (so every caller fails closed) on an unreadable
+        page, a repeated cursor, a failed later page, or more than
+        POSITIONS_MAX_PAGES pages. Never returns a partial list: an undervalued
+        book would overstate the reserve %.
+        """
+        rows: List[Any] = []
+        seen = set()
+        cursor = None
+        for _ in range(self.POSITIONS_MAX_PAGES):
+            resp = await self.kalshi_client.get_positions(limit=self.POSITIONS_PAGE_LIMIT, cursor=cursor)
+            page = resp.get('market_positions') if isinstance(resp, dict) else None
+            if not isinstance(page, list):
+                # Unreadable shape: don't pretend we hold nothing.
+                raise ValueError("positions response missing 'market_positions' list")
+            rows.extend(page)
+            cursor = resp.get('cursor')
+            if not cursor:
+                return rows
+            if cursor in seen:
+                raise ValueError("repeated cursor while paging positions")
+            seen.add(cursor)
+        raise ValueError(f"more than {self.POSITIONS_MAX_PAGES} pages of positions")
+
+    @staticmethod
+    def _position_value(position: Any) -> float:
+        """Dollar value of one v2 ``market_positions`` row; 0.0 for malformed
+        rows or flat positions (skipped, never poisons the whole portfolio).
+
+        Uses ``market_exposure_dollars`` when it is a finite number >= 0,
+        otherwise estimates $0.50 per contract from signed ``position_fp``.
+        """
+        if not isinstance(position, dict):
+            return 0.0
+        try:
+            contracts = abs(float(position.get("position_fp", 0) or 0))
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(contracts) or contracts <= 0:
+            return 0.0
+        try:
+            exposure = float(position.get("market_exposure_dollars"))
+            if math.isfinite(exposure) and exposure >= 0:
+                return exposure
+        except (TypeError, ValueError):
+            pass
+        return contracts * 0.50  # conservative estimate
+
     async def _get_available_cash(self) -> float:
         """Get available cash balance."""
         try:
@@ -324,13 +397,13 @@ class CashReservesManager:
             recommendations.append("🚨 Consider depositing additional funds")
         elif reserve_pct < self.emergency_threshold_pct:
             recommendations.append("⚠️ EMERGENCY: Close 2-3 positions immediately")
-            recommendations.append("⚠️ Suspend new trading until above 15%")
+            recommendations.append(f"⚠️ Suspend new trading until above {self.minimum_reserve_pct:.1f}%")
         elif reserve_pct < self.minimum_reserve_pct:
             recommendations.append("⚠️ Close some positions to build reserves")
-            recommendations.append("⚠️ Avoid new trades until above 15%")
+            recommendations.append(f"⚠️ Avoid new trades until above {self.minimum_reserve_pct:.1f}%")
         elif reserve_pct < self.optimal_reserve_pct:
             recommendations.append("✅ Reserves adequate but could be improved")
-            recommendations.append("✅ Consider building toward 20% optimal")
+            recommendations.append(f"✅ Consider building toward {self.optimal_reserve_pct:.1f}% optimal")
         else:
             recommendations.append("🎯 Excellent cash position")
             recommendations.append("🎯 Ready for opportunistic trades")
@@ -367,4 +440,7 @@ async def is_cash_emergency(
     """Check if we're in a cash emergency situation."""
     manager = CashReservesManager(db_manager, kalshi_client)
     status = await manager.get_cash_status()
-    return status.get('emergency_status', False) 
+    # Fail closed: an ERROR status or a missing key counts as an emergency.
+    if status.get('status') == 'ERROR' or 'emergency_status' not in status:
+        return True
+    return bool(status['emergency_status'])
