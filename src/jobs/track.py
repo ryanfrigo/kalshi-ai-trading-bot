@@ -31,6 +31,8 @@ def _settlement_price(side: str, result, settlement_value, status: str) -> Optio
     still hold a "0.0000" default. Anything else, including '' and 'scalar' alone,
     is None.
     """
+    if str(status or '').strip().lower() == 'disputed':
+        return None  # a dispute can still flip the result
     r = str(result or '').strip().lower()
     if r in ('yes', 'no'):
         return 1.0 if r == str(side).lower() else 0.0
@@ -65,7 +67,9 @@ async def should_exit_position(
     # a closed/determined/finalized book is stale, and the market may still settle
     # the other way, so with no outcome book nothing and retry next cycle. Closed
     # markets take no orders, so the stop/time/profit exits cannot run either.
-    if str(market_status or '').lower() in ('closed', 'determined', 'finalized'):
+    # The same holds for every non-active status (disputed, amended, initialized,
+    # inactive, unknown): only 'active' runs the price-based exits below.
+    if str(market_status or '').lower() != 'active':
         settled = _settlement_price(position.side, market_result, settlement_value, market_status)
         if settled is None:
             key = (position.market_id, position.side)
