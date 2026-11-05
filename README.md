@@ -379,7 +379,7 @@ kalshi-ai-trading-bot/
 
 ## Paper Trading
 
-Simulate trades without sending real orders. Every signal is logged to SQLite and a static HTML dashboard renders cumulative P&L after markets settle.
+Simulate trades without sending real orders. Every signal is logged to SQLite and a static HTML dashboard renders cumulative P&L after markets settle. Paper P&L is before fees: Kalshi's trading fee is not deducted, so real results will be lower.
 
 ```bash
 python paper_trader.py                            # one scan

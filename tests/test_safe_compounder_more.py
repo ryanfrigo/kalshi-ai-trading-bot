@@ -283,44 +283,37 @@ def test_opportunity_carries_v2_volume_and_close_date():
     assert opp["roi_pct"] == pytest.approx(0.11 / 0.89 * 100)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:128,140 an empty side returned as null ({{'yes_dollars': None}}) makes "
-    "`for ... in None` raise TypeError outside any try: one empty book aborts the whole scan "
-    "(zero trades that day, fails closed)."))
 def test_null_orderbook_sides_skip_the_market_instead_of_aborting_the_scan():
     book = {"orderbook_fp": {"yes_dollars": None, "no_dollars": None}}
     assert _scan(_market(), book=book) == []
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:551,559 {{'orderbook_fp': null}} yields ob=None; ob.get raises AttributeError outside "
-    "the try: whole scan aborts."))
 def test_null_orderbook_payload_skips_the_market():
     assert _scan(_market(), book={"orderbook_fp": None}) == []
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:490 float('n/a') on a malformed volume string raises ValueError in the candidate "
-    "filter: one bad market row aborts the entire run (no trades, fails closed)."))
 def test_malformed_volume_skips_that_market_only():
     out = _compounder(FakeClient())._find_no_candidates(
         [_market(ticker="KXBAD", volume="n/a"), _market(ticker="KXOK")])
     assert [c["ticker"] for c in out] == ["KXOK"]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:486 `m.get('title','')` is None when the API sends title:null -> .lower() raises "
-    "AttributeError and aborts the run."))
 def test_null_title_does_not_abort_candidate_filtering():
     out = _compounder(FakeClient())._find_no_candidates([{**_market(), "title": None}])
-    assert len(out) == 1
+    assert out == []  # skipped, not aborted: the title exclusion filter can't vouch for it
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:633 `m.get('close_time','')[:10]` with close_time:null raises TypeError after the "
-    "edge check passed: the run dies before ANY order is placed, including other good markets."))
 def test_null_close_time_does_not_abort_the_opportunity_scan():
     assert len(_scan({**_market(), "close_time": None})) == 1
+
+
+def test_bad_rows_are_skipped_and_good_rows_kept_in_one_batch():
+    out = _compounder(FakeClient())._find_no_candidates([
+        {**_market(ticker="KXT"), "title": None},
+        _market(ticker="KXV", volume="n/a"),
+        _market(ticker="KXOK"),
+    ])
+    assert [c["ticker"] for c in out] == ["KXOK"]
 
 
 def test_confidence_gate_boundary_is_inclusive_at_the_threshold():
@@ -517,10 +510,6 @@ def test_balance_failure_at_start_places_nothing_and_raises():
     assert client.placed == []
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:370 the post-order get_balance() is unguarded: if it raises after orders were "
-    "placed, run() raises and the stats are lost (cli sees a crash although N orders are live). "
-    "No money moves wrongly; the audit trail does."))
 def test_run_still_returns_stats_when_the_final_balance_read_fails():
     class Flaky(Exchange):
         calls = 0
@@ -536,6 +525,23 @@ def test_run_still_returns_stats_when_the_final_balance_read_fails():
     client = Flaky()
     stats = _run(_compounder(client).run())
     assert stats["placed"] == 1
+
+
+def test_failed_final_balance_read_is_reported_as_unavailable(capsys):
+    class Flaky(Exchange):
+        calls = 0
+
+        async def get_balance(self):
+            Flaky.calls += 1
+            if Flaky.calls > 1:
+                raise RuntimeError("503")
+            return await super().get_balance()
+
+        async def _make_authenticated_request(self, *a, **k):
+            return {"events": [{"markets": [_market()]}]} if a[1].endswith("/events") else {"markets": []}
+    _run(_compounder(Flaky()).run())
+    out = capsys.readouterr().out
+    assert "Cash:                 unavailable (balance read failed)" in out
 
 
 # =====================================================================================
@@ -943,10 +949,6 @@ def test_check_fills_balance_failure_propagates():
         _run(SafeCompounder(NoBal()).check_fills())
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:823-825 check_fills reads v1 fields `count` and `yes_price` (cents): a v2 fill "
-    "(count_fp '5.00', no_price_dollars '0.8900') prints 'x0 @ $0.00'. Display only; the owner "
-    "reads this to confirm fills."))
 def test_check_fills_reads_v2_fill_fields(capsys):
     out = _cf(FillsClient(fills=[{"ticker": "KXA", "side": "no", "count_fp": "5.00",
                                   "no_price_dollars": "0.8900", "yes_price_dollars": "0.1100",
@@ -954,13 +956,17 @@ def test_check_fills_reads_v2_fill_fields(capsys):
     assert "no x5.00 @ $0.89" in out or "no x5 @ $0.89" in out
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    f"{SRC}:825 price = fill.get('yes_price', fill.get('no_price')): yes_price is present on every "
-    "fill, so a NO buy at 89c is shown at its YES-leg price 11c. Misreports the cost basis."))
 def test_check_fills_shows_the_no_price_for_a_no_fill(capsys):
     out = _cf(FillsClient(fills=[{"ticker": "KXA", "side": "no", "count": 5, "yes_price": 11,
                                   "no_price": 89, "created_time": "2026-11-02T10:11:12Z"}]), capsys)
     assert "no x5 @ $0.89" in out
+
+
+def test_check_fills_v2_yes_fill_uses_the_yes_leg_price(capsys):
+    out = _cf(FillsClient(fills=[{"ticker": "KXB", "side": "yes", "count_fp": "2.50",
+                                  "yes_price_dollars": "0.0700", "no_price_dollars": "0.9300",
+                                  "created_time": "2026-11-02T10:11:12Z"}]), capsys)
+    assert "yes x2.5 @ $0.07 | KXB" in out
 
 
 def test_v1_cent_last_price_is_normalised_in_the_reported_opportunity():

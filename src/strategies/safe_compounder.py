@@ -121,8 +121,8 @@ def market_confidence_score(ticker: str, orderbook: dict, market: dict) -> Tuple
     reasons = []
 
     # Handle both new and old orderbook formats
-    no_side = orderbook.get("no_dollars", orderbook.get("no", []))
-    yes_side = orderbook.get("yes_dollars", orderbook.get("yes", []))
+    no_side = orderbook.get("no_dollars", orderbook.get("no", [])) or []
+    yes_side = orderbook.get("yes_dollars", orderbook.get("yes", [])) or []
 
     all_levels = []
     for price_data, qty_data in yes_side:
@@ -367,7 +367,11 @@ class SafeCompounder:
         stats = await self._place_resting_orders(sorted_opps, portfolio, cash)
 
         elapsed = time.time() - start
-        bal = await self.client.get_balance()
+        try:
+            bal = await self.client.get_balance()
+        except Exception as e:
+            logger.warning("Final balance read failed after placing orders: %s", e)
+            bal = None
 
         print(f"\n{'='*70}", flush=True)
         print(f"📊 SAFE COMPOUNDER REPORT", flush=True)
@@ -382,8 +386,12 @@ class SafeCompounder:
         print(f"  Capital deployed:     ${stats['total_deployed']/100:.2f}", flush=True)
         print(f"  Potential profit:     ${stats['total_potential_profit']/100:.2f}", flush=True)
         print(f"  YES orders cancelled: {cancelled}", flush=True)
-        print(f"  Cash:                 ${bal.get('balance', 0)/100:.2f}", flush=True)
-        print(f"  Portfolio:            ${bal.get('portfolio_value', 0)/100:.2f}", flush=True)
+        if bal is None:
+            print("  Cash:                 unavailable (balance read failed)", flush=True)
+            print("  Portfolio:            unavailable (balance read failed)", flush=True)
+        else:
+            print(f"  Cash:                 ${bal.get('balance', 0)/100:.2f}", flush=True)
+            print(f"  Portfolio:            ${bal.get('portfolio_value', 0)/100:.2f}", flush=True)
         print(f"  Elapsed:              {elapsed:.0f}s", flush=True)
         print(f"{'='*70}\n", flush=True)
 
@@ -483,11 +491,18 @@ class SafeCompounder:
             if should_skip(ticker):
                 continue
 
-            title_lower = m.get("title", "").lower()
+            title = m.get("title")
+            if not isinstance(title, str):
+                continue  # unreadable title: the exclusion filter can't run, so skip
+            title_lower = title.lower()
             if any(phrase in title_lower for phrase in SKIP_TITLE_PHRASES):
                 continue
 
-            if int(float(m.get("volume_fp", 0) or m.get("volume", 0) or 0)) < MIN_VOLUME:
+            try:
+                vol = int(float(m.get("volume_fp", 0) or m.get("volume", 0) or 0))
+            except (ValueError, TypeError):
+                continue
+            if vol < MIN_VOLUME:
                 continue
 
             if not _has_last_price(m):
@@ -548,7 +563,7 @@ class SafeCompounder:
             try:
                 ob_resp = await self.client.get_orderbook(ticker, depth=10)
                 # Handle both new and old orderbook formats
-                ob = ob_resp.get("orderbook_fp", ob_resp.get("orderbook", {}))
+                ob = ob_resp.get("orderbook_fp", ob_resp.get("orderbook", {})) or {}
                 # No extra sleep — client already has 0.5s rate limiter
                 if (i + 1) % 50 == 0:
                     logger.info("Orderbook progress: %d/%d checked", i + 1, len(candidates))
@@ -630,7 +645,7 @@ class SafeCompounder:
                 "annualized_roi": annualized_roi,
                 "volume": int(float(m.get("volume_fp", 0) or m.get("volume", 0) or 0)),
                 "days_to_expiry": m["_days_to_expiry"],
-                "close_time": m.get("close_time", "")[:10],
+                "close_time": (m.get("close_time") or "")[:10],
                 "best_no_bid": best_no_bid,
             })
 
@@ -822,7 +837,21 @@ class SafeCompounder:
                 ticker = f.get("ticker", "")
                 side = f.get("side", "")
                 count = f.get("count", 0)
-                price = f.get("yes_price", f.get("no_price", 0))
+                if f.get("count_fp") is not None:
+                    try:
+                        c = float(f["count_fp"])
+                        count = int(c) if c == int(c) else c
+                    except (ValueError, TypeError):
+                        count = f["count_fp"]
+                leg = "no" if side == "no" else "yes"
+                price = f.get(f"{leg}_price_dollars")
+                if price is not None:
+                    try:
+                        price = float(price)
+                    except (ValueError, TypeError):
+                        pass
+                else:
+                    price = f.get(f"{leg}_price", f.get("yes_price", f.get("no_price", 0)))
                 created = f.get("created_time", "")[:16]
                 # Convert cents to dollars if needed for display
                 if isinstance(price, (int, float)) and price > 1.0:

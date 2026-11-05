@@ -192,11 +192,12 @@ def print_stats():
     print(f"  Pending:        {stats['pending']}")
     print(f"  Wins:           {stats['wins']}")
     print(f"  Losses:         {stats['losses']}")
-    print(f"  Win rate:       {stats['win_rate']}%")
-    print(f"  Total P&L:      ${stats['total_pnl']:.2f}")
-    print(f"  Avg return:     ${stats['avg_return']:.4f}")
+    print(f"  Win rate (before fees):   {stats['win_rate']}%")
+    print(f"  Total P&L (before fees):  ${stats['total_pnl']:.2f}")
+    print(f"  Avg return (before fees): ${stats['avg_return']:.4f}")
     print(f"  Best trade:     ${stats['best_trade']:.2f}")
     print(f"  Worst trade:    ${stats['worst_trade']:.2f}")
+    print("  Note: paper P&L excludes Kalshi trading fees.")
     print()
 
 
