@@ -43,8 +43,9 @@ memory — read it if you lack context.
      (your record proves it loses money) or its `est_prob` lands in a **HAIRCUT**
      band (you're overconfident there), respect it: `cli.py trade` will refuse a
      blocked category. Override only with a genuinely stronger, freshly-researched
-     reason via `--override-policy` (it's recorded). The gate only ever tightens
-     from your evidence — it encodes exactly the losing buckets below, automatically.
+     reason via `--override-policy` (it's recorded). The policy re-derives from
+     your whole settled record each run, so a block lifts if the group's net P&L
+     returns to break-even — it encodes exactly the losing buckets below, automatically.
    - **It passes the adversarial-verify gate.** Before any live buy, run
      `cli.py verify --ticker T` — it researches the catalyst + true-YES, runs a
      SKEPTIC that tries to REFUTE the fade, then a deterministic gate recomputes the

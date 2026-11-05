@@ -8,7 +8,7 @@ This strategy implements sophisticated market making by:
 4. Rebalancing orders based on market conditions
 
 Key advantages:
-- Profits from spreads without directional risk
+- Earns the spread, though held inventory still carries directional risk
 - Doesn't tie up capital like taking positions
 - Provides liquidity while capturing edge
 - Scales efficiently across many markets

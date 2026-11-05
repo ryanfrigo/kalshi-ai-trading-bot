@@ -1,7 +1,8 @@
 """
-Portfolio Enforcer — Runs before every trade scan.
+Portfolio Enforcer — not wired into any order path. Kept as a reference
+implementation of category and drawdown pre-checks.
 
-Hard-blocks:
+Checks it implements:
   - Categories scoring < 30
   - Positions that would exceed category allocation limits
   - Positions that would exceed overall drawdown limits
