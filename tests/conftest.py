@@ -19,6 +19,14 @@ import pytest
 
 RUN_LIVE_TESTS = os.getenv("RUN_LIVE_TESTS", "").lower() in {"1", "true", "yes"}
 
+if not RUN_LIVE_TESTS:
+    # settings.py calls load_dotenv() at import, which walks up to the checkout's .env.
+    # A plain run must not load a contributor's real keys or LIVE_TRADING_ENABLED.
+    # This runs before any test module imports src.
+    import dotenv
+
+    dotenv.load_dotenv = lambda *args, **kwargs: False
+
 
 @pytest.fixture(autouse=True)
 def _governor_defaults_in_tmp(tmp_path, monkeypatch):
