@@ -1240,6 +1240,20 @@ def cmd_history(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def open_positions_from_v2(rows: list[dict]) -> list[tuple[str, float]]:
+    """Return (ticker, signed_position) for every non-zero Kalshi position row.
+
+    v2 rows carry a signed string ``position_fp`` ("-40.00" = 40 NO, + = YES).
+    Legacy rows carry a numeric ``position``. Zero rows are dropped.
+    """
+    positions = []
+    for row in rows:
+        signed = float(row.get("position_fp", row.get("position", 0)) or 0)
+        if abs(signed) > 0:
+            positions.append((row["ticker"], signed))
+    return positions
+
+
 def cmd_close_all(args: argparse.Namespace) -> None:
     """Place sell orders to close every open position on Kalshi.
 
@@ -1275,10 +1289,9 @@ def cmd_close_all(args: argparse.Namespace) -> None:
         client = KalshiClient()
         try:
             positions_resp = await client.get_positions()
-            market_positions = [
-                p for p in positions_resp.get("market_positions", [])
-                if p.get("position", 0) != 0
-            ]
+            market_positions = open_positions_from_v2(
+                positions_resp.get("market_positions", [])
+            )
 
             if not market_positions:
                 print("  No open positions on Kalshi.")
@@ -1289,11 +1302,13 @@ def cmd_close_all(args: argparse.Namespace) -> None:
 
             placed = 0
             failed = 0
-            for pos in market_positions:
-                ticker = pos["ticker"]
-                contracts = pos["position"]            # signed: + YES, - NO
+            for ticker, contracts in market_positions:   # contracts signed: + YES, - NO
                 side = "yes" if contracts > 0 else "no"
-                quantity = abs(contracts)
+                quantity = round(abs(contracts), 2)    # v2 counts are 2-dp decimals; never truncate
+                if quantity <= 0:
+                    print(f"  ⚠️  {ticker}: position {contracts} rounds to 0 contracts — skipping")
+                    failed += 1
+                    continue
 
                 try:
                     book_resp = await client.get_orderbook(ticker, depth=1)

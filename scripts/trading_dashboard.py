@@ -28,6 +28,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.database import DatabaseManager
 from src.clients.kalshi_client import KalshiClient
+from src.utils.market_prices import held_side_mid, signed_position
 
 # Configure Streamlit page
 st.set_page_config(
@@ -104,9 +105,9 @@ def load_performance_data():
             # Convert Kalshi positions to simple dictionaries for caching
             positions = []
             for pos in kalshi_positions:
-                if pos.get('position', 0) != 0:  # Only active positions
+                if signed_position(pos) != 0:  # Only active positions
                     ticker = pos.get('ticker')
-                    position_count = pos.get('position', 0)
+                    position_count = signed_position(pos)
                     
                     # Create a simple dictionary with only serializable types
                     position_dict = {
@@ -126,10 +127,7 @@ def load_performance_data():
                         market_data = await kalshi_client.get_market(ticker)
                         if market_data and 'market' in market_data:
                             market_info = market_data['market']
-                            if position_count > 0:  # YES position
-                                position_dict['entry_price'] = float((market_info.get('yes_bid', 0) + market_info.get('yes_ask', 100)) / 2 / 100)
-                            else:  # NO position
-                                position_dict['entry_price'] = float((market_info.get('no_bid', 0) + market_info.get('no_ask', 100)) / 2 / 100)
+                            position_dict['entry_price'] = held_side_mid(market_info, position_count)
                     except:
                         position_dict['entry_price'] = 0.50  # Keep default price as float
                     
@@ -219,20 +217,16 @@ def load_system_health():
             for position in market_positions:
                 try:
                     ticker = position.get('ticker')
-                    position_count = position.get('position', 0)
-                    
+                    position_count = signed_position(position)
+
                     if ticker and position_count != 0:
                         # Get current market data
                         market_data = await kalshi_client.get_market(ticker)
                         if market_data and 'market' in market_data:
                             market_info = market_data['market']
-                            
-                            # Determine if this is a YES or NO position and get current price
-                            # For Kalshi, positive position = YES, negative = NO
-                            if position_count > 0:  # YES position
-                                current_price = (market_info.get('yes_bid', 0) + market_info.get('yes_ask', 100)) / 2 / 100
-                            else:  # NO position  
-                                current_price = (market_info.get('no_bid', 0) + market_info.get('no_ask', 100)) / 2 / 100
+
+                            # Positive signed position = YES, negative = NO
+                            current_price = held_side_mid(market_info, position_count)
                             
                             position_value = abs(position_count) * current_price
                             total_position_value += position_value
