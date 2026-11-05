@@ -46,7 +46,18 @@ class TradingPerformanceAnalyzer:
         try:
             # Gather all performance data
             performance_data = await self._gather_performance_data()
-            
+
+            # A failed read leaves this block empty, and the prompt would state zero
+            # positions and zero cash as fact. Don't pay for advice on that.
+            if not performance_data.get('portfolio'):
+                self.logger.warning("Portfolio read failed; skipping the AI analysis")
+                return {
+                    'analysis_timestamp': datetime.now().isoformat(),
+                    'performance_data': performance_data,
+                    'ai_insights': {'error': 'portfolio read failed; AI analysis skipped'},
+                    'action_items': []
+                }
+
             # Generate AI analysis using Grok4
             ai_analysis = await self._generate_ai_analysis(performance_data)
             
@@ -288,7 +299,7 @@ Focus on actionable insights that can immediately improve performance.
             issues.append(f"Critical: Low available cash (${cash:.2f}) - may block new trades")
         
         # Check total PnL
-        total_pnl = perf.get('total_pnl', 0)
+        total_pnl = perf.get('total_pnl') or 0  # SUM over no rows is NULL
         if total_pnl < -100:
             issues.append(f"Critical: Large cumulative loss (${total_pnl:.2f})")
         
@@ -345,7 +356,7 @@ Focus on actionable insights that can immediately improve performance.
         self.logger.info(
             "📊 Performance Analysis Complete",
             win_rate=f"{perf.get('win_rate', 0):.1%}",
-            total_pnl=f"${perf.get('total_pnl', 0):.2f}",
+            total_pnl=f"${perf.get('total_pnl') or 0:.2f}",
             active_positions=portfolio.get('active_positions', 0),
             available_cash=f"${portfolio.get('available_cash', 0):.2f}",
             action_items=len(report.get('action_items', []))

@@ -1,5 +1,7 @@
 """The risk report and both performance analyzers read every page of positions.
 Fakes only, with read methods alone, so an order would raise. No .env is loaded."""
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from scripts import portfolio_risk
@@ -96,3 +98,35 @@ async def test_performance_analyzer_leaves_the_block_empty_on_a_bad_later_page(t
     analyzer = TradingPerformanceAnalyzer(db, Fake(BAD_LATER), None)
     data = await analyzer._gather_performance_data()
     assert data["portfolio"] == {}
+
+
+async def test_performance_analyzer_skips_the_paid_call_when_the_portfolio_read_fails(tmp_path):
+    from src.utils.database import DatabaseManager
+    db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+    await db.initialize()
+    xai = MagicMock(get_completion=AsyncMock(return_value="advice"))
+    report = await TradingPerformanceAnalyzer(db, Fake(BAD_LATER), xai).run_comprehensive_analysis()
+    xai.get_completion.assert_not_awaited()
+    assert report["ai_insights"] == {"error": "portfolio read failed; AI analysis skipped"}
+    assert report["action_items"] == []
+    assert report["performance_data"]["portfolio"] == {}
+
+
+async def test_performance_analyzer_still_makes_the_call_when_the_read_works(tmp_path):
+    from src.utils.database import DatabaseManager
+    db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+    await db.initialize()
+    xai = MagicMock(get_completion=AsyncMock(return_value="advice"))
+    report = await TradingPerformanceAnalyzer(db, Fake(TWO_PAGES), xai).run_comprehensive_analysis()
+    xai.get_completion.assert_awaited_once()
+    assert report["ai_insights"]["raw_analysis"] == "advice"
+
+
+async def test_performance_analyzer_fallback_survives_an_empty_ledger(tmp_path):
+    from src.utils.database import DatabaseManager
+    db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+    await db.initialize()
+    xai = MagicMock(get_completion=AsyncMock(side_effect=RuntimeError("no")))
+    report = await TradingPerformanceAnalyzer(db, Fake(TWO_PAGES), xai).run_comprehensive_analysis()
+    assert report["ai_insights"]["error"] == "no"
+    assert "FALLBACK ANALYSIS" in report["ai_insights"]["fallback_analysis"]
