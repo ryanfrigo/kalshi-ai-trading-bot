@@ -194,7 +194,8 @@ class AdvancedPortfolioOptimizer:
                     risk_adjusted_fraction=0.0,
                     sharpe_ratio=sharpe_ratio,
                     sortino_ratio=sortino_ratio,
-                    max_drawdown_contribution=max_dd_contribution
+                    max_drawdown_contribution=max_dd_contribution,
+                    volume=getattr(opp, 'volume', float('nan'))
                 )
                 
                 enhanced.append(enhanced_opp)

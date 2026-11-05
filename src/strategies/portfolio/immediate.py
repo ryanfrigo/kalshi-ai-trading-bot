@@ -6,6 +6,7 @@ former 1,300-line portfolio_optimization.py.
 """
 
 import logging
+import math
 import numpy as np
 from datetime import datetime
 from typing import List, Optional, Tuple
@@ -19,6 +20,15 @@ from src.utils.market_prices import get_market_prices
 from src.utils.position_sizing import binary_market_payout_odds, kelly_fraction
 
 from src.strategies.portfolio.models import MarketOpportunity
+
+
+def _coerce_volume(value) -> float:
+    """float(volume), or NaN when missing/invalid so the liquidity gate fails closed."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return float('nan')
+    return v if math.isfinite(v) else float('nan')
 
 
 async def create_market_opportunities_from_markets(
@@ -107,7 +117,8 @@ async def create_market_opportunities_from_markets(
                     risk_adjusted_fraction=0.0,
                     sharpe_ratio=0.0,
                     sortino_ratio=0.0,
-                    max_drawdown_contribution=0.0
+                    max_drawdown_contribution=0.0,
+                    volume=_coerce_volume(getattr(market, 'volume', None))
                 )
                 
                 # Add edge filter results to opportunity
@@ -153,10 +164,11 @@ async def _evaluate_immediate_trade(
             market_probability=opportunity.market_probability,
             confidence=opportunity.confidence,
             additional_filters={
-                'volume': getattr(opportunity, 'volume', 1000),
-                'min_volume': 1000,
+                # NaN (unknown) volume fails the gate downstream; never default to passing.
+                'volume': opportunity.volume,
+                'min_volume': settings.trading.min_volume,
                 'time_to_expiry_days': opportunity.time_to_expiry,
-                'max_time_to_expiry': 365
+                'max_time_to_expiry': settings.trading.max_time_to_expiry_days
             }
         )
         
