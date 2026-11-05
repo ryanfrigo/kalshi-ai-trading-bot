@@ -17,6 +17,7 @@ Key Features:
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass
 import asyncio
+import math
 from datetime import datetime, timedelta
 
 from src.utils.database import DatabaseManager, Position
@@ -63,8 +64,10 @@ class PositionLimitsManager:
         self.logger = get_trading_logger("position_limits")
         
         # INCREASED: More aggressive limits for more opportunities
-        self.max_positions = 15  # INCREASED: Allow 15 positions (was 10)
-        self.max_position_size_pct = 5.0  # INCREASED: 5% max per trade (was 3%)
+        # Single source of truth for the count cap is settings; the per-trade
+        # size cap is the tighter of this module's 5% and the configured limit.
+        self.max_positions = settings.trading.max_positions
+        self.max_position_size_pct = min(5.0, settings.trading.max_position_size_pct)
         self.warning_threshold = self.max_positions - 3  # Warning at 12 positions
         
         # Additional safety limits - MORE AGGRESSIVE FOR FULL PORTFOLIO USE
@@ -87,6 +90,21 @@ class PositionLimitsManager:
             PositionLimitResult with decision and recommendations
         """
         try:
+            # Fail closed on a size that cannot be a real order: NaN/inf would
+            # pass every comparison below, and <= 0 is not a position.
+            if (not isinstance(proposed_position_size, (int, float))
+                    or not math.isfinite(proposed_position_size)
+                    or proposed_position_size <= 0):
+                return PositionLimitResult(
+                    can_trade=False,
+                    reason=f"Invalid proposed position size: {proposed_position_size!r}",
+                    current_positions=0,
+                    max_positions=self.max_positions,
+                    current_portfolio_usage=0.0,
+                    max_position_size=0.0,
+                    recommended_actions=["Proposed size must be a finite positive dollar amount"],
+                )
+
             # Get current portfolio state
             if portfolio_value is None:
                 portfolio_value = await self._get_portfolio_value()
@@ -157,49 +175,50 @@ class PositionLimitsManager:
     
     async def enforce_position_limits(self, force_closure: bool = False) -> Dict[str, Any]:
         """
-        Enforce position limits by closing positions if necessary.
-        
+        Report positions over the limit. NEVER writes.
+
+        This module has no authority to sell, and flipping a DB row to
+        'closed' without a sell would leave the exchange position open while
+        the bot believes it is flat. So over-limit is surfaced for a human:
+        the result lists the candidate tickers, the DB is left untouched.
+
         Args:
-            force_closure: Whether to force immediate closure regardless of preferences
-            
+            force_closure: Also review down to the warning threshold.
+
         Returns:
-            Dictionary with enforcement results
+            {'action': 'no_action_needed'} or
+            {'action': 'over_limit_manual_review', 'over_limit_count', 'candidates', ...}
         """
         try:
             current_positions = await self._get_position_count()
-            positions_to_close = max(0, current_positions - self.max_positions)
-            
-            if positions_to_close == 0 and not force_closure:
+            over_limit = max(0, current_positions - self.max_positions)
+            to_review = over_limit
+            if force_closure:
+                to_review = max(over_limit, current_positions - self.warning_threshold)
+
+            if to_review == 0:
                 return {
                     'action': 'no_action_needed',
                     'current_positions': current_positions,
                     'message': 'Position count within limits'
                 }
-            
-            if force_closure:
-                positions_to_close = max(positions_to_close, current_positions - self.warning_threshold)
-            
-            # Get positions ranked by closure priority
-            closure_candidates = await self._get_positions_for_closure(positions_to_close)
-            
-            closed_positions = []
-            for candidate in closure_candidates:
-                try:
-                    # Close the position
-                    await self._close_position(candidate)
-                    closed_positions.append(candidate.market_id)
-                    self.logger.info(f"✅ CLOSED POSITION: {candidate.market_id} (Priority: {candidate.priority_score:.2f})")
-                except Exception as e:
-                    self.logger.error(f"Failed to close position {candidate.market_id}: {e}")
-            
+
+            candidates = await self._get_positions_for_closure(to_review)
+            tickers = [c.market_id for c in candidates]
+            self.logger.warning(
+                f"POSITION LIMIT: {current_positions} open vs max {self.max_positions} "
+                f"({over_limit} over). Manual review needed, nothing was closed. "
+                f"Candidates (riskiest first): {tickers}"
+            )
             return {
-                'action': 'positions_closed',
-                'positions_closed': len(closed_positions),
-                'closed_markets': closed_positions,
-                'remaining_positions': current_positions - len(closed_positions),
-                'message': f'Closed {len(closed_positions)} positions to enforce limits'
+                'action': 'over_limit_manual_review',
+                'current_positions': current_positions,
+                'max_positions': self.max_positions,
+                'over_limit_count': over_limit,
+                'candidates': tickers,
+                'message': f'{over_limit} positions over limit; review {len(tickers)} candidates manually'
             }
-            
+
         except Exception as e:
             self.logger.error(f"Error enforcing position limits: {e}")
             return {
@@ -210,6 +229,15 @@ class PositionLimitsManager:
     async def get_position_limits_status(self) -> Dict[str, Any]:
         """Get current position limits status for monitoring."""
         try:
+            # Strict read: the helpers below swallow errors into fallbacks, which
+            # would make a dead balance endpoint look HEALTHY.
+            balance_response = await self.kalshi_client.get_balance()
+            if not isinstance(balance_response, dict):
+                raise ValueError("balance response is not an object")
+            cents = float(balance_response.get('balance'))
+            if not math.isfinite(cents) or cents <= 0:
+                raise ValueError(f"unusable balance {balance_response.get('balance')!r}")
+
             current_positions = await self._get_position_count()
             portfolio_value = await self._get_portfolio_value()
             portfolio_usage = await self._calculate_portfolio_usage(portfolio_value)
@@ -236,40 +264,91 @@ class PositionLimitsManager:
             
         except Exception as e:
             self.logger.error(f"Error getting position limits status: {e}")
-            return {'status': 'ERROR', 'message': str(e)}
+            return {
+                'status': 'ERROR',
+                'message': str(e),
+                'current_positions': 0,
+                'max_positions': self.max_positions,
+                'position_utilization': 'unknown',
+                'recommendations': ['Cannot read account state - treat limits as unverified'],
+            }
     
     async def _get_position_count(self) -> int:
         """Get current number of open positions."""
         positions = await self.db_manager.get_open_positions()
         return len(positions)
     
+    POSITIONS_PAGE_LIMIT = 200
+    POSITIONS_MAX_PAGES = 20
+
+    async def _fetch_all_positions(self) -> List[Any]:
+        """Every ``market_positions`` row, following the cursor.
+
+        Raises on a failed or malformed page, a repeated cursor, or more than
+        POSITIONS_MAX_PAGES pages: a partial sum would understate exposure."""
+        rows: List[Any] = []
+        seen = set()
+        cursor = None
+        for _ in range(self.POSITIONS_MAX_PAGES):
+            resp = await self.kalshi_client.get_positions(
+                limit=self.POSITIONS_PAGE_LIMIT, cursor=cursor)
+            if (not isinstance(resp, dict) or 'market_positions' not in resp
+                    or not isinstance(resp['market_positions'] or [], list)):
+                raise RuntimeError("malformed market_positions page")
+            rows.extend(resp['market_positions'] or [])
+            cursor = resp.get('cursor')
+            if not cursor:
+                return rows
+            if cursor in seen:
+                raise RuntimeError("repeated cursor while paging market_positions")
+            seen.add(cursor)
+        raise RuntimeError(f"more than {self.POSITIONS_MAX_PAGES} pages of market_positions")
+
     async def _get_portfolio_value(self) -> float:
-        """Calculate total portfolio value (cash + positions)."""
+        """Calculate total portfolio value (cash + positions).
+
+        An unreadable balance falls back to $100 (the cash check then blocks).
+        An unreadable positions list RAISES: callers (check_position_limits,
+        get_position_limits_status) turn that into can_trade=False / ERROR."""
         try:
-            # Get available cash
             balance_response = await self.kalshi_client.get_balance()
             available_cash = balance_response.get('balance', 0) / 100
-            
-            # Get current positions value
-            positions_response = await self.kalshi_client.get_positions()
-            positions = positions_response.get('positions', []) if isinstance(positions_response, dict) else []
-            total_position_value = 0
-            
-            for position in positions:
-                if not isinstance(position, dict):
-                    continue
-                quantity = position.get('quantity', 0)
-                if quantity != 0:
-                    # Estimate position value (could be improved with real-time pricing)
-                    position_value = abs(quantity) * 0.50  # Conservative estimate
-                    total_position_value += position_value
-            
-            return available_cash + total_position_value
-            
         except Exception as e:
             self.logger.error(f"Error calculating portfolio value: {e}")
             return 100.0  # Conservative fallback
-    
+
+        # v2: wrapped in 'market_positions', signed string 'position_fp',
+        # dollar 'market_exposure_dollars'. Not swallowed: fail closed.
+        total_position_value = 0.0
+        for position in await self._fetch_all_positions():
+            value = self._position_value(position)
+            if value is not None:
+                total_position_value += value
+
+        return available_cash + total_position_value
+
+    @staticmethod
+    def _position_value(row: Any) -> Optional[float]:
+        """Dollar value of one v2 position row, or None if the row is unusable.
+
+        Prefers the exchange's own ``market_exposure_dollars``; otherwise a
+        conservative $0.50/contract estimate from ``position_fp``."""
+        if not isinstance(row, dict):
+            return None
+        try:
+            fp = float(row.get('position_fp') or 0)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(fp) or abs(fp) < 0.0001:
+            return None
+        try:
+            exposure = float(row.get('market_exposure_dollars'))
+            if math.isfinite(exposure) and exposure > 0:
+                return exposure
+        except (TypeError, ValueError):
+            pass
+        return abs(fp) * 0.50
+
     async def _get_available_cash(self) -> float:
         """Get available cash balance."""
         try:
@@ -353,21 +432,6 @@ class PositionLimitsManager:
         except Exception as e:
             self.logger.error(f"Error calculating closure priority: {e}")
             return 0.0
-    
-    async def _close_position(self, candidate: PositionToClose) -> bool:
-        """Close a position (mark as closed in database)."""
-        try:
-            # Update position status to closed
-            await self.db_manager.update_position_status(candidate.position_id, "closed")
-            
-            # Log the closure
-            self.logger.info(f"Position {candidate.market_id} closed due to position limits")
-            
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error closing position {candidate.market_id}: {e}")
-            return False
     
     def _get_status_recommendations(self, positions: int, usage: float) -> List[str]:
         """Get recommendations based on current status."""
