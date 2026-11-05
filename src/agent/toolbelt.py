@@ -130,16 +130,22 @@ async def _committed_cents(kalshi_client, ticker: str, price_cents: int) -> int:
 
 async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
     """Structured situational awareness: governor verdict, equity, positions,
-    resting orders. Read-only."""
-    from src.risk.risk_governor import RiskGovernor
+    resting orders. Read-only. ``read_errors`` names reads this noticed failed, came back
+    malformed or were cut short. It holds tickers, so don't publish it as is. An empty
+    list isn't proof of completeness: it only means none of these checks tripped."""
+    from src.risk.risk_governor import RiskGovernor, equity_cents_from_balance
 
     gov = governor or RiskGovernor(kalshi_client=kalshi_client)
-    decision = await gov.check()
 
     bal = await kalshi_client.get_balance()
     cash = int(bal.get("balance", 0) or 0)
     pv = int(bal.get("portfolio_value", 0) or 0)
+    # One balance reply for both, so read_errors describes what the governor computed from.
+    decision = await gov.check(current_equity_cents=equity_cents_from_balance(bal))
 
+    read_errors = []
+    if bal.get("balance") is None or bal.get("portfolio_value") is None:
+        read_errors.append("balance")
     positions = []
     cursor = None
     for _ in range(30):
@@ -148,11 +154,23 @@ async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
             params["cursor"] = cursor
         resp = await kalshi_client._make_authenticated_request(
             "GET", "/trade-api/v2/portfolio/positions", params=params)
-        for mp in resp.get("market_positions", []):
+        rows = resp.get("market_positions")
+        if not isinstance(rows, list):
+            read_errors.append("positions: no list")
+            rows = []
+        for mp in rows:
+            if not isinstance(mp, dict):
+                read_errors.append("positions: bad row")
+                continue
             try:
-                fp = float(mp.get("position_fp", "0") or 0)
-            except ValueError:
-                fp = 0.0
+                if isinstance(mp["position_fp"], bool):
+                    raise ValueError(mp["position_fp"])
+                fp = float(mp["position_fp"])
+                if not math.isfinite(fp):
+                    raise ValueError(fp)
+            except (KeyError, TypeError, ValueError, OverflowError):
+                read_errors.append(f"position {mp.get('ticker')}")
+                continue
             if abs(fp) > 0.0001:
                 positions.append({
                     "ticker": mp.get("ticker"),
@@ -164,11 +182,22 @@ async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
         cursor = resp.get("cursor")
         if not cursor:
             break
+    else:
+        read_errors.append("positions: page cap")
 
     try:
-        orders = (await kalshi_client.get_orders(status="resting")).get("orders", [])
+        resp = await kalshi_client.get_orders(status="resting")
+        orders = resp.get("orders")
+        if not isinstance(orders, list):
+            raise ValueError("no orders list")
+        if resp.get("cursor"):
+            read_errors.append("resting_orders: first page only")
     except Exception:
         orders = []
+        read_errors.append("resting_orders")
+    if not all(isinstance(o, dict) for o in orders):
+        read_errors.append("resting_orders: bad row")
+        orders = [o for o in orders if isinstance(o, dict)]
     resting = [{
         "ticker": o.get("ticker"),
         "outcome_side": o.get("outcome_side"),
@@ -184,6 +213,7 @@ async def account_brief(kalshi_client, governor=None) -> Dict[str, Any]:
         "equity": (cash + pv) / 100.0,
         "positions": positions,
         "resting_orders": resting,
+        "read_errors": read_errors,
     }
 
 

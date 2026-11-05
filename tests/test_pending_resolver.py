@@ -197,3 +197,32 @@ def test_executed_below_intended_still_resolves():
 def test_avg_fill_price_with_zero_fill_returns_zero_not_a_crash():
     from src.agent.pending import _avg_fill_price
     assert _avg_fill_price(_order("0.00", "canceled"), 0.0) == 0.0
+
+
+def test_a_negative_or_infinite_fill_stays_pending():
+    for fill in ("-1.00", "inf", "nan"):
+        for status in ("executed", "canceled"):  # canceled: must not read as zero fills and void
+            rec = _rec()
+            recs, changes = _run([rec], FakeClient(live=[_order(fill, status)]))
+            assert recs == [rec] and changes == [], (fill, status)
+
+
+def test_a_fill_with_no_order_id_stays_pending():
+    order = _order("10.00", "executed")
+    del order["order_id"]
+    rec = _rec()
+    assert _run([rec], FakeClient(live=[order])) == ([rec], [])
+
+
+def test_a_fill_with_no_readable_price_stays_pending():
+    order = _order("10.00", "executed", price=None)
+    del order["taker_fill_cost_dollars"]
+    rec = _rec()
+    del rec["price"]
+    assert _run([rec], FakeClient(live=[order])) == ([rec], [])
+
+
+def test_a_fill_whose_price_is_not_finite_stays_pending():
+    order = _order("10.00", "executed", price="inf")
+    rec = _rec()
+    assert _run([rec], FakeClient(live=[order])) == ([rec], [])

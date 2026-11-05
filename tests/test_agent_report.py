@@ -204,3 +204,88 @@ def test_header_keeps_reproducibility_note():
 
 def test_render_is_deterministic():
     assert _render() == _render()
+
+
+def _account_md(**snapshot):
+    equity = {"equity": 12.5, "cash": 10.0, "positions": [{"ticker": "A"}, {"ticker": "B"}], **snapshot}
+    return render_track_record(
+        date="2026-07-02", equity=equity, settle_summary=_settle_summary(), edge=_edge(), policy=None)
+
+
+def test_a_clean_snapshot_gives_exact_figures():
+    for snapshot in ({}, {"read_errors": []}, {"read_errors": None}):
+        md = _account_md(**snapshot)
+        assert "| Equity | $12.50 |" in md and "| Cash | $10.00 |" in md
+        assert "| Open positions | 2 |" in md
+
+
+def test_a_partial_position_read_never_publishes_a_plain_count():
+    for error in ("position SECRET-TICKER", "positions: page cap", "positions: no list", "positions: bad row"):
+        md = _account_md(read_errors=[error])
+        assert "| Open positions | at least 2 (read incomplete) |" in md
+        assert "| Open positions | 2 |" not in md
+
+
+def test_read_errors_never_reach_the_public_page():
+    md = _account_md(read_errors=["position SECRET-TICKER", "balance", "resting_orders"])
+    assert "SECRET-TICKER" not in md and "resting_orders" not in md
+
+
+def test_a_resting_order_error_leaves_the_position_count_alone():
+    md = _account_md(read_errors=["resting_orders", "resting_orders: first page only"])
+    assert "| Open positions | 2 |" in md and "| Equity | $12.50 |" in md
+
+
+def test_a_failed_balance_read_publishes_no_figure():
+    md = _account_md(equity=0.0, cash=0.0, positions=[], read_errors=["balance"])
+    assert "| Equity | unavailable (read failed) |" in md
+    assert "| Cash | unavailable (read failed) |" in md
+    assert "$0.00" not in md.split("## The honest edge verdict")[0]
+    assert "| Open positions | 0 |" in md
+
+
+def test_a_failed_balance_read_publishes_no_all_time_drawdown():
+    rebase = {"date": "2026-09-25", "prior_peak_cents": 100000}
+    bad = _account_md(equity=0.0, cash=0.0, read_errors=["balance"], rebase=rebase)
+    assert "Drawdown from all-time peak" not in bad
+    good = _account_md(equity=500.0, rebase=rebase)
+    assert "| Drawdown from all-time peak ($1,000.00) | 50.0% |" in good
+
+
+def test_a_failed_balance_read_publishes_no_governor_figures_but_still_shows_the_halt():
+    gov = {"halted": True, "drawdown_pct": 100.0, "daily_pnl_cents": -50000}
+    rebase = {"date": "2026-09-25", "prior_peak_cents": 100000}
+    bad = _account_md(equity=0.0, cash=0.0, governor=gov, rebase=rebase, read_errors=["balance"])
+    assert "| Governor halted | YES |" in bad
+    assert "100.0%" not in bad and "Day P&L" not in bad and "Drawdown since" not in bad
+    assert "all-time drawdown includes" not in bad
+    good = _account_md(equity=500.0, governor=gov, rebase=rebase)
+    assert "| Drawdown since governor re-baseline (2026-09-25) | 100.0% |" in good
+    assert "| Day P&L | -$500.00 |" in good
+    assert "all-time drawdown includes" in good
+
+
+def test_corrupt_governor_state_publishes_no_drawdown_or_day_pnl():
+    gov = {"halted": True, "reasons": ["STATE_CORRUPT: /x/state.json"], "drawdown_pct": 0.0, "daily_pnl_cents": 50000}
+    md = _account_md(equity=500.0, cash=500.0, governor=gov)
+    assert "| Governor halted | YES |" in md and "| Equity | $500.00 |" in md
+    assert "Drawdown from peak" not in md and "Day P&L" not in md and "/x/state.json" not in md
+
+
+def test_a_true_zero_balance_still_publishes_its_drawdown():
+    gov = {"halted": True, "reasons": ["EQUITY_UNREADABLE: equity 0c is not a usable reading"],
+           "drawdown_pct": 100.0, "daily_pnl_cents": -50000}
+    md = _account_md(equity=0.0, cash=0.0, positions=[], governor=gov, read_errors=[])
+    assert "| Equity | $0.00 |" in md
+    assert "| Drawdown from peak | 100.0% |" in md and "| Day P&L | -$500.00 |" in md
+
+
+def test_other_halts_still_publish_their_figures():
+    gov = {"halted": True, "reasons": ["MANUAL_HALT: x", "DAILY_LOSS"], "drawdown_pct": 3.0, "daily_pnl_cents": -100}
+    md = _account_md(governor=gov)
+    assert "| Drawdown from peak | 3.0% |" in md and "| Day P&L | -$1.00 |" in md
+
+
+def test_a_governor_with_no_reasons_key_still_publishes_its_figures():
+    md = _account_md(governor={"halted": False, "drawdown_pct": 1.0, "daily_pnl_cents": 0})
+    assert "| Drawdown from peak | 1.0% |" in md
