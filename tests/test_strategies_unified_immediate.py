@@ -427,7 +427,7 @@ class _Mkt:
     expiration_ts = None
 
 
-def test_discovery_reads_v2_dollar_prices():
+def test_discovery_reads_v2_dollar_prices_mid():
     kalshi = FakeKalshi(v2_market(0.88, 0.90, 0.08, 0.10))
     with patch("src.strategies.portfolio.immediate._get_fast_ai_prediction",
                AsyncMock(return_value=(0.95, 0.9))):
@@ -495,7 +495,7 @@ def test_discovery_reads_v2_dollar_prices():
     assert opps and opps[0].market_probability == pytest.approx(0.89)
 
 
-def test_allocation_no_side_uses_v2_no_ask(db):
+def test_allocation_no_side_uses_v2_no_ask_exact_quantity(db):
     s = make_system(db, FakeKalshi(v2_market(0.88, 0.90, 0.08, 0.10)))
     with Captured() as cap:
         run(s._execute_portfolio_allocations(alloc(), [make_opp(0.90, 0.70)]))
@@ -503,7 +503,7 @@ def test_allocation_no_side_uses_v2_no_ask(db):
     assert cap.position.quantity == 100
 
 
-def test_allocation_yes_side_v2_does_not_overspend(db):
+def test_allocation_yes_side_v2_exact_quantity(db):
     s = make_system(db, FakeKalshi(v2_market(0.88, 0.90, 0.08, 0.10)))
     with Captured() as cap:
         run(s._execute_portfolio_allocations(alloc(), [make_opp(0.60, 0.95)]))

@@ -22,6 +22,56 @@ from src.utils.position_sizing import binary_market_payout_odds, kelly_fraction
 from src.strategies.portfolio.models import MarketOpportunity
 
 
+async def holds_or_rests_opposite_side(
+    db_manager: DatabaseManager,
+    kalshi_client: KalshiClient,
+    market_id: str,
+    intended_side: str,
+) -> bool:
+    """True if we hold (DB or exchange) or have a resting order for the other side.
+
+    Fails closed: an unreadable positions or resting-orders read counts as "yes".
+    """
+    from src.jobs.execute import _order_outcome
+    from src.utils.market_prices import signed_position
+    opposite = "NO" if intended_side == "YES" else "YES"
+    try:
+        if await db_manager.get_position_by_market_and_side(market_id, opposite):
+            return True
+        # Read positions directly: _held_on_side returns None for both "flat"
+        # and "read failed", which would let a read error pass as not held.
+        presp = await kalshi_client.get_positions(ticker=market_id)
+        rows = presp.get("market_positions") if isinstance(presp, dict) else None
+        if not isinstance(rows, list):
+            return True
+        mine = [r for r in rows if isinstance(r, dict) and r.get("ticker") == market_id]
+        if len(mine) > 1:
+            return True
+        if mine:
+            signed = signed_position(mine[0])
+            if not math.isfinite(signed):
+                return True
+            if (signed < 0 if opposite == "NO" else signed > 0):
+                return True
+        resp = await kalshi_client.get_orders(ticker=market_id, status="resting")
+        orders = resp.get("orders") if isinstance(resp, dict) else None
+        if not isinstance(orders, list):
+            return True
+        if resp.get("cursor") and len(orders) >= 100:  # full page: there may be more
+            return True
+        for o in orders:
+            if isinstance(o, dict) and o.get("ticker") == market_id:
+                outcome = _order_outcome(o)
+                if outcome is None or outcome == opposite.lower():
+                    return True
+        return False
+    except Exception as e:
+        get_trading_logger("immediate_trading").warning(
+            f"Opposite-side check failed for {market_id} ({e}); skipping"
+        )
+        return True
+
+
 def _coerce_volume(value) -> float:
     """float(volume), or NaN when missing/invalid so the liquidity gate fails closed."""
     try:
@@ -307,7 +357,13 @@ async def _evaluate_immediate_trade(
         
         # Determine side based on edge direction
         side = "NO" if opportunity.edge < 0 else "YES"  # Negative edge = market overpriced = bet NO
-        
+
+        # The positions table can't see a compounder or manual trade, so ask the exchange.
+        # YES + NO pays exactly $1: holding both locks in the spread plus two fees.
+        if await holds_or_rests_opposite_side(db_manager, kalshi_client, opportunity.market_id, side):
+            logger.info(f"⏭️ Skipping {opportunity.market_id} {side} - opposite side already held or resting")
+            return
+
         # 🚨 VALIDATE MARKET IS STILL TRADEABLE before executing
         try:
             market_data = await kalshi_client.get_market(opportunity.market_id)
@@ -508,8 +564,11 @@ async def _get_fast_ai_prediction(
                 confidence = response.get('confidence')
                 
                 # Validate values
-                if (isinstance(probability, (int, float)) and 0 <= probability <= 1 and
-                    isinstance(confidence, (int, float)) and 0 <= confidence <= 1):
+                # bool is an int in Python: a JSON true must not read as probability 1.0.
+                if (isinstance(probability, (int, float)) and not isinstance(probability, bool)
+                        and 0 <= probability <= 1
+                        and isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
+                        and 0 <= confidence <= 1):
                     return float(probability), float(confidence)
             
         except (json.JSONDecodeError, ValueError) as json_error:
