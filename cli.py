@@ -505,6 +505,10 @@ def cmd_learnings(args: argparse.Namespace) -> None:
     asyncio.run(_l())
 
 
+# Next to this file, so --demo works from any directory.
+_DEMO_FIXTURES = Path(__file__).resolve().parent / "tests" / "fixtures"
+
+
 def _render_policy(policy: dict) -> None:
     """Human-readable view of an Edge Policy. Shared by `policy` and `improve`."""
     meta = policy.get("meta", {})
@@ -569,8 +573,8 @@ def cmd_policy(args: argparse.Namespace) -> None:
 
     today = _date.today().isoformat()
     if getattr(args, "demo", False):
-        settlements = load_settlements("tests/fixtures/demo_settlements.jsonl")
-        journal = load_journal("tests/fixtures/demo_journal.jsonl")
+        settlements = load_settlements(str(_DEMO_FIXTURES / "demo_settlements.jsonl"))
+        journal = load_journal(str(_DEMO_FIXTURES / "demo_journal.jsonl"))
     else:
         settlements = load_settlements(DEFAULT_SETTLEMENTS_PATH)
         journal = load_journal(DEFAULT_JOURNAL_PATH)
