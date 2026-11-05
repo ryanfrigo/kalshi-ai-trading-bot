@@ -7,10 +7,14 @@ so the dashboard shows accurate data.
 
 It reads every position and its market first, then replaces every local position
 row in one transaction. A failed read changes nothing. Entry prices become today's
-mid, and stops, strategy and exit-order ids on the old rows are lost.
+mid, and stops, strategy and exit-order ids on the old rows are lost. Closed-status
+rows are deleted too, and markets.has_position stays 1 on markets that lost their row.
+
+Stop the bot first: a run writing this table between the read and the commit is lost.
 """
 
 import asyncio
+import math
 import sys
 import os
 from dataclasses import asdict
@@ -24,7 +28,7 @@ from src.clients.kalshi_client import KalshiClient
 from src.strategies.safe_compounder import _fetch_all_pages
 from src.utils.database import DatabaseManager, Position, TradeLog
 from src.utils.logging_setup import get_trading_logger
-from src.utils.market_prices import held_side_mid, signed_position
+from src.utils.market_prices import get_market_prices, held_side_mid, signed_position
 
 logger = get_trading_logger(__name__)
 
@@ -72,6 +76,8 @@ async def sync_positions_to_database():
         for kalshi_pos in market_positions:
             ticker = kalshi_pos.get('ticker')
             position_count = signed_position(kalshi_pos)
+            if not math.isfinite(position_count):
+                raise RuntimeError(f"position row has an unreadable count: {kalshi_pos}")
             if position_count == 0:
                 continue
             if not ticker:
@@ -86,6 +92,12 @@ async def sync_positions_to_database():
             # Determine side and current price
             side = 'YES' if position_count > 0 else 'NO'
             current_price = held_side_mid(market_info, position_count)
+
+            # The exit logic reads this as an entry price, so half a quote can't stand in
+            yes_bid, yes_ask, no_bid, no_ask = get_market_prices(market_info)
+            bid, ask = (yes_bid, yes_ask) if position_count > 0 else (no_bid, no_ask)
+            if not (bid > 0 and ask > 0 and 0 < current_price < 1):
+                raise RuntimeError(f"no two-sided {side} quote for {ticker}: bid {bid}, ask {ask}")
 
             new_positions.append(Position(
                 market_id=ticker,

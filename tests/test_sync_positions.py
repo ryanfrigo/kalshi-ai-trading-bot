@@ -1,6 +1,9 @@
 """scripts/sync_positions.py on fakes and a temp database. It replaces local position
 rows, so nothing may be deleted until every read has worked. The fake has no order methods."""
+import asyncio
+import runpy
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -48,6 +51,7 @@ def world(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sp, "KalshiClient", Fake)
     monkeypatch.setattr(sp, "DatabaseManager", Db)
+    World.fake_client, World.fake_db = Fake, Db
     World.db_path = db_path
     return World
 
@@ -113,12 +117,46 @@ async def test_a_failed_market_read_deletes_nothing(world, market):
     assert _rows(world.db_path) == OLD_ONLY
 
 
-@pytest.mark.parametrize("row", [{"position_fp": "5.00"}, {"ticker": "X", "position_fp": "abc"}])
+@pytest.mark.parametrize("row", [{"position_fp": "5.00"}, {"ticker": "X", "position_fp": "abc"},
+                                 {"ticker": "X", "position_fp": "inf"},
+                                 {"ticker": "X", "position_fp": "-inf"},
+                                 {"ticker": "X", "position_fp": "nan"}])
 async def test_an_unreadable_row_deletes_nothing(world, row):
     await _seed(world.db_path)
     world.pages = {None: {"market_positions": [_row("NEW1"), row], "cursor": ""}}
     assert await sp.sync_positions_to_database() is False
     assert _rows(world.db_path) == OLD_ONLY
+
+
+def _quotes(yes_bid="0.40", yes_ask="0.44", no_bid="0.56", no_ask="0.60"):
+    return {"market": {"yes_bid_dollars": yes_bid, "yes_ask_dollars": yes_ask,
+                       "no_bid_dollars": no_bid, "no_ask_dollars": no_ask}}
+
+
+@pytest.mark.parametrize("fp,market", [
+    ("5.00", _quotes(yes_bid="0")),
+    ("5.00", _quotes(yes_ask="0")),
+    ("5.00", _quotes(yes_bid="0", yes_ask="0")),
+    ("5.00", _quotes(yes_bid="1.00", yes_ask="1.00")),
+    ("5.00", _quotes(yes_bid="nan")),
+    ("5.00", {"market": {}}),
+    ("-5.00", _quotes(no_bid="0")),
+    ("-5.00", _quotes(no_ask="0")),
+])
+async def test_a_market_without_a_two_sided_quote_on_the_held_side_deletes_nothing(world, fp, market):
+    await _seed(world.db_path)
+    world.pages = {None: {"market_positions": [_row("NEW1", fp)], "cursor": ""}}
+    world.markets = {"NEW1": market}
+    assert await sp.sync_positions_to_database() is False
+    assert _rows(world.db_path) == OLD_ONLY
+
+
+async def test_the_quote_check_reads_only_the_held_side(world):
+    await _seed(world.db_path)
+    world.pages = {None: {"market_positions": [_row("NEW1", "5.00")], "cursor": ""}}
+    world.markets = {"NEW1": _quotes(no_bid="0", no_ask="0")}
+    assert await sp.sync_positions_to_database() is True
+    assert _rows(world.db_path) == [("NEW1", "YES", 5)]
 
 
 async def test_a_failed_insert_rolls_the_delete_back(world):
@@ -157,3 +195,15 @@ async def test_main_reports_failure(world):
     assert await sp.main() is False
     world.pages = {None: {"market_positions": [], "cursor": ""}}
     assert await sp.main() is True
+
+
+@pytest.mark.parametrize("reply,code", [({}, 1), ({"market_positions": [], "cursor": ""}, 0)])
+def test_the_script_exit_code_follows_the_sync(world, monkeypatch, reply, code):
+    asyncio.run(_seed(world.db_path))
+    world.pages = {None: reply}
+    monkeypatch.setattr("src.clients.kalshi_client.KalshiClient", world.fake_client)
+    monkeypatch.setattr("src.utils.database.DatabaseManager", world.fake_db)
+    script = Path(sp.__file__)
+    with pytest.raises(SystemExit) as e:
+        runpy.run_path(str(script), run_name="__main__")
+    assert e.value.code == code
