@@ -260,10 +260,6 @@ async def test_stale_yesterday_tracker_resets(make, sleeps):
     assert await c.get_completion("hi") == "hello"
 
 
-@pytest.mark.xfail(strict=True, reason="openrouter_client.py:172 os.makedirs in _load_daily_tracker is "
-                   "outside any try: an unwritable logs/ dir makes get_completion/get_trading_decision "
-                   "raise PermissionError instead of returning None (no spend, but strategies that "
-                   "call get_completion bare crash)")
 async def test_unwritable_budget_dir_does_not_raise_into_the_caller(make, sleeps, monkeypatch):
     # decide.py / strategies call get_completion without a try for budget-store errors.
     c = make({SONNET: [resp()]})
@@ -351,9 +347,6 @@ async def test_empty_reply_is_not_retried_and_falls_through(make, sleeps):
         assert calls(c).models == [SONNET, GPT]
 
 
-@pytest.mark.xfail(strict=True, reason="openrouter_client.py:340-357 _is_retryable_error matches "
-                   "'timeout' but the openai SDK's APITimeoutError str is 'Request timed out.', so a "
-                   "120s SDK timeout is never retried and goes straight to the next (billed) model")
 async def test_sdk_timeout_is_retried_on_the_same_model(make, sleeps):
     exc = openai.APITimeoutError(request=httpx.Request("POST", "https://openrouter.invalid/x"))
     c = make({SONNET: [exc, resp("ok")]})
@@ -361,9 +354,6 @@ async def test_sdk_timeout_is_retried_on_the_same_model(make, sleeps):
     assert calls(c).models == [SONNET, SONNET]
 
 
-@pytest.mark.xfail(strict=True, reason="openrouter_client.py:340-357 'quota' counts as a rate-limit "
-                   "(line 333-338) but not as retryable, so a quota 429-less error skips the backoff "
-                   "and burns the next fallback model immediately")
 async def test_quota_error_backs_off_before_moving_on(make, sleeps):
     c = make({SONNET: [RuntimeError("quota exceeded"), resp("ok")]})
     await c.get_completion("hi", model=SONNET)
@@ -514,12 +504,20 @@ def test_parse_buy_with_invalid_side_or_price_is_rejected(parse, extra):
     assert d is None or d.action != "BUY"
 
 
-@pytest.mark.xfail(strict=True, reason="openrouter_client.py:732-737 the model's `reasoning` is "
-                   "dropped (TradingDecision.reasoning always None), so decide.py/positions record "
-                   "no rationale for a live BUY")
 def test_parse_keeps_reasoning(parse):
     d = parse('{"action":"BUY","side":"YES","limit_price":55,"confidence":0.9,"reasoning":"because"}')
     assert d.reasoning == "because"
+
+
+@pytest.mark.parametrize("raw", ['123', '""', '"   "', 'null', '["a"]'])
+def test_parse_non_string_or_blank_reasoning_is_none(parse, raw):
+    d = parse('{"action":"BUY","side":"YES","limit_price":55,"confidence":0.9,"reasoning":%s}' % raw)
+    assert d is not None and d.reasoning is None
+
+
+def test_parse_caps_reasoning_at_1000_chars(parse):
+    d = parse('{"action":"BUY","side":"YES","limit_price":55,"confidence":0.9,"reasoning":"%s"}' % ("x" * 5000))
+    assert d is not None and d.reasoning == "x" * 1000
 
 
 @pytest.mark.xfail(strict=True, reason="openrouter_client.py:693-698 greedy `\\{.*\\}` over a reply "

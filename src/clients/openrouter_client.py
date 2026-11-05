@@ -174,7 +174,20 @@ class OpenRouterClient(TradingLoggerMixin):
         """Load or create a daily usage tracker from disk."""
         today = datetime.now().strftime("%Y-%m-%d")
         daily_limit = getattr(settings.trading, "daily_ai_cost_limit", 50.0)
-        os.makedirs("logs", exist_ok=True)
+        try:
+            os.makedirs("logs", exist_ok=True)
+        except OSError as exc:
+            # Fail closed: without the budget file the daily cap can't bind.
+            self.logger.error(
+                f"Budget dir unusable ({exc}); treating today's AI budget as exhausted"
+            )
+            return DailyUsageTracker(
+                date=today,
+                daily_limit=daily_limit,
+                total_cost=daily_limit,
+                is_exhausted=True,
+                last_exhausted_time=datetime.now(),
+            )
 
         if not os.path.exists(self.usage_file):
             return DailyUsageTracker(date=today, daily_limit=daily_limit)
@@ -389,6 +402,8 @@ class OpenRouterClient(TradingLoggerMixin):
                 "429",
                 "too many requests",
                 "timeout",
+                "timed out",
+                "quota",
                 "502",
                 "503",
                 "504",
@@ -799,11 +814,16 @@ If you do not recommend trading, use action "SKIP":
                 limit_price = int(float(raw_price))
             side = side.upper()
 
+            reasoning = data.get("reasoning")
+            # Model text (market titles can steer it): stored and copied into exit rows, so cap it.
+            reasoning = reasoning.strip()[:1000] if isinstance(reasoning, str) and reasoning.strip() else None
+
             return TradingDecision(
                 action=action,
                 side=side,
                 confidence=confidence,
                 limit_price=limit_price,
+                reasoning=reasoning,
             )
 
         except Exception as exc:

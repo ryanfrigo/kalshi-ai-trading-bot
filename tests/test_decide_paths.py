@@ -114,6 +114,18 @@ def test_volume_below_ai_threshold_is_skipped_at_the_boundary():
     assert pos is None and xai.get_trading_decision.await_count == 0
 
 
+def test_position_rationale_is_the_models_reasoning():
+    pos, *_ = _run(_market(), _decision())
+    assert pos is not None and pos.rationale == "because"
+
+
+def test_position_rationale_falls_back_when_the_model_gives_none():
+    d = _decision()
+    d.reasoning = None
+    pos, *_ = _run(_market(), d)
+    assert pos is not None and pos.rationale == "No reasoning provided by LLM."
+
+
 def test_excluded_category_is_skipped_case_insensitively(monkeypatch):
     monkeypatch.setattr(T, "exclude_low_liquidity_categories", ["Sports"])
     pos, _, xai, _ = _run(_market(category="SPORTS"), _decision())

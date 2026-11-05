@@ -194,6 +194,15 @@ async def test_unreadable_budget_file_fails_closed(make, payload):
     assert t.is_exhausted and t.total_cost == 4.0
 
 
+async def test_unwritable_budget_dir_fails_closed_without_raising(make, monkeypatch):
+    d = FakeOR()
+    c = make(d, limit=4.0)
+    monkeypatch.setattr(xc.os, "makedirs", lambda *a, **k: (_ for _ in ()).throw(PermissionError("ro")))
+    assert await c.get_completion("p") is None
+    assert await c.get_trading_decision({}, {}) is None
+    assert d.calls == []
+
+
 async def test_new_day_resets_an_exhausted_tracker(make):
     c = make(FakeOR(), limit=3.0)
     old = DailyUsageTracker(date=(datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d"),
@@ -327,10 +336,6 @@ def test_decide_db_budget_gate_runs_before_the_client_is_touched(cwd):
     assert pos is None and d.calls == []                    # fail closed
 
 
-@pytest.mark.xfail(strict=True, reason="decide.py:139-150 near-expiry branch dereferences "
-                   "`decision.side` with no None check; when XAIClient returns None (any LLM failure) "
-                   "this raises AttributeError and is logged as an ERROR row ($0.01 booked) instead of "
-                   "the clean 'no_decision' SKIP the standard path records")
 def test_near_expiry_branch_handles_a_none_decision_like_the_standard_path(cwd):
     m = _market(yes=0.92, no=0.08, days=0.25)
     pos, db, _ = _decide(m, FakeOR(decision=None))
