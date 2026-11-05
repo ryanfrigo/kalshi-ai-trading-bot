@@ -15,8 +15,9 @@ owner-operated manual halt:
   * DRAWDOWN    — equity down >= ``max_drawdown_pct`` from the rolling peak.
   * MANUAL_HALT — a flag file the owner can drop to stop all new buys at once.
 
-When halted, ``KalshiClient.place_order`` blocks every order, sells included,
-because a sell can open a short. A halt stops trading; it does not de-risk.
+When halted, ``KalshiClient.place_order`` blocks every buy and every sell, since
+a sell can open a short. The one exception is a reduce-only sell (no larger than
+the position held on that side) under a halt caused only by DAILY_LOSS/DRAWDOWN.
 """
 from __future__ import annotations
 
@@ -40,8 +41,8 @@ class RiskStateCorrupt(Exception):
 class GovernorDecision:
     """Outcome of a governor check.
 
-    ``halted`` blocks every order, buys and sells alike (``place_order`` enforces
-    this). A STATE_CORRUPT halt is reported here too, with zeroed baselines.
+    ``halted`` blocks every buy, and every sell except a reduce-only exit under a
+    limit-only halt (``place_order`` enforces this). A STATE_CORRUPT halt is reported here too, with zeroed baselines.
     """
 
     halted: bool
