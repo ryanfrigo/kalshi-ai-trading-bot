@@ -138,15 +138,18 @@ def _quick(script, monkeypatch, pages):
     return mod, fake, xai
 
 
-async def test_quick_analysis_prompt_counts_every_page(script, monkeypatch):
-    mod, fake, xai = _quick(script, monkeypatch, TWO_PAGES)
-    # One settled trade: the script can't yet build its prompt on an empty ledger
+async def _settled_trade(mod):
     db = mod.DatabaseManager()
     await db.initialize()
     now = datetime.now()
     await db.add_trade_log(TradeLog(market_id="OLD", side="YES", entry_price=0.5, exit_price=0.6,
                                     quantity=1, pnl=0.1, entry_timestamp=now, exit_timestamp=now,
                                     rationale="t", strategy="s"))
+
+
+async def test_quick_analysis_prompt_counts_every_page(script, monkeypatch):
+    mod, fake, xai = _quick(script, monkeypatch, TWO_PAGES)
+    await _settled_trade(mod)
     await mod.run_quick_analysis()
     prompt = str(xai.get_completion.await_args)
     assert "Active Positions: 2 markets" in prompt
@@ -160,6 +163,35 @@ async def test_quick_analysis_makes_no_paid_call_on_a_bad_later_page(script, mon
         await mod.run_quick_analysis()
     xai.get_completion.assert_not_awaited()
     assert fake.closed == 1
+
+
+async def test_quick_analysis_makes_no_paid_call_on_an_empty_ledger(script, monkeypatch, capsys):
+    mod, fake, xai = _quick(script, monkeypatch, TWO_PAGES)
+    await mod.run_quick_analysis()
+    xai.get_completion.assert_not_awaited()
+    assert "No completed trades" in capsys.readouterr().out
+    assert fake.closed == 1
+    xai.close.assert_awaited_once()
+
+
+async def test_quick_analysis_prompt_states_no_fixed_facts(script, monkeypatch):
+    mod, _, xai = _quick(script, monkeypatch, TWO_PAGES)
+    await _settled_trade(mod)
+    await mod.run_quick_analysis()
+    prompt = str(xai.get_completion.await_args)
+    for fixed in ("91.4", "16 active", "manual trades", "unrealized"):
+        assert fixed not in prompt
+
+
+async def test_quick_analysis_fallback_prints_no_fixed_recommendations(script, monkeypatch, capsys):
+    mod, _, xai = _quick(script, monkeypatch, TWO_PAGES)
+    xai.get_completion = AsyncMock(side_effect=RuntimeError("no"))
+    await _settled_trade(mod)
+    await mod.run_quick_analysis()
+    out = capsys.readouterr().out
+    assert "FALLBACK ANALYSIS" in out
+    assert "RECOMMENDATIONS" not in out
+    assert "live trading" not in out
 
 
 def test_dashboard_positions_tab_lists_every_page(dashboard):
