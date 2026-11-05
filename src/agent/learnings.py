@@ -28,6 +28,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.agent.journal import is_pending
 from src.agent.settle import settlement_pnl
 
 DEFAULT_LEARNINGS_PATH = "data/runtime/learnings.jsonl"
@@ -152,8 +153,9 @@ def reconcile_outcomes(
                     continue
             out.append(rec)  # already reconciled — idempotent skip
             continue
-        if rec.get("voided"):
-            out.append(rec)  # order never filled — must never earn an outcome
+        if rec.get("voided") or is_pending(rec):
+            # never filled, or not known to have reached the book: no outcome
+            out.append(rec)
             continue
         settlement = index.get(rec.get("ticker"))
         if not settlement:
