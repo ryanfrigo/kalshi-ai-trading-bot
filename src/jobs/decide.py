@@ -127,7 +127,7 @@ async def make_decision_for_market(
         hours_to_expiry = (market.expiration_ts - time.time()) / 3600
         if (
             settings.trading.enable_high_confidence_strategy and
-            hours_to_expiry <= settings.trading.high_confidence_expiry_hours
+            0 < hours_to_expiry <= settings.trading.high_confidence_expiry_hours
         ):
             logger.info("Market is near expiry, evaluating for high-confidence strategy.")
             
@@ -148,7 +148,15 @@ async def make_decision_for_market(
 
                 if decision.side == "YES" and decision.confidence >= settings.trading.high_confidence_threshold:
                     logger.info(f"High-confidence YES opportunity found for {market.market_id}.")
-                    
+
+                    if decision.confidence <= market.yes_price:
+                        reason = f"No positive edge: confidence {decision.confidence:.2f} <= YES price {market.yes_price:.2f}"
+                        logger.info(f"❌ EDGE FILTER REJECTED: {market.market_id} - {reason}")
+                        await db_manager.record_market_analysis(
+                            market.market_id, "EDGE_FILTERED", decision.confidence, total_analysis_cost, reason
+                        )
+                        return None
+
                     decision_action = "BUY"
                     confidence = decision.confidence
                     
@@ -161,6 +169,31 @@ async def make_decision_for_market(
                     quantity = _calculate_dynamic_quantity(available_balance, market.yes_price, confidence_delta)
 
                     if quantity > 0:
+                        # Same portfolio limits and cash reserve as the standard path.
+                        from src.utils.position_limits import check_can_add_position
+                        from src.utils.cash_reserves import check_can_trade_with_cash_reserves
+
+                        trade_value = quantity * market.yes_price
+                        can_add, limit_reason = await check_can_add_position(
+                            trade_value, db_manager, kalshi_client
+                        )
+                        if not can_add:
+                            logger.info(f"❌ POSITION LIMITS: {market.market_id} - {limit_reason}")
+                            await db_manager.record_market_analysis(
+                                market.market_id, "POSITION_LIMITS", confidence, total_analysis_cost, limit_reason
+                            )
+                            return None
+
+                        can_trade_cash, cash_reason = await check_can_trade_with_cash_reserves(
+                            trade_value, db_manager, kalshi_client
+                        )
+                        if not can_trade_cash:
+                            logger.info(f"❌ CASH RESERVES INSUFFICIENT: {market.market_id} - {cash_reason}")
+                            await db_manager.record_market_analysis(
+                                market.market_id, "CASH_RESERVES", confidence, total_analysis_cost, cash_reason
+                            )
+                            return None
+
                         # Calculate exit strategy using Grok4 recommendations  
                         from src.utils.stop_loss_calculator import StopLossCalculator
                         
@@ -299,7 +332,18 @@ async def make_decision_for_market(
             # Calculate market probabilities and AI confidence
             market_prob = market.yes_price if decision.side == "YES" else market.no_price
             ai_prob = decision.confidence
-            
+
+            # EdgeFilter measures |ai_prob - market_prob|, so it cannot tell a
+            # positive edge from a negative one. Only buy when our probability
+            # for the chosen side is above its price.
+            if ai_prob <= market_prob:
+                reason = f"No positive edge: confidence {ai_prob:.2f} <= {decision.side} price {market_prob:.2f}"
+                logger.info(f"❌ EDGE FILTER REJECTED: {market.market_id} - {reason}")
+                await db_manager.record_market_analysis(
+                    market.market_id, "EDGE_FILTERED", decision.confidence, total_analysis_cost, reason
+                )
+                return None
+
             # Check edge filter
             should_trade, trade_reason, edge_result = EdgeFilter.should_trade_market(
                 ai_probability=ai_prob,
@@ -345,7 +389,10 @@ async def make_decision_for_market(
                     reduced_quantity = int(reduced_position_value / price)
                     
                     if reduced_quantity < 1:
-                        break  # Can't have less than 1 contract
+                        # Under 1 contract: keep going so the loop ends in its else
+                        # branch, which records POSITION_LIMITS and returns None.
+                        # (A break here skipped that and let the oversize order through.)
+                        continue
                     
                     can_add_reduced, reduced_reason = await check_can_add_position(
                         reduced_position_value, db_manager, kalshi_client
@@ -513,7 +560,7 @@ def estimate_market_volatility(market: Market) -> float:
     """
     try:
         # Get current price to estimate volatility
-        current_price = getattr(market, 'yes_price', 50) / 100  # Convert to 0-1
+        current_price = getattr(market, 'yes_price', 0.5)  # already dollars (0-1)
         
         # Binary option volatility formula
         intrinsic_vol = np.sqrt(current_price * (1 - current_price))
