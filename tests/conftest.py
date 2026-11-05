@@ -30,6 +30,8 @@ def _governor_defaults_in_tmp(tmp_path, monkeypatch):
     runtime = tmp_path / "data" / "runtime"
     monkeypatch.setattr(risk_governor, "DEFAULT_STATE_PATH", str(runtime / "risk_governor_state.json"))
     monkeypatch.setattr(risk_governor, "DEFAULT_HALT_FLAG_PATH", str(runtime / "TRADING_HALTED"))
+    monkeypatch.setattr(risk_governor, "DEFAULT_AUDIT_PATH", str(runtime / "governor_audit.jsonl"))
+    monkeypatch.delenv("KALSHI_RUNTIME_DIR", raising=False)
 
 
 def pytest_collection_modifyitems(config, items):
