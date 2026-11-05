@@ -12,12 +12,18 @@ from __future__ import annotations
 
 import logging
 import os
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Dict, Optional
 
 from src.agent.jev import jev_yes_pct, parse_jev_yes_pct
 
 DREX_URL = "https://console.nace.ai/v1/systemone"
 DREX_MODEL = "drex-max-finance"
+# Sent as X-Nace-Client and User-Agent so Nace can attribute Drex traffic to this repo.
+try:
+    CLIENT = f"kalshi-ai-trading-bot/{version('kalshi-ai-trading-bot')}"
+except PackageNotFoundError:  # a clone that skipped `pip install -e .`
+    CLIENT = "kalshi-ai-trading-bot/unknown"
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +42,11 @@ async def drex_yes_pct(request: Dict[str, Any], record: Optional[Dict[str, Any]]
         async with httpx.AsyncClient(timeout=60) as http:
             r = await http.post(
                 DREX_URL,
-                headers={"Authorization": f"Bearer {key}"},
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "X-Nace-Client": CLIENT,
+                    "User-Agent": CLIENT,
+                },
                 json={**request, "model": DREX_MODEL},
             )
         if r.status_code != 200:

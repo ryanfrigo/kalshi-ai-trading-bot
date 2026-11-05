@@ -2,6 +2,7 @@
 import asyncio
 import json
 from functools import partial
+from importlib.metadata import version
 
 import httpx
 import pytest
@@ -52,6 +53,8 @@ def test_drex_gets_the_jev_request_with_its_own_model(monkeypatch, jev_calls):
     assert asyncio.run(drex.drex_yes_pct(REQ, record)) == pytest.approx(4.0)
     assert str(seen[0].url) == drex.DREX_URL
     assert seen[0].headers["authorization"] == "Bearer test-key"
+    assert seen[0].headers["x-nace-client"] == seen[0].headers["user-agent"] == drex.CLIENT
+    assert drex.CLIENT == f"kalshi-ai-trading-bot/{version('kalshi-ai-trading-bot')}"
     assert json.loads(seen[0].content) == {**REQ, "model": drex.DREX_MODEL}
     assert record == {"drex_model": drex.DREX_MODEL} and jev_calls == []
 
