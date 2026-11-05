@@ -20,6 +20,18 @@ import pytest
 RUN_LIVE_TESTS = os.getenv("RUN_LIVE_TESTS", "").lower() in {"1", "true", "yes"}
 
 
+@pytest.fixture(autouse=True)
+def _governor_defaults_in_tmp(tmp_path, monkeypatch):
+    """The governor's default state file and halt flag live in the real repo's
+    data/runtime/. Point them at this test's tmp dir so no test can read or
+    clear the operator's live baseline or kill switch."""
+    from src.risk import risk_governor
+
+    runtime = tmp_path / "data" / "runtime"
+    monkeypatch.setattr(risk_governor, "DEFAULT_STATE_PATH", str(runtime / "risk_governor_state.json"))
+    monkeypatch.setattr(risk_governor, "DEFAULT_HALT_FLAG_PATH", str(runtime / "TRADING_HALTED"))
+
+
 def pytest_collection_modifyitems(config, items):
     if RUN_LIVE_TESTS:
         return
