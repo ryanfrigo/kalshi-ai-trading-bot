@@ -78,14 +78,6 @@ class TestStopLossLevelsConfidenceTiers:
         )
         assert result["stop_loss_pct"] == pytest.approx(7.0)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "src/utils/stop_loss_calculator.py:62 `confidence or 0.7` swallows an "
-            "explicit confidence of 0.0 as omitted and returns the 7% medium tier "
-            "instead of the 10% zero-confidence tier"
-        ),
-    )
     def test_explicit_zero_confidence_is_not_omitted(self):
         result = StopLossCalculator.calculate_stop_loss_levels(
             self.ENTRY, "YES", confidence=0.0
@@ -160,14 +152,6 @@ class TestStopLossLevelsVolatility:
         )
         assert result["stop_loss_pct"] == pytest.approx(5.0)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "src/utils/stop_loss_calculator.py:78 NaN volatility survives the "
-            "default and makes min(1.5, 1+(nan-0.2)) evaluate to 1.5 (max stop) "
-            "from garbage data instead of raising"
-        ),
-    )
     def test_nan_volatility_must_raise(self):
         with pytest.raises(ValueError):
             StopLossCalculator.calculate_stop_loss_levels(
@@ -210,14 +194,6 @@ class TestStopLossLevelsEntryPriceAndBounds:
             assert 0.01 <= result["stop_loss_price"] <= 0.99
             assert 0.01 <= result["take_profit_price"] <= 0.99
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "src/utils/stop_loss_calculator.py:61 the clamp max(0.01, min(0.99, e)) "
-            "silently turns NaN entry into a 99¢ position (min ignores NaN) and "
-            "+inf into a real entry instead of raising for a non-finite price"
-        ),
-    )
     def test_non_finite_entry_price_must_raise(self):
         with pytest.raises((ValueError, TypeError)):
             StopLossCalculator.calculate_stop_loss_levels(NAN, "YES")
@@ -351,26 +327,10 @@ class TestSimpleStopLoss:
         # pct=0 keeps the entry price itself
         assert StopLossCalculator.calculate_simple_stop_loss(0.5, "YES", 0.0) == pytest.approx(0.5)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "src/utils/stop_loss_calculator.py:133 a negative stop_loss_pct sets "
-            "the stop ABOVE entry (0.5 - -50% = 0.75), a guaranteed instant stop, "
-            "instead of raising for an invalid pct"
-        ),
-    )
     def test_negative_stop_loss_pct_must_raise(self):
         with pytest.raises(ValueError):
             StopLossCalculator.calculate_simple_stop_loss(0.50, "YES", -0.50)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "src/utils/stop_loss_calculator.py:134 the clamp turns a NaN entry/pct "
-            "into min(0.99, nan) = 0.99 (no stop at all) and inf into a 1-cent "
-            "stop, silently, instead of raising for non-finite input"
-        ),
-    )
     def test_non_finite_inputs_must_raise(self):
         with pytest.raises((ValueError, TypeError)):
             StopLossCalculator.calculate_simple_stop_loss(NAN, "YES")
@@ -399,14 +359,6 @@ class TestIsStopLossTriggered:
             assert StopLossCalculator.is_stop_loss_triggered(side, 0.60, 0.55, 0.56)
             assert not StopLossCalculator.is_stop_loss_triggered(side, 0.60, 0.57, 0.56)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "src/utils/stop_loss_calculator.py:158 a NaN current or stop price makes "
-            "current_price <= stop_loss_price evaluate False, so a position with "
-            "corrupt price data is never stopped (fail-open) instead of raising"
-        ),
-    )
     def test_nan_prices_must_raise(self):
         with pytest.raises(ValueError):
             StopLossCalculator.is_stop_loss_triggered("YES", 0.50, NAN, 0.45)
@@ -434,14 +386,6 @@ class TestPnlAtStopLoss:
     def test_zero_quantity_is_zero_pnl(self):
         assert StopLossCalculator.calculate_pnl_at_stop_loss(0.50, 0.45, 0, "YES") == 0.0
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "src/utils/stop_loss_calculator.py:176 non-finite prices multiply straight "
-            "through to a NaN P&L, which would poison any position ledger, instead "
-            "of raising"
-        ),
-    )
     def test_non_finite_prices_must_raise(self):
         with pytest.raises(ValueError):
             StopLossCalculator.calculate_pnl_at_stop_loss(NAN, 0.45, 100, "YES")

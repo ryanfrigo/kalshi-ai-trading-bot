@@ -270,27 +270,10 @@ class TestKellyBadInputs:
     def test_zero_payout_boundary(self):
         assert kelly_fraction(0.6, 0.0) == 0.0
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "src/utils/position_sizing.py:30 the guard rejects prob_win <= 0 but "
-            "never prob_win > 1, so a 150% 'probability' sizes a 200%-of-bankroll "
-            "bet (f* = 2.0) and an infinite probability sizes an infinite bet, "
-            "instead of the documented invalid-input answer 0.0"
-        ),
-    )
     def test_probability_above_one_or_infinite_must_fail_closed(self):
         assert kelly_fraction(1.5, 1.0) == 0.0
         assert kelly_fraction(INF, 1.0) == 0.0
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "src/utils/position_sizing.py:46 market_probability outside [0,1] (or "
-            "NaN) silently returns negative/NaN odds instead of raising like the "
-            "documented degenerate prices 0 and 1 do"
-        ),
-    )
     def test_out_of_range_or_nan_probability_must_raise(self):
         with pytest.raises(ValueError):
             binary_market_payout_odds(1.5, bet_yes=True)
@@ -349,3 +332,34 @@ class TestPortfolioMetricsCorrelationIndexing:
 
         assert metrics["portfolio_volatility"] == pytest.approx(expected_vol, rel=1e-9)
         assert metrics["portfolio_volatility"] != pytest.approx(buggy_vol, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Valid inputs are bit-for-bit unchanged (safe_compounder live path)
+# ---------------------------------------------------------------------------
+
+def _reference_kelly(prob_win, payout_ratio):
+    """Verbatim pre-fix kernel."""
+    if payout_ratio <= 0 or prob_win <= 0:
+        return 0.0
+    prob_lose = 1.0 - prob_win
+    f = (prob_win * payout_ratio - prob_lose) / payout_ratio
+    return max(0.0, f)
+
+
+def test_kelly_valid_grid_is_bit_identical_to_original_kernel():
+    probs = [i / 200 for i in range(0, 201)] + [1e-9, 0.123456789, 1 - 1e-9]
+    odds = [1e-6, 0.01, 0.0526, 0.25, 2 / 3, 1.0, 1.5, 3.0, 19.0, 99.0, 1e6]
+    n = 0
+    for p in probs:
+        for b in odds:
+            assert kelly_fraction(p, b) == _reference_kelly(p, b)
+            n += 1
+    assert n > 2000
+
+
+def test_payout_odds_valid_grid_is_bit_identical():
+    for i in range(1, 100):
+        p = i / 100
+        assert binary_market_payout_odds(p, True) == (1 - p) / p
+        assert binary_market_payout_odds(p, False) == p / (1 - p)
