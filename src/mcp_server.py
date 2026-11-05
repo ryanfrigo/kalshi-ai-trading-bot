@@ -308,7 +308,7 @@ async def trade(
     what WOULD happen, placing NO order. Only ``confirm=True`` places a live
     order, and it still goes through the same guards via ``place_guarded_order``.
     The governor / kill switch / 10% cap are authoritative; this tool adds no path
-    around them. ``override_policy=True`` overrides an Edge Policy BLOCK (recorded
+    around them. ``override_policy=True`` overrides an Edge Policy BLOCK or an unreadable policy file (recorded
     in the journal) — the same full-authority escape hatch as ``cli trade
     --override-policy``.
     """

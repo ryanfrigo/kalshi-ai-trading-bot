@@ -13,6 +13,7 @@ import logging
 import math
 import re
 import uuid
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from src.clients.kalshi_client import KalshiOrderOutcomeUnknown
@@ -214,7 +215,11 @@ async def place_guarded_order(
 
     The Edge Policy gate closes the self-improvement loop: it consults the active
     policy (``data/runtime/edge_policy.json``, kept fresh by ``cli improve``).
-    No policy file -> no opinion -> proceeds (backward-compatible). A BLOCK is a
+    No policy file -> no opinion -> proceeds (backward-compatible). A file that
+    exists but can't be read as a policy, or holds a malformed rule, refuses the order
+    (``reason="policy_unreadable"``): its blocks are unknown, so proceeding would
+    silently switch the gate off. ``override_policy=True`` passes it, journaled
+    via ``policy_note``. A BLOCK is a
     hard refusal unless ``override_policy=True`` (the agent retains full authority,
     but the override is recorded in the journal via ``policy_note``). A HAIRCUT
     shrinks the *journaled* est_prob to the policy's calibrated value; if that
@@ -226,7 +231,8 @@ async def place_guarded_order(
     from src.utils.market_prices import get_market_prices, is_tradeable_market
     from src.agent.journal import (make_decision_record, append_decision,
                                    mark_outcome_unknown, DEFAULT_JOURNAL_PATH)
-    from src.agent.policy import load_policy, apply_policy, DEFAULT_POLICY_PATH
+    from src.agent.policy import (load_policy, apply_policy, policy_is_well_formed,
+                                  DEFAULT_POLICY_PATH)
     from src.agent.settle import series_category
 
     from src.config.settings import settings
@@ -252,7 +258,15 @@ async def place_guarded_order(
     # Edge Policy gate — the settled record constrains the next decision.
     policy_note: Optional[Dict[str, Any]] = None
     haircut_applied = False
-    policy = load_policy(policy_path or DEFAULT_POLICY_PATH)
+    resolved_policy_path = policy_path or DEFAULT_POLICY_PATH
+    policy = load_policy(resolved_policy_path)
+    if (not policy_is_well_formed(policy) if policy is not None
+            else Path(resolved_policy_path).exists()):
+        if not override_policy:
+            return {"ok": False, "reason": "policy_unreadable",
+                    "policy_path": resolved_policy_path}
+        policy_note = {"overridden_unreadable_policy": resolved_policy_path}
+        policy = None
     if policy:
         verdict = apply_policy(policy, {
             "ticker": ticker, "side": side,

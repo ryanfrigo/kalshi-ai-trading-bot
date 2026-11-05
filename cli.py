@@ -1667,7 +1667,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_trade.add_argument("--max-pct", dest="max_pct", type=float, default=0.10,
                          help="Max fraction of equity per position (default 0.10)")
     p_trade.add_argument("--override-policy", dest="override_policy", action="store_true",
-                         help="Override an Edge Policy BLOCK (recorded on the order). The gate "
+                         help="Override an Edge Policy BLOCK or an unreadable policy file (recorded on the order). The gate "
                               "reflects your settled record — override only with a stronger reason.")
     p_trade.add_argument("--live", action="store_true",
                          help="Actually place the order (default: dry-run preview)")

@@ -26,6 +26,7 @@ IO (load/save ``data/runtime/edge_policy.json``) lives in the CLI layer.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -142,6 +143,52 @@ def derive_policy(
 # ---------------------------------------------------------------------------
 # 2. apply_policy — the pre-trade gate
 # ---------------------------------------------------------------------------
+
+def _is_number(v: Any) -> bool:
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return False
+    try:
+        return math.isfinite(v)
+    except OverflowError:  # a JSON integer too large for a float
+        return False
+
+
+def _block_is_well_formed(rule: Dict[str, Any]) -> bool:
+    return rule.get("dimension") in ("category", "method") and isinstance(rule.get("label"), str)
+
+
+def _warning_is_well_formed(rule: Dict[str, Any]) -> bool:
+    return rule.get("dimension") == "side" and isinstance(rule.get("label"), str)
+
+
+def _haircut_is_well_formed(rule: Dict[str, Any]) -> bool:
+    shrink_to, lo, hi = rule.get("shrink_to"), rule.get("lo"), rule.get("hi")
+    if not (_is_number(shrink_to) and 0.0 <= shrink_to <= 1.0):
+        return False
+    if lo is None or hi is None:  # _in_band: a band with no edge matches nothing
+        return (lo is None or _is_number(lo)) and (hi is None or _is_number(hi))
+    return _is_number(lo) and _is_number(hi) and lo <= hi
+
+
+def policy_is_well_formed(policy: Any) -> bool:
+    """True if ``apply_policy`` can read every rule in ``policy``. PURE.
+
+    A missing collection means no rules of that kind (so ``{}`` is an empty
+    policy). A collection of the wrong type, or a rule without the fields the
+    gate matches on, means the rules are unknown, which is a different thing.
+    """
+    if not isinstance(policy, dict):
+        return False
+    for key, rule_ok in (("blocks", _block_is_well_formed),
+                         ("warnings", _warning_is_well_formed),
+                         ("haircuts", _haircut_is_well_formed)):
+        rules = policy.get(key, [])
+        if not isinstance(rules, list):
+            return False
+        if not all(isinstance(r, dict) and rule_ok(r) for r in rules):
+            return False
+    return True
+
 
 def _in_band(p: float, lo: Any, hi: Any) -> bool:
     """Band membership mirrors calibration_table: [lo, hi) with the top edge
@@ -298,7 +345,7 @@ def load_policy(path: str = DEFAULT_POLICY_PATH) -> Optional[Dict[str, Any]]:
         return None
     try:
         return json.loads(p.read_text())
-    except (ValueError, OSError):
+    except (ValueError, OSError, RecursionError):  # RecursionError: JSON nested too deep
         return None
 
 
