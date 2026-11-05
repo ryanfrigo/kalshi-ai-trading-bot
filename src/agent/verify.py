@@ -173,6 +173,12 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
+def check_probability(name: str, value: Any) -> None:
+    """Raise ValueError unless ``value`` is a real number from 0 to 100. PURE."""
+    if not _is_number(value) or not 0 <= value <= 100:
+        raise ValueError(f"{name} must be a number from 0 to 100, got {value!r}")
+
+
 def _check_gate_inputs(candidate: Any, research: Any, skeptic: Any) -> None:
     """Raise ValueError on anything outside the schemas. PURE.
 
@@ -184,10 +190,8 @@ def _check_gate_inputs(candidate: Any, research: Any, skeptic: Any) -> None:
     no_ask = candidate.get("no_ask")
     if not _is_number(no_ask) or not 0 < no_ask <= 1:
         raise ValueError(f"no_ask must be a price above 0 and up to 1, got {no_ask!r}")
-    for name, section in (("true_yes_pct", research), ("adjusted_true_yes_pct", skeptic)):
-        value = section.get(name)
-        if not _is_number(value) or not 0 <= value <= 100:
-            raise ValueError(f"{name} must be a number from 0 to 100, got {value!r}")
+    check_probability("true_yes_pct", research.get("true_yes_pct"))
+    check_probability("adjusted_true_yes_pct", skeptic.get("adjusted_true_yes_pct"))
     for name, section in (("survives", skeptic), ("is_frontrunner", research)):
         if not isinstance(section.get(name), bool):
             raise ValueError(f"{name} must be true or false, got {section.get(name)!r}")

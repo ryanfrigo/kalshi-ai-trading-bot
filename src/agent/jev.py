@@ -20,7 +20,7 @@ import os
 from datetime import date
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from src.agent.verify import RESEARCH_SCHEMA, SKEPTIC_SCHEMA
+from src.agent.verify import RESEARCH_SCHEMA, SKEPTIC_SCHEMA, check_probability
 
 JEV_MODEL = "~typesafe/jev-latest"
 DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
@@ -125,6 +125,8 @@ def with_jev_floor(
             captured["research"] = out
             return out
         if schema is SKEPTIC_SCHEMA:
+            # Check before flooring, or max() turns a malformed value into a clean number.
+            check_probability("adjusted_true_yes_pct", out.get("adjusted_true_yes_pct"))
             req = build_jev_request(question, captured.get("research", {}), out, facts)
             jev_pct = await forecast(req)
             if record is not None:
