@@ -147,7 +147,7 @@ def test_no_bid_on_our_side_sends_nothing_and_exits_1(run, book):
     Fake.default_book = book
     code, out = run(_rows(("A", "1.00")))
     assert code == 1 and Fake.placed == []
-    assert "no YES bids" in out and "1 position(s) not closed" in out
+    assert "no YES bids" in out and "1 failure(s)" in out
 
 
 @pytest.mark.parametrize("book", [
@@ -268,7 +268,7 @@ def test_a_rejected_order_exits_1_and_the_rest_are_tried(run):
     Fake.place_reply = RuntimeError("refused")
     code, out = run(_rows(("A", "1.00"), ("B", "1.00")))
     assert code == 1 and len(Fake.placed) == 2
-    assert "Placed: 0 | Failed: 2" in out and "2 position(s) not closed" in out
+    assert "Placed: 0 | Failed: 2" in out and "2 failure(s)" in out
 
 
 @pytest.mark.parametrize("reply", [None, {}, {"error": "no"}])
@@ -280,7 +280,7 @@ def test_an_unexpected_order_reply_exits_1(run, reply):
 
 def test_all_sold_exits_0_and_names_no_failure(run):
     code, out = run(_rows(("A", "1.00"), ("B", "-1.00")))
-    assert code == 0 and "Placed: 2 | Failed: 0" in out and "not closed" not in out
+    assert code == 0 and "Placed: 2 | Failed: 0" in out and "failure(s)" not in out
 
 
 def test_the_client_closes_on_every_path(run):
@@ -400,11 +400,26 @@ def test_a_no_holding_names_a_resting_no_order(run):
 
 
 @pytest.mark.parametrize("reply", [RuntimeError("503"), {}, {"orders": "x"}])
-def test_a_failed_add_back_read_warns_and_the_sells_still_stand(run, reply):
+def test_a_failed_add_back_read_exits_1_and_the_sells_still_stand(run, reply):
     Fake.all_resting = reply
     code, out = run(_rows(("A", "1.00")))
-    assert code == 0 and len(Fake.placed) == 1
+    assert code == 1 and len(Fake.placed) == 1
     assert "Couldn't check for resting orders" in out
+    assert "Placed: 1 | Failed: 1" in out
+
+
+def test_a_resting_order_it_cant_read_on_a_held_ticker_exits_1(run):
+    Fake.all_resting = {"orders": [{"ticker": "B"}, {"ticker": "A"}, {"ticker": "OTHER"}]}
+    code, out = run(_rows(("A", "1.00"), ("B", "1.00")))
+    assert code == 1 and len(Fake.placed) == 2
+    assert "Resting orders it can't read on: A, B." in out and "OTHER" not in out
+    assert "Failed: 1" in out
+
+
+def test_a_found_add_back_order_alone_exits_0(run):
+    Fake.all_resting = {"orders": [_order("A", "yes")]}
+    code, _ = run(_rows(("A", "1.00")))
+    assert code == 0
 
 
 # ---- dry run sends nothing, and reports what a live run would do ----

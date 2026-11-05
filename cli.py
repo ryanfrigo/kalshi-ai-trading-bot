@@ -1508,23 +1508,27 @@ def cmd_close_all(args: argparse.Namespace) -> None:
             sides = {t: "yes" if c > 0 else "no" for t, c in market_positions}
             try:
                 resting = await _fetch_all_pages(client.get_orders, "orders", status="resting")
-                add_back = sorted({
-                    o["ticker"] for o in resting
-                    if isinstance(o, dict) and o.get("ticker") in sides
-                    and _order_outcome(o) == sides[o["ticker"]]
-                })
+                on_held = [o for o in resting if isinstance(o, dict) and o.get("ticker") in sides]
+                add_back = sorted({o["ticker"] for o in on_held
+                                   if _order_outcome(o) == sides[o["ticker"]]})
+                unread = sorted({o["ticker"] for o in on_held if _order_outcome(o) is None})
                 if add_back:
                     print(f"  ⚠️  Resting orders can add back to: {', '.join(add_back)}. "
                           "close-all doesn't cancel them. Cancel them on Kalshi.")
+                if unread:
+                    print(f"  ❌ Resting orders it can't read on: {', '.join(unread)}.")
+                    failed += 1
             except Exception as exc:
-                print(f"  ⚠️  Couldn't check for resting orders that add back — {exc}")
+                # An unverified stop isn't a verified one: this exits 1 too.
+                print(f"  ❌ Couldn't check for resting orders that add back — {exc}")
+                failed += 1
 
             print(f"  {'Placed' if live_mode else 'Would place'}: {placed} | Failed: {failed}")
             print()
             print("  Sell orders are limit-priced — they may rest unfilled if the book")
             print("  moves. Check Kalshi or `python cli.py status` after a minute.")
             if failed:
-                print(f"  ❌ {failed} position(s) not closed: see the lines above.")
+                print(f"  ❌ {failed} failure(s): a position may still be open. See the lines above.")
             return failed
         finally:
             await client.close()
