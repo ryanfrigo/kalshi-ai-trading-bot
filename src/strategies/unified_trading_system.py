@@ -12,7 +12,6 @@ Pieces:
 """
 
 import asyncio
-import math
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -31,6 +30,7 @@ from src.strategies.market_making import (
     MarketMakingOpportunity,
     run_market_making_strategy
 )
+from src.strategies.portfolio.immediate import holds_or_rests_opposite_side
 from src.strategies.portfolio_optimization import (
     AdvancedPortfolioOptimizer, 
     MarketOpportunity, 
@@ -491,7 +491,24 @@ class UnifiedAdvancedTradingSystem:
                         self.logger.warning(f"No usable {intended_side} ask for {market_id}, skipping")
                         results['failed_executions'] += 1
                         continue
-                    
+
+                    if market_info.get('status') not in ('active', 'open'):
+                        self.logger.info(f"⏭️ SKIPPING {market_id} - market status {market_info.get('status')}")
+                        results['failed_executions'] += 1
+                        continue
+
+                    # The optimizer's edge came from the mid-price at discovery, but the buy
+                    # lifts the live ask. Never pay the bot's own estimate or more. NaN
+                    # compares false, so it skips too.
+                    own_probability = (
+                        opportunity.predicted_probability if intended_side == "YES"
+                        else 1 - opportunity.predicted_probability
+                    )
+                    if not price < own_probability:
+                        self.logger.info(f"⏭️ SKIPPING {market_id} {intended_side} - ask {price:.2f} is not below own estimate {own_probability:.2f}")
+                        results['failed_executions'] += 1
+                        continue
+
                     # Calculate quantity
                     quantity = int(position_value / price)
                     if quantity < 1:
@@ -582,46 +599,9 @@ class UnifiedAdvancedTradingSystem:
             return results
 
     async def _holds_or_rests_opposite_side(self, market_id: str, intended_side: str) -> bool:
-        """True if we hold (DB or exchange) or have a resting order for the other side.
-
-        Fails closed: an unreadable resting-orders read counts as "yes".
-        """
-        from src.jobs.execute import _order_outcome
-        opposite = "NO" if intended_side == "YES" else "YES"
-        try:
-            if await self.db_manager.get_position_by_market_and_side(market_id, opposite):
-                return True
-            # Read positions directly: _held_on_side returns None for both "flat"
-            # and "read failed", which would let a read error pass as not held.
-            from src.utils.market_prices import signed_position
-            presp = await self.kalshi_client.get_positions(ticker=market_id)
-            rows = presp.get("market_positions") if isinstance(presp, dict) else None
-            if not isinstance(rows, list):
-                return True
-            mine = [r for r in rows if isinstance(r, dict) and r.get("ticker") == market_id]
-            if len(mine) > 1:
-                return True
-            if mine:
-                signed = signed_position(mine[0])
-                if not math.isfinite(signed):
-                    return True
-                if (signed < 0 if opposite == "NO" else signed > 0):
-                    return True
-            resp = await self.kalshi_client.get_orders(ticker=market_id, status="resting")
-            orders = resp.get("orders") if isinstance(resp, dict) else None
-            if not isinstance(orders, list):
-                return True
-            if resp.get("cursor") and len(orders) >= 100:  # full page: there may be more
-                return True
-            for o in orders:
-                if isinstance(o, dict) and o.get("ticker") == market_id:
-                    outcome = _order_outcome(o)
-                    if outcome is None or outcome == opposite.lower():
-                        return True
-            return False
-        except Exception as e:
-            self.logger.warning(f"Opposite-side check failed for {market_id} ({e}); skipping")
-            return True
+        return await holds_or_rests_opposite_side(
+            self.db_manager, self.kalshi_client, market_id, intended_side
+        )
 
     async def _execute_arbitrage_strategy(self, markets: List[Market]) -> Dict:
         """
