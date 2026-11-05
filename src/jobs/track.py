@@ -217,7 +217,7 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None, live: bool 
                     continue
 
                 # Current prices in dollars: the bid, since that is what a sell fills at
-                yes_bid, _, no_bid, _ = get_market_prices(market_data)
+                yes_bid, yes_ask, no_bid, no_ask = get_market_prices(market_data)
                 current_yes_price = yes_bid
                 current_no_price = no_bid
                 market_status = market_data.get('status', 'unknown')
@@ -265,7 +265,12 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None, live: bool 
                             continue
 
                         from src.jobs.execute import (place_sell_limit_order, reconcile_exit_fill,
-                                                      log_paper_exit)
+                                                      log_paper_exit, stop_held_by_floor)
+                        is_stop = (exit_reason.startswith("stop_loss_triggered")
+                                   or exit_reason == "emergency_stop_loss_10pct")
+                        ask = yes_ask if position.side == "YES" else no_ask
+                        if is_stop and stop_held_by_floor(position, exit_price, ask, logger):
+                            continue
                         if not live:
                             if log_paper_exit(position, exit_price, exit_reason):
                                 exit_sell_orders_placed += 1

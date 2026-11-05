@@ -50,7 +50,9 @@ class FakeKalshi:
 
     async def get_market(self, ticker):
         return {"market": {"yes_bid_dollars": f"{self.yes_cents / 100:.4f}",
-                           "no_bid_dollars": f"{(100 - self.yes_cents) / 100:.4f}"}}
+                           "yes_ask_dollars": f"{(self.yes_cents + 1) / 100:.4f}",
+                           "no_bid_dollars": f"{(100 - self.yes_cents) / 100:.4f}",
+                           "no_ask_dollars": f"{(101 - self.yes_cents) / 100:.4f}"}}
 
     async def _held_on_side(self, ticker, side):
         return None if self.positions_fail else self.held

@@ -763,6 +763,24 @@ async def place_profit_taking_orders(
         return results
 
 
+def stop_held_by_floor(position: Position, bid: float, ask: float, logger) -> bool:
+    """True (and one log line) when a stop sell should hold instead of selling.
+
+    Don't dump into a gutted or wide book: hold when the held side's bid is under
+    max(5c, 25% of entry) or its spread is over 10c. A missing ask (0) means the
+    spread is unknown, which also holds. Prices are dollars; stop exits only.
+    """
+    bid_c = int(round(bid * 100))
+    floor_c = max(5.0, position.entry_price * 25)
+    spread_c = int(round(ask * 100)) - bid_c if ask > 0 else None
+    if bid_c >= floor_c - _PCT_EPS and spread_c is not None and spread_c <= 10:
+        return False
+    spread = "unknown" if spread_c is None else f"{spread_c}c"
+    logger.warning(f"{position.market_id}: stop skipped: bid {bid_c}c vs floor {floor_c:g}c "
+                   f"/ spread {spread}; holding.")
+    return True
+
+
 async def place_stop_loss_orders(
     db_manager: DatabaseManager,
     kalshi_client: KalshiClient,
@@ -809,8 +827,9 @@ async def place_stop_loss_orders(
                 
                 # Price the held side at its bid, what a sell can get. v2 sends
                 # *_dollars fields only; there is no yes_price/no_price key.
-                yes_bid, _, no_bid, _ = get_market_prices(market_data)
+                yes_bid, yes_ask, no_bid, no_ask = get_market_prices(market_data)
                 current_price = yes_bid if position.side == "YES" else no_bid
+                ask = yes_ask if position.side == "YES" else no_ask
                 
                 # Calculate current loss
                 if current_price > 0:
@@ -822,6 +841,8 @@ async def place_stop_loss_orders(
                         # Sell at the bid (marketable). A price off entry rests above
                         # the bid after a gap, never fills, and blocks later exits.
                         stop_price = current_price
+                        if stop_held_by_floor(position, current_price, ask, logger):
+                            continue
                         
                         logger.info(f"🛡️ STOP LOSS TRIGGERED: {position.market_id} - {loss_pct:.1%} loss (${unrealized_pnl:.2f})")
                         
