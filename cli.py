@@ -609,6 +609,14 @@ def cmd_improve(args: argparse.Namespace) -> None:
     Pass --dry for a full read-only preview (no writes anywhere). --json for
     machine output. Falls back to the local settlements log if the live pull fails
     (e.g. no keys), so the loop still runs offline.
+
+    A saved gate is kept when this run derives from fewer settled trades than it
+    did: that means records were lost, and the gate must not open because of it.
+    Delete the gate file to rebuild from what is left.
+
+    A saved gate that can't be read stops the run before anything is pulled or
+    written. place_guarded_order refuses to trade on that file, and improve must
+    not undo that: a person decides, by deleting it.
     """
     import json
     from datetime import date as _date
@@ -628,11 +636,18 @@ def cmd_improve(args: argparse.Namespace) -> None:
         from src.agent.learnings import reconcile_outcomes, edge_breakdown, calibration_table
         from src.agent.policy import (
             merge_settlement_records, derive_policy, diff_policy,
-            load_policy, save_policy, DEFAULT_POLICY_PATH,
+            load_policy, policy_is_well_formed, save_policy, DEFAULT_POLICY_PATH,
         )
+
+        loaded = load_policy(DEFAULT_POLICY_PATH)
+        if Path(DEFAULT_POLICY_PATH).exists() and not (loaded is not None and policy_is_well_formed(loaded)):
+            print(f"  Saved gate at {DEFAULT_POLICY_PATH} is unreadable, so trading stays refused and "
+                  f"nothing was written. Inspect it, then delete it to rebuild.", file=sys.stderr)
+            sys.exit(1)
 
         # 1. SETTLE — pull authoritative outcomes (fall back to local on failure).
         pulled = 0
+        mine: list = []
         try:
             from src.clients.kalshi_client import KalshiClient
             client = KalshiClient()
@@ -645,9 +660,13 @@ def cmd_improve(args: argparse.Namespace) -> None:
             if not dry and mine:
                 record_settlements(mine, DEFAULT_SETTLEMENTS_PATH)
         except Exception as exc:  # offline / no keys — use what we already have
-            print(f"  (live settlement pull unavailable: {exc}; using local log)")
+            print(f"  (live settlement pull unavailable: {exc}; using local log)", file=sys.stderr)
 
         settlements = load_settlements(DEFAULT_SETTLEMENTS_PATH)
+        if dry:  # preview what a real run would see, without recording it
+            seen = {(r.get("ticker"), r.get("settled_time")) for r in settlements}
+            settlements = settlements + [
+                r for r in mine if (r.get("ticker"), r.get("settled_time")) not in seen]
 
         # 2. RECONCILE — join settlements back into the journal.
         journal = load_journal(DEFAULT_JOURNAL_PATH)
@@ -662,18 +681,27 @@ def cmd_improve(args: argparse.Namespace) -> None:
             edge_breakdown(records), calibration_table(records), date=today)
 
         # 4. DIFF — what did the newest settlements change?
-        old_policy = load_policy(DEFAULT_POLICY_PATH) or {
-            "meta": {}, "blocks": [], "warnings": [], "haircuts": []}
+        old_policy = loaded or {"meta": {}, "blocks": [], "warnings": [], "haircuts": []}
+
+        # Fewer settled trades than the saved gate means records were lost.
+        old_meta = old_policy.get("meta")
+        old_n = old_meta.get("settled_n") if isinstance(old_meta, dict) else None
+        new_n = new_policy["meta"]["settled_n"]
+        gate_kept = type(old_n) is int and new_n < old_n
+        if gate_kept:
+            print(f"  (saved gate kept: it came from {old_n} settled trades, this run has {new_n}. "
+                  f"Delete {DEFAULT_POLICY_PATH} to rebuild.)", file=sys.stderr)
+            new_policy = old_policy
         delta = diff_policy(old_policy, new_policy)
 
         # 5. PERSIST — save as the active gate (unless dry).
-        if not dry:
+        if not dry and not gate_kept:
             save_policy(new_policy, DEFAULT_POLICY_PATH)
 
         if as_json:
             print(json.dumps({
                 "date": today, "dry": dry, "settlements_pulled": pulled,
-                "reconciled": newly, "diff": delta, "policy": new_policy,
+                "reconciled": newly, "gate_kept": gate_kept, "diff": delta, "policy": new_policy,
             }, indent=2))
             return
 
@@ -696,6 +724,8 @@ def cmd_improve(args: argparse.Namespace) -> None:
         print()
         if dry:
             print("  DRY: nothing written (no settlements recorded, journal + gate untouched).")
+        elif gate_kept:
+            print(f"  Kept the saved gate → {DEFAULT_POLICY_PATH}")
         else:
             print(f"  Saved active gate → {DEFAULT_POLICY_PATH}")
         print("=" * 64)
