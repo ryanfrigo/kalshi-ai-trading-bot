@@ -223,7 +223,9 @@ def test_module_imports_without_schedule_package():
     repo_root = Path(__file__).resolve().parents[1]
     result = subprocess.run(
         [sys.executable, "-c",
-         "import sys; sys.modules['schedule'] = None; import src.jobs.performance_scheduler"],
+         # A child process doesn't inherit conftest's stub, so stub load_dotenv here too.
+         "import sys, dotenv; dotenv.load_dotenv = lambda *a, **k: False; "
+         "sys.modules['schedule'] = None; import src.jobs.performance_scheduler"],
         cwd=repo_root,
         capture_output=True,
         text=True,
