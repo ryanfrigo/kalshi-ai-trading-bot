@@ -44,6 +44,9 @@ class Position:
     take_profit_price: Optional[float] = None
     max_hold_hours: Optional[int] = None  # Maximum hours to hold position
     target_confidence_change: Optional[float] = None  # Exit if confidence drops by this amount
+    exit_order_id: Optional[str] = None  # exit sell resting on the book, reconciled each cycle
+    exit_order_filled: Optional[float] = None  # its fill count already recorded
+    exit_order_read_failures: Optional[int] = None  # consecutive unreadable reads of it
 
 @dataclass
 class TradeLog:
@@ -97,127 +100,6 @@ class DatabaseManager(TradingLoggerMixin):
             await db.commit()
         self.logger.info("Database initialized successfully")
 
-    async def _run_migrations(self, db: aiosqlite.Connection) -> None:
-        """Run database migrations for schema updates."""
-        try:
-            # Migration 1: Add strategy column to positions table
-            cursor = await db.execute("PRAGMA table_info(positions)")
-            columns = await cursor.fetchall()
-            column_names = [col[1] for col in columns]
-            
-            if 'strategy' not in column_names:
-                self.logger.info("Adding strategy column to positions table")
-                await db.execute("ALTER TABLE positions ADD COLUMN strategy TEXT")
-            
-            # Migration 2: Add strategy column to trade_logs table
-            cursor = await db.execute("PRAGMA table_info(trade_logs)")
-            columns = await cursor.fetchall()
-            column_names = [col[1] for col in columns]
-            
-            if 'strategy' not in column_names:
-                self.logger.info("Adding strategy column to trade_logs table")
-                await db.execute("ALTER TABLE trade_logs ADD COLUMN strategy TEXT")
-            
-            # Migration 3: Add LLM queries table if it doesn't exist
-            cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='llm_queries'")
-            table_exists = await cursor.fetchone()
-            
-            if not table_exists:
-                self.logger.info("Creating llm_queries table")
-                await db.execute("""
-                    CREATE TABLE llm_queries (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        timestamp TEXT NOT NULL,
-                        strategy TEXT NOT NULL,
-                        query_type TEXT NOT NULL,
-                        market_id TEXT,
-                        prompt TEXT NOT NULL,
-                        response TEXT NOT NULL,
-                        tokens_used INTEGER,
-                        cost_usd REAL,
-                        confidence_extracted REAL,
-                        decision_extracted TEXT
-                    )
-                """)
-                
-                            # Migration 4: Update existing positions with strategy based on rationale
-            await self._migrate_existing_strategy_data(db)
-            
-        except Exception as e:
-            self.logger.error(f"Error running migrations: {e}")
-
-    async def _migrate_existing_strategy_data(self, db: aiosqlite.Connection) -> None:
-        """Migrate existing position data to include strategy information."""
-        try:
-            # Update positions based on rationale patterns
-            await db.execute("""
-                UPDATE positions 
-                SET strategy = 'quick_flip_scalping' 
-                WHERE strategy IS NULL AND rationale LIKE 'QUICK FLIP:%'
-            """)
-            
-            await db.execute("""
-                UPDATE positions 
-                SET strategy = 'portfolio_optimization' 
-                WHERE strategy IS NULL AND rationale LIKE 'Portfolio optimization allocation:%'
-            """)
-            
-            await db.execute("""
-                UPDATE positions 
-                SET strategy = 'market_making' 
-                WHERE strategy IS NULL AND (
-                    rationale LIKE '%market making%' OR 
-                    rationale LIKE '%spread profit%'
-                )
-            """)
-            
-            await db.execute("""
-                UPDATE positions 
-                SET strategy = 'directional_trading' 
-                WHERE strategy IS NULL AND (
-                    rationale LIKE 'High-confidence%' OR
-                    rationale LIKE '%near-expiry%' OR
-                    rationale LIKE '%decision%'
-                )
-            """)
-            
-            # Update trade_logs similarly
-            await db.execute("""
-                UPDATE trade_logs 
-                SET strategy = 'quick_flip_scalping' 
-                WHERE strategy IS NULL AND rationale LIKE 'QUICK FLIP:%'
-            """)
-            
-            await db.execute("""
-                UPDATE trade_logs 
-                SET strategy = 'portfolio_optimization' 
-                WHERE strategy IS NULL AND rationale LIKE 'Portfolio optimization allocation:%'
-            """)
-            
-            await db.execute("""
-                UPDATE trade_logs 
-                SET strategy = 'market_making' 
-                WHERE strategy IS NULL AND (
-                    rationale LIKE '%market making%' OR 
-                    rationale LIKE '%spread profit%'
-                )
-            """)
-            
-            await db.execute("""
-                UPDATE trade_logs 
-                SET strategy = 'directional_trading' 
-                WHERE strategy IS NULL AND (
-                    rationale LIKE 'High-confidence%' OR
-                    rationale LIKE '%near-expiry%' OR
-                    rationale LIKE '%decision%'
-                )
-            """)
-            
-            self.logger.info("Migrated existing position/trade data with strategy information")
-            
-        except Exception as e:
-            self.logger.error(f"Error migrating existing strategy data: {e}")
-
     async def _create_tables(self, db: aiosqlite.Connection) -> None:
         """Create all database tables."""
         
@@ -253,6 +135,9 @@ class DatabaseManager(TradingLoggerMixin):
                 take_profit_price REAL,
                 max_hold_hours INTEGER,
                 target_confidence_change REAL,
+                exit_order_id TEXT,
+                exit_order_filled REAL,
+                exit_order_read_failures INTEGER,
                 UNIQUE(market_id, side)
             )
         """)
@@ -358,6 +243,21 @@ class DatabaseManager(TradingLoggerMixin):
             if 'target_confidence_change' not in column_names:
                 await db.execute("ALTER TABLE positions ADD COLUMN target_confidence_change REAL")
                 self.logger.info("Added target_confidence_change column to positions table")
+
+            for col, typ in (("exit_order_id", "TEXT"), ("exit_order_filled", "REAL"),
+                             ("exit_order_read_failures", "INTEGER")):
+                if col not in column_names:
+                    await db.execute(f"ALTER TABLE positions ADD COLUMN {col} {typ}")
+                    self.logger.info(f"Added {col} column to positions table")
+
+            if 'strategy' not in column_names:
+                await db.execute("ALTER TABLE positions ADD COLUMN strategy TEXT")
+                self.logger.info("Added strategy column to positions table")
+
+            cursor = await db.execute("PRAGMA table_info(trade_logs)")
+            if 'strategy' not in [col[1] for col in await cursor.fetchall()]:
+                await db.execute("ALTER TABLE trade_logs ADD COLUMN strategy TEXT")
+                self.logger.info("Added strategy column to trade_logs table")
                 
             await db.commit()
             
@@ -510,8 +410,25 @@ class DatabaseManager(TradingLoggerMixin):
             await db.commit()
             self.logger.info(f"Updated position {position_id} status to {status}.")
 
-    async def record_partial_exit(self, position_id: int, trade_log: TradeLog, remaining: float):
-        """Log the sold part of a position and shrink it to what remains, in one transaction."""
+    async def set_exit_order(self, position_id: int, order_id: Optional[str],
+                             filled: Optional[float], read_failures: int = 0):
+        """Store (or clear, with None) the exit sell resting for a position."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("UPDATE positions SET exit_order_id = ?, exit_order_filled = ?, "
+                             "exit_order_read_failures = ? WHERE id = ?",
+                             (order_id, filled, read_failures, position_id))
+            await db.commit()
+
+    async def record_partial_exit(self, position_id: int, trade_log: TradeLog, remaining: float,
+                                  **columns):
+        """Log the sold part of a position and shrink it to what remains, in one transaction.
+
+        ``columns`` (status, exit_order_id, exit_order_filled, exit_order_read_failures)
+        are set in the same update.
+        """
+        if set(columns) - {"status", "exit_order_id", "exit_order_filled",
+                           "exit_order_read_failures"}:
+            raise ValueError(f"record_partial_exit cannot set {sorted(columns)}")
         trade_dict = asdict(trade_log)
         trade_dict['entry_timestamp'] = trade_log.entry_timestamp.isoformat()
         trade_dict['exit_timestamp'] = trade_log.exit_timestamp.isoformat()
@@ -520,9 +437,9 @@ class DatabaseManager(TradingLoggerMixin):
                 INSERT INTO trade_logs (market_id, side, entry_price, exit_price, quantity, pnl, entry_timestamp, exit_timestamp, rationale, strategy)
                 VALUES (:market_id, :side, :entry_price, :exit_price, :quantity, :pnl, :entry_timestamp, :exit_timestamp, :rationale, :strategy)
             """, trade_dict)
-            await db.execute("""
-                UPDATE positions SET quantity = ? WHERE id = ?
-            """, (remaining, position_id))
+            sets = "".join(f", {c} = ?" for c in columns)
+            await db.execute(f"UPDATE positions SET quantity = ?{sets} WHERE id = ?",
+                             (remaining, *columns.values(), position_id))
             await db.commit()
             self.logger.info(f"Partial exit for position {position_id}: {remaining} left open.")
 

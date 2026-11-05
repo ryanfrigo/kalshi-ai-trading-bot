@@ -153,8 +153,18 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
     kalshi_client = KalshiClient()
 
     try:
+        # Step 0: book fills of exit sells that rested in earlier cycles, so a
+        # filled exit closes here and never reaches the settlement log below.
+        from src.jobs.execute import (place_profit_taking_orders, place_stop_loss_orders,
+                                      reconcile_resting_exit)
+        for position in await db_manager.get_open_live_positions():
+            if position.exit_order_id:
+                try:
+                    await reconcile_resting_exit(position, kalshi_client, db_manager)
+                except Exception as e:
+                    logger.error(f"Resting exit reconcile failed for {position.market_id}: {e}")
+
         # Step 1: Place sell limit orders for profit-taking and stop-loss
-        from src.jobs.execute import place_profit_taking_orders, place_stop_loss_orders
         
         logger.info("🎯 Checking for profit-taking opportunities...")
         profit_results = await place_profit_taking_orders(
