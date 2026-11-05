@@ -129,7 +129,7 @@ def market_confidence_score(ticker: str, orderbook: dict, market: dict) -> Tuple
         try:
             # Handle both old [price_cents, qty] and new [price_dollars_string, size_string]
             price = float(price_data)
-            qty = int(qty_data)
+            qty = int(float(qty_data))
             # Convert cents to dollars if needed
             if price > 1.0:
                 price = price / 100.0
@@ -140,7 +140,7 @@ def market_confidence_score(ticker: str, orderbook: dict, market: dict) -> Tuple
     for price_data, qty_data in no_side:
         try:
             price = float(price_data)
-            qty = int(qty_data)
+            qty = int(float(qty_data))
             # Convert cents to dollars if needed
             if price > 1.0:
                 price = price / 100.0
@@ -740,7 +740,7 @@ class SafeCompounder:
                 )
                 order = r.get("order", {})
                 status = order.get("status", "resting")
-                filled = _to_int_count(order.get("fill_count", 0))
+                filled = _to_int_count(order.get("fill_count_fp", order.get("fill_count", 0)))
 
                 if filled > 0:
                     stats["filled"] += filled
