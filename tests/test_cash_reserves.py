@@ -860,3 +860,8 @@ async def test_readable_positions_still_approve_the_same_trade():
     when positions read fine, so the block is the read failure, not the size."""
     c = FakeClient(balance=50_000)
     assert (await mgr(c).check_cash_reserves(4.0)).can_trade is True
+
+
+async def test_available_cash_reads_zero_when_the_balance_read_fails():
+    m = mgr(FakeClient(balance_exc=RuntimeError("balance down")))
+    assert await m._get_available_cash() == 0.0

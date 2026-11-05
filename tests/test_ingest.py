@@ -661,3 +661,11 @@ async def test_excluded_and_preferred_filters_work_on_events_path(db, client, mo
 async def test_null_category_becomes_unknown_not_none(db):
     q, _ = await process([mk(category=None)], db)
     assert [m.category for m in drain(q)] == ["unknown"]
+
+
+async def test_a_non_dict_event_or_nested_market_is_skipped(db, client):
+    def setup(c):
+        c.event_pages = [{"events": ["junk", {"markets": ["junk", mk("KXA-1")]}]}]
+        c.market_pages = []
+    q, _ = await run(db, setup=setup)
+    assert [m.market_id for m in drain(q)] == ["KXA-1"]

@@ -5,7 +5,10 @@ implementation of category and drawdown pre-checks.
 Checks it implements:
   - Categories scoring < 30
   - Positions that would exceed category allocation limits
-  - Positions that would exceed overall drawdown limits
+  - Positions that would exceed the single-position and sector limits
+
+max_drawdown_pct is stored but no check reads it. With portfolio_value at its
+default of 0, only the category score check runs.
 
 Tracks and logs all blocked trades for analysis.
 """
@@ -104,9 +107,7 @@ class PortfolioEnforcer:
         # --- Rule 1: Category score below block threshold ---
         if score < BLOCK_THRESHOLD:
             reason = (
-                f"Category '{cat}' score {score:.1f} < {BLOCK_THRESHOLD} (blocked). "
-                f"NCAAB NO-side is the only proven edge. "
-                f"Economic categories have -70% ROI historically."
+                f"Category '{cat}' score {score:.1f} < {BLOCK_THRESHOLD} (blocked)."
             )
             await self._log_blocked(ticker, cat, side, amount, reason, score)
             self._blocked_count += 1
