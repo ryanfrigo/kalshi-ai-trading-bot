@@ -7,7 +7,6 @@ Grok4 recommendations for systematic monitoring.
 """
 
 import asyncio
-import schedule
 import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
@@ -17,6 +16,17 @@ from dataclasses import dataclass
 
 from src.jobs.automated_performance_analyzer import run_performance_analysis
 from src.utils.logging_setup import get_trading_logger
+
+
+def _schedule():
+    """Import the optional `schedule` package only when the scheduler runs."""
+    try:
+        import schedule
+    except ImportError as e:
+        raise ImportError(
+            "PerformanceScheduler needs the 'schedule' package: pip install schedule"
+        ) from e
+    return schedule
 
 
 @dataclass
@@ -51,6 +61,7 @@ class PerformanceScheduler:
         
     def start(self) -> None:
         """Start the automated scheduler."""
+        schedule = _schedule()
         self.logger.info("🚀 Starting Performance Analysis Scheduler")
         
         # Schedule daily analysis
@@ -81,10 +92,12 @@ class PerformanceScheduler:
         """Stop the scheduler."""
         self.logger.info("🛑 Stopping Performance Analysis Scheduler")
         self.running = False
+        schedule = _schedule()
         schedule.clear()
     
     def _run_scheduler(self) -> None:
         """Run the schedule checker in a loop."""
+        schedule = _schedule()
         while self.running:
             schedule.run_pending()
             time.sleep(30)  # Check every 30 seconds
