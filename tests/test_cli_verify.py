@@ -235,18 +235,33 @@ def test_llm_prose_raises(monkeypatch):
     ("{}", "{}"),
     ("```json\n[1, 2]\n```", _j(SKEPTIC)),
     (_j(RESEARCH), "{}"),
-    (_j(RESEARCH), _j({**SKEPTIC, "survives": False})),
-    (_j(RESEARCH), _j({**SKEPTIC, "recommend": "PASS"})),
-    (_j({**RESEARCH, "true_yes_pct": "lots"}), _j({**SKEPTIC, "adjusted_true_yes_pct": "few"})),
-    (_j(RESEARCH), _j({**SKEPTIC, "adjusted_true_yes_pct": 99.0})),
+    (_j({**RESEARCH, "true_yes_pct": "lots"}), _j(SKEPTIC)),
+    (_j(RESEARCH), _j({**SKEPTIC, "adjusted_true_yes_pct": "few"})),
+    (_j(RESEARCH), _j({**SKEPTIC, "survives": "false"})),
+    (_j(RESEARCH), _j({**SKEPTIC, "adjusted_true_yes_pct": -500})),
+    (_j({**RESEARCH, "direction": "Positive"}), _j(SKEPTIC)),
 ])
-def test_bad_llm_replies_never_produce_buy_no(monkeypatch, capsys, research, skeptic):
+def test_malformed_llm_replies_refuse(monkeypatch, research, skeptic):
     _llm(monkeypatch, [research, skeptic])
-    try:
+    with pytest.raises((ValueError, KeyError, AttributeError, TypeError)):
         cli.cmd_verify(_args())
-    except Exception:  # noqa: BLE001 - raising is a fine way to refuse
-        return
-    assert json.loads(capsys.readouterr().out)["recommend"] != "BUY_NO"
+    assert FakeKalshi.closed == 1
+
+
+@pytest.mark.parametrize("skeptic", [
+    {**SKEPTIC, "survives": False},
+    {**SKEPTIC, "recommend": "PASS"},
+    {**SKEPTIC, "adjusted_true_yes_pct": 99.0},
+])
+def test_wellformed_replies_against_the_fade_pass(monkeypatch, capsys, skeptic):
+    _llm(monkeypatch, [_j(RESEARCH), _j(skeptic)])
+    assert _verdict(capsys)["recommend"] == "PASS"
+
+
+def test_a_malformed_operator_file_refuses_too(tmp_path):
+    file = _research_file(tmp_path, skeptic={**SKEPTIC, "survives": "false"})
+    with pytest.raises(ValueError, match="survives"):
+        cli.cmd_verify(_args(research_file=file))
 
 
 # --- Jev floor ------------------------------------------------------------------------
