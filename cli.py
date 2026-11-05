@@ -338,6 +338,7 @@ def cmd_fills(args: argparse.Namespace) -> None:
         from src.clients.kalshi_client import KalshiClient
         from src.agent.journal import load_journal, reconcile_fills, write_journal
         from src.agent.pending import resolve_pending
+        from src.strategies.safe_compounder import _fetch_all_pages
 
         journal = load_journal()
         client = KalshiClient()
@@ -351,7 +352,9 @@ def cmd_fills(args: argparse.Namespace) -> None:
                 r for r in journal
                 if r.get("order_id") and not r.get("outcome") and not r.get("voided")
             ]
-            resting = (await client.get_orders(status="resting")).get("orders", [])
+            # Every page, and raise on a bad reply: an order missing from this set
+            # with no fills gets voided, and a voided record never comes back.
+            resting = await _fetch_all_pages(client.get_orders, "orders", status="resting")
             resting_ids = {o.get("order_id") for o in resting if o.get("order_id")}
             # Per-order queries: exact evidence for each order, immune to the
             # recency window of the unscoped fills endpoint (absence of a fill
@@ -361,9 +364,11 @@ def cmd_fills(args: argparse.Namespace) -> None:
                 if oid in resting_ids:
                     continue
                 try:
-                    fills.extend(
-                        (await client.get_fills(order_id=oid, limit=200)).get("fills", [])
-                    )
+                    reply = await client.get_fills(order_id=oid, limit=200)
+                    rows = reply.get("fills")
+                    if not isinstance(rows, list) or (reply.get("cursor") and len(rows) >= 200):
+                        raise ValueError("no complete fills list")
+                    fills.extend(rows)
                 except Exception:
                     # Fail safe: no evidence -> record stays untouched.
                     skipped.append({"ticker": rec.get("ticker"), "order_id": oid})
