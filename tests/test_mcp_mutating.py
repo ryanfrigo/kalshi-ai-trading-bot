@@ -681,3 +681,38 @@ async def test_close_position_with_no_dry_argument_sends_zero_posts(ex):
     out = await server._with_client(lambda c: close_position(c, ticker="T-A"))
     assert out["ok"] is True and out["dry"] is True and out["journaled"] is False
     assert ex.posts == [] and ex.gets_only() and ex.bypass == []
+
+
+async def test_learnings_dry_previews_then_not_dry_writes_once(ex, tmp_path):
+    journal = Path("data/runtime/decision_journal.jsonl")
+    learned = Path("data/runtime/learnings.jsonl")
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    tickers = [f"T-{i}" for i in range(5)]
+    journal.write_text("".join(
+        json.dumps({"ticker": t, "side": "no", "category": "sports", "outcome": None}) + "\n"
+        for t in tickers))
+    before = journal.read_bytes()
+    raw = [{"ticker": t, "event_ticker": "E", "no_count_fp": "1.00", "market_result": "yes",
+            "no_total_cost_dollars": "0.50", "revenue": 0, "settled_time": "2026-01-02T00:00:00Z"}
+           for t in tickers]
+
+    with patch("src.agent.settle.fetch_settlements", AsyncMock(return_value=raw)):
+        dry = await server.learnings()
+        assert dry["dry"] is True and dry["reconciled"] == 5
+        assert dry["new_learnings"]
+        assert journal.read_bytes() == before and not learned.exists()
+
+        real = await server.learnings(dry=False)
+        assert real["dry"] is False and real["reconciled"] == 5
+        assert real["new_learnings"] == dry["new_learnings"]
+        saved = [json.loads(line) for line in journal.read_text().splitlines()]
+        assert [r["ticker"] for r in saved] == tickers
+        assert all(r["outcome"]["won"] is False for r in saved)
+        assert learned.exists()
+        written = learned.read_bytes()
+
+        again = await server.learnings(dry=False)
+        assert again["reconciled"] == 0 and again["new_learnings"] == []
+        assert again["settled_total"] == 5 and learned.read_bytes() == written
+
+    assert ex.posts == [] and ex.bypass == []

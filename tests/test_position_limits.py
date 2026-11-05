@@ -487,3 +487,24 @@ async def test_status_is_error_when_the_balance_reply_is_not_an_object():
     st = await m.get_position_limits_status()
     assert st["status"] == "ERROR"
     assert st["message"] == "balance response is not an object"
+
+
+async def test_closure_priority_is_zero_when_it_cannot_be_computed():
+    m, _, _ = _mgr()
+    bad = _pos(1)
+    bad.timestamp = None
+    assert await m._calculate_closure_priority(bad) == 0.0
+
+
+async def test_closure_list_is_empty_when_the_db_read_fails():
+    m, _, _ = _mgr(db=FakeDB(exc=RuntimeError("db")))
+    assert await m._get_positions_for_closure(3) == []
+
+
+async def test_one_unreadable_position_empties_the_whole_closure_list():
+    # The list is advice only and nothing closes from it, so losing it is safe.
+    bad = _pos(2)
+    bad.timestamp = None
+    m, client, db = _mgr(db=FakeDB([_pos(1), bad]))
+    assert await m._get_positions_for_closure(3) == []
+    assert client.calls == [] and db.status_updates == []
