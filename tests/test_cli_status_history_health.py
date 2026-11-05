@@ -24,7 +24,7 @@ def _fake_client(monkeypatch, balance=None, positions=None, balance_error=None):
                 raise balance_error
             return balance if balance is not None else {"balance": 12_345, "portfolio_value": 5_000}
 
-        async def get_positions(self):
+        async def get_positions(self, **_):
             return positions if positions is not None else {"event_positions": []}
 
         async def close(self):
@@ -73,28 +73,73 @@ def test_status_failure_exits_1_and_closes_the_client(monkeypatch, capsys):
     assert state.closed == 1
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "cmd_status reads one page of get_positions, so an account with more events than a "
-    "page undercounts Active Positions and exposure."
-))
-def test_status_follows_the_positions_cursor(monkeypatch, capsys):
-    row = lambda t: {"event_ticker": t, "event_exposure_dollars": "1.00"}  # noqa: E731
-    pages = {None: {"event_positions": [row("P1")], "cursor": "next"},
-             "next": {"event_positions": [row("P2")], "cursor": ""}}
+def _paged_client(monkeypatch, pages):
+    """Fake whose get_positions serves `pages` by cursor; an Exception value is raised."""
+    calls = []
 
     class Fake:
         async def get_balance(self):
             return {"balance": 0, "portfolio_value": 0}
 
         async def get_positions(self, cursor=None, **_):
-            return pages[cursor]
+            calls.append(cursor)
+            reply = pages[cursor]
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
 
         async def close(self):
             pass
 
     monkeypatch.setattr(kalshi_module, "KalshiClient", Fake)
+    return calls
+
+
+def _row(ticker, exposure="1.00"):
+    return {"event_ticker": ticker, "event_exposure_dollars": exposure}
+
+
+def test_status_follows_the_positions_cursor_and_totals_every_page(monkeypatch, capsys):
+    calls = _paged_client(monkeypatch, {
+        None: {"event_positions": [_row("P1")], "cursor": "next"},
+        "next": {"event_positions": [_row("P2", "2.50")], "cursor": ""},
+    })
     cli.cmd_status(NS())
-    assert "P2" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert calls == [None, "next"]
+    assert "P1" in out and "P2" in out
+    assert "Active Positions:            2" in out
+    assert "Total Exposure:     $      3.50" in out
+
+
+def test_status_shows_nothing_when_a_later_page_fails(monkeypatch, capsys):
+    _paged_client(monkeypatch, {
+        None: {"event_positions": [_row("P1")], "cursor": "next"},
+        "next": ConnectionError("down"),
+    })
+    with pytest.raises(SystemExit) as e:
+        cli.cmd_status(NS())
+    assert e.value.code == 1
+    out = capsys.readouterr().out
+    assert "Error fetching status: down" in out
+    assert "Active Positions" not in out  # a partial count would read as the whole book
+
+
+@pytest.mark.parametrize("reply", [{}, {"event_positions": "x"}, [], None])
+def test_status_refuses_an_unreadable_positions_reply(monkeypatch, capsys, reply):
+    _paged_client(monkeypatch, {None: reply})
+    with pytest.raises(SystemExit) as e:
+        cli.cmd_status(NS())
+    assert e.value.code == 1
+    out = capsys.readouterr().out
+    assert "malformed event_positions page" in out
+    assert "Active Positions" not in out
+
+
+def test_status_treats_a_null_list_as_no_positions(monkeypatch, capsys):
+    _paged_client(monkeypatch, {None: {"event_positions": None}})
+    cli.cmd_status(NS())
+    assert "Active Positions:            0" in capsys.readouterr().out
 
 
 # --- history --------------------------------------------------------------------------
