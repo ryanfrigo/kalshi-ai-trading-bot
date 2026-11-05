@@ -23,6 +23,9 @@ def _run(tmp_path, response, quantity=10):
         pos.id = await db.add_position(pos)
         client = AsyncMock()
         client.place_order = AsyncMock(return_value=response)
+        # the sellable guard reads the exchange: we hold the full position, nothing resting
+        client._held_on_side = AsyncMock(return_value=float(quantity))
+        client.get_orders = AsyncMock(return_value={"orders": []})
         ok = await place_sell_limit_order(position=pos, limit_price=0.30,
                                           db_manager=db, kalshi_client=client)
         after = await db.get_position_by_market_id("IOC-1")
