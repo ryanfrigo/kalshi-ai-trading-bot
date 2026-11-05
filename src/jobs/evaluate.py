@@ -97,8 +97,8 @@ async def analyze_ai_costs(db_manager: DatabaseManager) -> Dict:
     # bot was last run on an older version the pickle may still hold more data.
     # ---------------------------------------------------------------------------
     xai_tracker = _read_xai_tracker_from_pickle()
-    xai_cost_today = xai_tracker["total_cost"] if xai_tracker else 0.0
-    xai_requests_today = xai_tracker["request_count"] if xai_tracker else 0
+    xai_cost_today = (xai_tracker["total_cost"] or 0.0) if xai_tracker else 0.0
+    xai_requests_today = (xai_tracker["request_count"] or 0) if xai_tracker else 0
     trading_paused = (xai_tracker["is_exhausted"] if xai_tracker else False)
 
     # Guard against false-positive "paused" state: if no requests have been
@@ -222,7 +222,7 @@ async def analyze_trading_performance(db_manager: DatabaseManager) -> Dict:
         # Current open positions analysis
         cursor = await db.execute("""
             SELECT COUNT(*) as open_positions,
-                   AVG((julianday('now') - julianday(timestamp)) * 24) as avg_hours_held
+                   AVG((julianday('now', 'localtime') - julianday(timestamp)) * 24) as avg_hours_held
             FROM positions WHERE status = 'open'
         """)
         position_stats = await cursor.fetchone()
@@ -274,7 +274,11 @@ async def run_evaluation():
         # Generate overall system health summary
         daily_cost = cost_analysis['daily_costs'][datetime.now().strftime('%Y-%m-%d')]['cost']
         actual_limit = cost_analysis.get('actual_daily_limit', settings.trading.daily_ai_budget)
-        budget_utilization = daily_cost / actual_limit if actual_limit else 0
+        if actual_limit:
+            budget_utilization = daily_cost / actual_limit
+        else:
+            # A zero/unset limit with any spend is over budget, not "0% used".
+            budget_utilization = float("inf") if daily_cost > 0 else 0
         trading_paused = cost_analysis.get('trading_paused', False)
         
         xai_requests_today = cost_analysis.get('xai_requests_today', 0)
