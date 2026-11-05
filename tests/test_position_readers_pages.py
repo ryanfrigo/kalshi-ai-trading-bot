@@ -130,3 +130,25 @@ async def test_performance_analyzer_fallback_survives_an_empty_ledger(tmp_path):
     report = await TradingPerformanceAnalyzer(db, Fake(TWO_PAGES), xai).run_comprehensive_analysis()
     assert report["ai_insights"]["error"] == "no"
     assert "FALLBACK ANALYSIS" in report["ai_insights"]["fallback_analysis"]
+
+
+async def test_performance_analyzer_reports_no_made_up_action_items(tmp_path):
+    from src.utils.database import DatabaseManager
+    db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+    await db.initialize()
+    xai = MagicMock(get_completion=AsyncMock(return_value="advice"))
+    report = await TradingPerformanceAnalyzer(db, Fake(TWO_PAGES), xai).run_comprehensive_analysis()
+    assert report["action_items"] == []
+
+
+def test_fallback_calls_a_low_win_rate_critical_only_with_trades():
+    analyzer = TradingPerformanceAnalyzer(None, None, None)
+
+    def text(**stats):
+        return analyzer._generate_fallback_analysis({
+            "performance": {"overall_stats": stats},
+            "portfolio": {"available_cash": 100.0},
+        })
+
+    assert "Win rate" not in text(total_trades=0, win_rate=0)
+    assert "Win rate is 25.0%" in text(total_trades=4, win_rate=0.25)

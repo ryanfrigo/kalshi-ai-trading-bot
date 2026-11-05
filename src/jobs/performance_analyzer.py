@@ -66,7 +66,7 @@ class TradingPerformanceAnalyzer:
                 'analysis_timestamp': datetime.now().isoformat(),
                 'performance_data': performance_data,
                 'ai_insights': ai_analysis,
-                'action_items': self._extract_action_items(ai_analysis)
+                'action_items': []  # nothing parses them out of the AI text yet
             }
             
             # Log summary
@@ -290,7 +290,7 @@ Focus on actionable insights that can immediately improve performance.
         
         # Check win rate
         win_rate = perf.get('win_rate', 0)
-        if win_rate < 0.4:
+        if perf.get('total_trades') and win_rate < 0.4:
             issues.append(f"Critical: Win rate is {win_rate:.1%} - strategy needs major revision")
         
         # Check capital utilization
@@ -312,40 +312,6 @@ Focus on actionable insights that can immediately improve performance.
         ]
         
         return f"FALLBACK ANALYSIS:\n\nKey Issues:\n" + "\n".join(issues) + "\n\nRecommendations:\n" + "\n".join(recommendations)
-    
-    def _extract_action_items(self, ai_analysis: Dict[str, Any]) -> List[Dict[str, str]]:
-        """Extract concrete action items from AI analysis."""
-        
-        # This would parse the AI response to extract specific action items
-        # For now, return some basic action items based on common issues
-        
-        return [
-            {
-                'priority': 'High',
-                'action': 'Review and increase minimum confidence threshold',
-                'rationale': 'Current 0% win rate suggests overconfident AI predictions'
-            },
-            {
-                'priority': 'High', 
-                'action': 'Implement capital preservation mode',
-                'rationale': 'Low available cash ($9.84) blocks new trading opportunities'
-            },
-            {
-                'priority': 'Medium',
-                'action': 'Analyze market selection patterns',
-                'rationale': 'Identify which market types are most/least profitable'
-            },
-            {
-                'priority': 'Medium',
-                'action': 'Calibrate AI edge detection',
-                'rationale': 'Zero wins suggests poor probability estimation'
-            },
-            {
-                'priority': 'Low',
-                'action': 'Enable live trading for successful strategies',
-                'rationale': 'Currently all positions are non-live simulations'
-            }
-        ]
     
     def _log_analysis_summary(self, report: Dict[str, Any]) -> None:
         """Log analysis summary for monitoring."""
