@@ -68,7 +68,7 @@ def build_jev_request(
     }
 
 
-def parse_jev_yes_pct(resp: Dict[str, Any]) -> float:
+def parse_jev_yes_pct(resp: Dict[str, Any], source: str = "Jev") -> float:
     """Extract P(YES) as a percent 0-100 from a Decisions response. PURE.
 
     Raises ValueError on a malformed/error response — a missing forecast must
@@ -77,9 +77,9 @@ def parse_jev_yes_pct(resp: Dict[str, Any]) -> float:
     try:
         p = float(resp["answers"]["resolves_yes"]["noul"])
     except (KeyError, TypeError, ValueError) as e:
-        raise ValueError(f"malformed Jev response: {str(resp)[:300]}") from e
+        raise ValueError(f"malformed {source} response: {str(resp)[:300]}") from e
     if not 0.0 <= p <= 1.0:
-        raise ValueError(f"Jev probability out of range: {p}")
+        raise ValueError(f"{source} probability out of range: {p}")
     return p * 100.0
 
 
