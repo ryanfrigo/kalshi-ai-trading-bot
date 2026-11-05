@@ -116,7 +116,7 @@ def main() -> None:
         import aaa_data
         for st in ["NV", "WA", "OR", "MA", "NJ", "CA", "AZ", "CO", "CT", "FL", "GA",
                    "IL", "MI", "MN", "NC", "NY", "OH", "PA", "TX", "VA", "WI"]:
-            seq = aaa_data.build_print_series(aaa_data.load_state(st), value_col="regular")
+            seq = aaa_data.build_print_series(aaa_data.load_live_state(st), value_col="regular")  # no src=wayback state rows (national prints)
             for s in seq:
                 actuals[(f"KXAAAGASD{st}", s["date"])] = s["value"]
         settle(actuals)

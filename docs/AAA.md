@@ -71,15 +71,19 @@ time the summary answers the only question that matters: **does the model beat
 the book out-of-sample?** Until the answer is yes with enough n, this family
 gets no size.
 
-## State transfer calibration (2026-09-29, all 21 states, full backfills)
+## State transfer calibration (unreliable)
 
-`data/aaa/states/CALIBRATION.json`. Per-state fits of
-`state_delta = alpha + beta*nat_delta + resid` on 236-364 matched print pairs:
+`data/aaa/states/CALIBRATION.json` (fitted 2026-09-29, 21 states, 236-364 pairs
+each) holds per-state fits of `state_delta = alpha + beta*nat_delta + resid`.
+Treat it as unreliable. It was fit on `src=wayback` state rows, and about 91%
+of those are national prints: `backfill_state` fetched the national AAA page
+for every state snapshot instead of the `?state=` page. The fit is mostly the
+national series regressed on itself, so its alpha, beta, corr and resid_sd mean
+little. Nothing reads the file at runtime.
 
-* beta range 0.80-0.98 (OH highest 0.98, TX/GA lowest 0.81)
-* correlation 0.86-0.93, residual std 0.60-0.86c — versus the ~2.4c effective
-  error of the old national-delta-applied-to-state-anchor model
-* no problem states; every state n>=236
-
-The pricer fits these at runtime (fit_state_transfer); this file is the audited
-snapshot. Forward scores begin with the 2026-09-29 print cycle.
+Until the rows are re-fetched, the pricer ignores `src=wayback` state rows
+(also in `cmd_score` and `scalp_paper.py` settlement). Each state has 4 live
+rows, so `fit_state_transfer` (needs 60) and the state own-series path (needs
+30) are both skipped. States are priced from their latest live print plus the
+national change distribution. That is the model the 2026-09-27 scoring found
+biased.
