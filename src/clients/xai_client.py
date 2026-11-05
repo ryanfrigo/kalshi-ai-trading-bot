@@ -211,6 +211,7 @@ class XAIClient(TradingLoggerMixin):
         if client is None:
             return None
 
+        spent_before = client.total_cost
         try:
             result = await client.get_completion(
                 prompt=prompt,
@@ -224,7 +225,7 @@ class XAIClient(TradingLoggerMixin):
 
             # Mirror cost into our daily tracker
             if result is not None:
-                cost = getattr(client, "_last_request_cost", 0.0)
+                cost = client.total_cost - spent_before  # real spend OpenRouterClient booked
                 self.total_cost += cost
                 self.request_count += 1
                 self._update_daily_cost(cost)
@@ -249,6 +250,7 @@ class XAIClient(TradingLoggerMixin):
         if client is None:
             return None
 
+        spent_before = client.total_cost
         try:
             decision = await client.get_trading_decision(
                 market_data=market_data,
@@ -258,7 +260,7 @@ class XAIClient(TradingLoggerMixin):
             )
 
             if decision is not None:
-                cost = getattr(client, "_last_request_cost", 0.0)
+                cost = client.total_cost - spent_before  # real spend OpenRouterClient booked
                 self.total_cost += cost
                 self.request_count += 1
                 self._update_daily_cost(cost)
