@@ -916,7 +916,7 @@ def cmd_verify(args: argparse.Namespace) -> None:
             yes = [(float(p), float(s)) for p, s in (o.get("yes_dollars") or [])]
             yb = max((p for p, _s in yes), default=None)  # best yes bid
             no_ask = round(1 - yb, 2) if yb is not None else None
-            if no_ask is None:
+            if no_ask is None or no_ask <= 0:
                 raise RuntimeError(
                     f"no executable NO ask for {ticker} (empty/one-sided book) — nothing to fade"
                 )
