@@ -334,9 +334,11 @@ async def close(
 
     SAFETY: defaults to a DRY-RUN preview (``confirm=False``) — reads the live
     holding and returns the sell it WOULD place, placing NO order. Only
-    ``confirm=True`` places the live sell via ``close_position``. Selling reduces
-    risk, so it is permitted even when the governor is halted (mirroring the CLI),
-    but it still passes through ``close_position`` — no bypass.
+    ``confirm=True`` places the live sell via ``close_position``, which sells at
+    most the holding net of our resting orders. Under a governor halt the client
+    gate decides: a MANUAL_HALT (or any non-limit halt) blocks every sell; a
+    DAILY_LOSS / DRAWDOWN halt allows a reduce-only IOC sell up to the contracts
+    held. The dry-run preview does not run that gate.
     """
     from src.agent.toolbelt import close_position
 
