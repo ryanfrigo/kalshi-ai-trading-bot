@@ -13,6 +13,7 @@ This file holds:
 """
 
 import asyncio
+import math
 import os
 import pickle
 import time
@@ -170,9 +171,11 @@ class XAIClient(TradingLoggerMixin):
 
         # The flag alone is not enough: a limit lowered below today's spend, or a crash
         # between the two saves in _update_daily_cost, leaves spend at the cap and the flag unset.
-        if (
-            not self.daily_tracker.is_exhausted
-            and self.daily_tracker.total_cost >= self.daily_tracker.daily_limit
+        # NaN compares false against everything, and float() takes "nan" and "inf" from
+        # DAILY_AI_COST_LIMIT, so only spend below a finite limit leaves the cap open.
+        limit = self.daily_tracker.daily_limit
+        if not self.daily_tracker.is_exhausted and not (
+            math.isfinite(limit) and self.daily_tracker.total_cost < limit
         ):
             self.daily_tracker.is_exhausted = True
             self.daily_tracker.last_exhausted_time = datetime.now()

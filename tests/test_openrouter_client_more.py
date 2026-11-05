@@ -664,6 +664,13 @@ async def test_limit_lowered_below_spend_means_no_http_call(make, sleeps):
     assert calls(c).calls == []
 
 
+async def test_nan_limit_means_no_http_call(make, sleeps):
+    c = make({SONNET: [resp()]}, limit=float("nan"))
+    assert await c.get_completion("hi", model=SONNET) is None
+    assert await c.get_trading_decision({"title": "t"}, {"cash": 1}, model=SONNET) is None
+    assert calls(c).calls == []
+
+
 async def test_budget_spent_during_a_decision_retry_stops_the_fallback_chain(make, sleeps):
     c = make({SONNET: [RuntimeError("503 service unavailable"), resp(GOOD_JSON)],
               GPT: [resp(GOOD_JSON)]}, limit=1.0)

@@ -225,3 +225,55 @@ def test_unwritable_budget_file_does_not_stop_spend_being_counted(client, tmp_pa
     before = client.daily_tracker.total_cost
     client._update_daily_cost(0.5)
     assert client.daily_tracker.total_cost == before + 0.5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("spent", [0.0, 99.0])
+async def test_non_finite_limit_refuses_and_persists(client, monkeypatch, limit, spent):
+    """float() accepts these from DAILY_AI_COST_LIMIT; a NaN limit never tripped the cap at all."""
+    monkeypatch.setattr(settings.trading, "daily_ai_cost_limit", limit)
+    _store(client, daily_limit=limit, total_cost=spent)
+    assert await client._check_daily_limits() is False
+    assert _stored(client).is_exhausted is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [float("nan"), float("inf")])
+async def test_non_finite_limit_refuses_with_no_budget_file(client, monkeypatch, limit):
+    monkeypatch.setattr(settings.trading, "daily_ai_cost_limit", limit)
+    assert await client._check_daily_limits() is False
+
+
+@pytest.mark.asyncio
+async def test_non_finite_limit_refuses_a_stale_day_file(client, monkeypatch):
+    monkeypatch.setattr(settings.trading, "daily_ai_cost_limit", float("nan"))
+    _store(client, date=YESTERDAY, total_cost=5.0)
+    assert await client._check_daily_limits() is False
+
+
+@pytest.mark.asyncio
+async def test_infinite_limit_does_not_reopen_a_spent_day(client, monkeypatch):
+    """_load_daily_tracker clears the flag because 30 < inf; the guard has to set it again."""
+    monkeypatch.setattr(settings.trading, "daily_ai_cost_limit", float("inf"))
+    _store(client, daily_limit=20.0, total_cost=30.0, is_exhausted=True)
+    assert await client._check_daily_limits() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spent", [float("nan"), float("inf")])
+async def test_non_finite_spend_refuses(client, monkeypatch, spent):
+    monkeypatch.setattr(settings.trading, "daily_ai_cost_limit", 20.0)
+    _store(client, daily_limit=20.0, total_cost=spent)
+    assert await client._check_daily_limits() is False
+    assert _stored(client).is_exhausted is True
+
+
+@pytest.mark.asyncio
+async def test_fixing_a_bad_limit_reopens_the_same_day(client, monkeypatch):
+    monkeypatch.setattr(settings.trading, "daily_ai_cost_limit", float("nan"))
+    _store(client, daily_limit=float("nan"), total_cost=5.0)
+    assert await client._check_daily_limits() is False
+    monkeypatch.setattr(settings.trading, "daily_ai_cost_limit", 20.0)
+    assert await client._check_daily_limits() is True
+    assert client.daily_tracker.total_cost == 5.0
