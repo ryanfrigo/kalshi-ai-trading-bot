@@ -151,21 +151,25 @@ async def check_settlements():
             if not market:
                 continue
 
-            status = market.get("status", "")
-            result = market.get("result", "")
+            status = str(market.get("status") or "").strip().lower()
+            result = str(market.get("result") or "").strip().lower()
 
-            if status not in ("settled", "finalized", "closed"):
+            # Only determined/finalized are final (closed just means trading
+            # stopped; disputed can still flip), same rule as src/jobs/track.py.
+            if status not in ("determined", "finalized"):
                 continue
 
-            # result is typically "yes" or "no"
-            settlement_price = 1.0 if result.lower() == "yes" else 0.0
+            if result == "void":
+                settle_signal(sig["id"], None, void=True)
+                logger.info(f"🏁 Signal #{sig['id']} voided (refund): {sig['market_title']}")
+                settled_count += 1
+                continue
+            if result not in ("yes", "no"):
+                continue  # missing/empty/scalar result: never booked
 
+            settlement_price = 1.0 if result == "yes" else 0.0
             settle_signal(sig["id"], settlement_price)
-            outcome = "WIN" if (
-                (sig["side"] == "NO" and settlement_price <= 0.5) or
-                (sig["side"] == "YES" and settlement_price >= 0.5)
-            ) else "LOSS"
-            logger.info(f"🏁 Signal #{sig['id']} settled: {outcome} — {sig['market_title']}")
+            logger.info(f"🏁 Signal #{sig['id']} settled ({result}): {sig['market_title']}")
             settled_count += 1
 
         except Exception as e:

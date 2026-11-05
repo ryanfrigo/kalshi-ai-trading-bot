@@ -363,6 +363,32 @@ async def test_exposure_dollars_preferred_over_estimate():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("zero", ["0", "0.00", 0, 0.0, "-0.0"])
+async def test_zero_exposure_on_a_held_row_uses_the_estimate(zero):
+    # Same rule as position_limits (> 0): a held row reporting $0 exposure is not
+    # free, it is valued at the conservative $0.50/contract estimate.
+    rows = [{"position_fp": "10.00", "market_exposure_dollars": zero}]
+    c = FakeClient(balance=10_000, positions={"market_positions": rows})
+    assert await mgr(c)._get_portfolio_value() == pytest.approx(100.0 + 5.0)
+
+
+def test_position_value_zero_exposure_short_position_uses_estimate():
+    row = {"position_fp": "-8.00", "market_exposure_dollars": "0.00"}
+    assert CashReservesManager._position_value(row) == pytest.approx(4.0)
+
+
+@pytest.mark.parametrize("bad", ["inf", "-inf", "nan", float("inf")])
+def test_position_value_non_finite_exposure_uses_estimate(bad):
+    row = {"position_fp": "10.00", "market_exposure_dollars": bad}
+    assert CashReservesManager._position_value(row) == pytest.approx(5.0)
+
+
+def test_position_value_smallest_positive_exposure_is_still_trusted():
+    row = {"position_fp": "10.00", "market_exposure_dollars": "0.01"}
+    assert CashReservesManager._position_value(row) == pytest.approx(0.01)
+
+
+@pytest.mark.asyncio
 async def test_flat_position_with_exposure_is_not_counted():
     rows = [{"position_fp": "0.00", "market_exposure_dollars": "9.99"}]
     c = FakeClient(balance=10_000, positions={"market_positions": rows})
