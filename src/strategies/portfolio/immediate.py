@@ -50,7 +50,13 @@ async def create_market_opportunities_from_markets(
             
             # FIXED: Extract from nested 'market' object (same fix as immediate trading)
             market_info = market_data.get('market', {})
-            market_prob = market_info.get('yes_price', 50) / 100
+            # get_market_prices normalizes API v2 (dollars) and legacy (cents).
+            # Never default a missing price: a made-up 50c prices every trade wrong.
+            yes_bid, yes_ask, _no_bid, _no_ask = get_market_prices(market_info)
+            if yes_bid <= 0 or yes_ask <= 0:
+                logger.warning(f"No usable YES quote for {market.market_id}, skipping")
+                continue
+            market_prob = (yes_bid + yes_ask) / 2
             
             # Skip markets with extreme prices (too risky for portfolio)
             if market_prob < 0.05 or market_prob > 0.95:
@@ -254,7 +260,7 @@ async def _evaluate_immediate_trade(
         import aiosqlite
         async with aiosqlite.connect(db_manager.db_path) as db:
             cursor = await db.execute(
-                "SELECT COUNT(*) FROM positions WHERE market_id = ?",
+                "SELECT COUNT(*) FROM positions WHERE market_id = ? AND status != 'voided'",
                 (opportunity.market_id,)
             )
             result = await cursor.fetchone()
@@ -290,13 +296,53 @@ async def _evaluate_immediate_trade(
         # Determine side based on edge direction
         side = "NO" if opportunity.edge < 0 else "YES"  # Negative edge = market overpriced = bet NO
         
-        # Calculate proper entry price (what we expect to pay)
+        # 🚨 VALIDATE MARKET IS STILL TRADEABLE before executing
+        try:
+            market_data = await kalshi_client.get_market(opportunity.market_id)
+            
+            # FIXED: Extract from nested 'market' object in API response
+            market_info = market_data.get('market', {})
+            market_status = market_info.get('status')
+            _yes_bid, yes_ask, _no_bid, no_ask = get_market_prices(market_info)
+            
+            logger.info(f"🔍 Market validation for {opportunity.market_id}: status={market_status}, YES={yes_ask:.4f}, NO={no_ask:.4f}")
+            
+            # FIXED: Kalshi uses 'active' for tradeable markets, not 'open'
+            if market_status not in ['active', 'open']:
+                logger.warning(f"⏭️ Skipping {opportunity.market_id} - Market status: {market_status} (not active/open)")
+                return
+            
+            if not (yes_ask and no_ask and yes_ask > 0 and no_ask > 0):
+                logger.warning(f"⏭️ Skipping {opportunity.market_id} - No valid prices (YES={yes_ask:.4f}, NO={no_ask:.4f})")
+                return
+
+            # Skip collection/series tickers — both sides at $1.00 means it's not
+            # a directly tradeable market (see GitHub issue #42)
+            if yes_ask >= 0.99 and no_ask >= 0.99:
+                logger.warning(f"⏭️ Skipping {opportunity.market_id} - Collection/series ticker (YES={yes_ask:.4f}, NO={no_ask:.4f})")
+                return
+                
+            logger.info(f"✅ Market validation passed for {opportunity.market_id} - Status: {market_status}, proceeding with trade!")
+            
+        except Exception as e:
+            logger.error(f"⏭️ Skipping {opportunity.market_id} - Market validation failed: {e}")
+            import traceback
+            logger.error(f"Full error: {traceback.format_exc()}")
+            return
+        
+        # Price the trade at the LIVE ask execute_position will actually lift, not the
+        # discovery-time snapshot. If the ask moved so far that less than the 10%
+        # immediate-trade edge remains, refuse.
         if side == "YES":
-            entry_price = opportunity.market_probability  # Price for YES shares
-            shares = max(1, int(position_size / entry_price))  # Minimum 1 contract
+            entry_price = yes_ask
+            remaining_edge = opportunity.predicted_probability - yes_ask
         else:
-            entry_price = 1 - opportunity.market_probability  # Price for NO shares  
-            shares = max(1, int(position_size / entry_price))  # Minimum 1 contract
+            entry_price = no_ask
+            remaining_edge = (1 - opportunity.predicted_probability) - no_ask
+        if remaining_edge < 0.10:
+            logger.info(f"⏭️ Skipping {opportunity.market_id} - live {side} ask {entry_price:.2f} leaves only {remaining_edge:.1%} edge")
+            return
+        shares = max(1, int(position_size / entry_price))  # Minimum 1 contract
         
         # Verify we can afford at least 1 contract
         min_cost = shares * entry_price
@@ -338,40 +384,6 @@ async def _evaluate_immediate_trade(
             target_confidence_change=exit_levels['target_confidence_change']
         )
         
-        # 🚨 VALIDATE MARKET IS STILL TRADEABLE before executing
-        try:
-            market_data = await kalshi_client.get_market(opportunity.market_id)
-            
-            # FIXED: Extract from nested 'market' object in API response
-            market_info = market_data.get('market', {})
-            market_status = market_info.get('status')
-            _yes_bid, yes_ask, _no_bid, no_ask = get_market_prices(market_info)
-            
-            logger.info(f"🔍 Market validation for {opportunity.market_id}: status={market_status}, YES={yes_ask:.4f}, NO={no_ask:.4f}")
-            
-            # FIXED: Kalshi uses 'active' for tradeable markets, not 'open'
-            if market_status not in ['active', 'open']:
-                logger.warning(f"⏭️ Skipping {opportunity.market_id} - Market status: {market_status} (not active/open)")
-                return
-            
-            if not (yes_ask and no_ask and yes_ask > 0 and no_ask > 0):
-                logger.warning(f"⏭️ Skipping {opportunity.market_id} - No valid prices (YES={yes_ask:.4f}, NO={no_ask:.4f})")
-                return
-
-            # Skip collection/series tickers — both sides at $1.00 means it's not
-            # a directly tradeable market (see GitHub issue #42)
-            if yes_ask >= 0.99 and no_ask >= 0.99:
-                logger.warning(f"⏭️ Skipping {opportunity.market_id} - Collection/series ticker (YES={yes_ask:.4f}, NO={no_ask:.4f})")
-                return
-                
-            logger.info(f"✅ Market validation passed for {opportunity.market_id} - Status: {market_status}, proceeding with trade!")
-            
-        except Exception as e:
-            logger.error(f"⏭️ Skipping {opportunity.market_id} - Market validation failed: {e}")
-            import traceback
-            logger.error(f"Full error: {traceback.format_exc()}")
-            return
-        
         # Execute immediately
         position_id = await db_manager.add_position(position)
         if position_id:
@@ -380,7 +392,17 @@ async def _evaluate_immediate_trade(
             
             # Execute the trade - respect the global trading mode setting
             live_mode = getattr(settings.trading, 'live_trading_enabled', False)
-            success = await execute_position(position, live_mode, db_manager, kalshi_client)
+            from src.jobs.execute import void_position_if_exchange_flat
+            try:
+                success = await execute_position(position, live_mode, db_manager, kalshi_client)
+            except Exception:
+                await void_position_if_exchange_flat(db_manager, kalshi_client, position_id,
+                                                     opportunity.market_id)
+                raise
+            if not success:
+                # No order is known to have gone out; void only if the exchange agrees.
+                await void_position_if_exchange_flat(db_manager, kalshi_client, position_id,
+                                                     opportunity.market_id)
             if success:
                 logger.info(f"✅ IMMEDIATE TRADE EXECUTED: {opportunity.market_id} - ${position_size:.0f} position")
             else:
