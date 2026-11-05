@@ -54,7 +54,7 @@ class BeastModeDashboard:
     def __init__(self):
         self.db_manager = DatabaseManager()
         self.kalshi_client = KalshiClient()
-        self.xai_client = XAIClient()
+        self.xai_client = XAIClient(db_manager=self.db_manager)
         
         # Initialize unified system for performance tracking
         self.unified_system = UnifiedAdvancedTradingSystem(

@@ -778,15 +778,16 @@ class DatabaseManager(TradingLoggerMixin):
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (market_id, now, decision_action, confidence, cost_usd, analysis_type))
             
-            # Update daily cost tracking
+            # Update daily counts. total_ai_cost is not touched here: the AI
+            # clients record each request's actual cost (upsert_daily_cost), so
+            # adding this estimate too would count the same spend twice.
             await db.execute("""
                 INSERT INTO daily_cost_tracking (date, total_ai_cost, analysis_count, decision_count)
-                VALUES (?, ?, 1, ?)
+                VALUES (?, 0.0, 1, ?)
                 ON CONFLICT(date) DO UPDATE SET
-                    total_ai_cost = total_ai_cost + excluded.total_ai_cost,
                     analysis_count = analysis_count + 1,
                     decision_count = decision_count + excluded.decision_count
-            """, (today, cost_usd, 1 if decision_action != 'SKIP' else 0))
+            """, (today, 1 if decision_action != 'SKIP' else 0))
             
             await db.commit()
 
