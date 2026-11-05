@@ -591,8 +591,9 @@ def estimate_market_volatility(market: Market) -> float:
         return max(0.05, min(0.50, estimated_vol))
         
     except Exception as e:
-        logger.error(f"Error estimating volatility for {market.market_id}: {e}")
-        return 0.15  # Default 15%
+        get_trading_logger("decision_engine").error(
+            f"Error estimating volatility for {market.market_id}: {e}")
+        raise
 
 
 def get_time_to_expiry_days(market: Market) -> float:
@@ -608,5 +609,5 @@ def get_time_to_expiry_days(market: Market) -> float:
         else:
             return 7.0  # Default 7 days
     except Exception as e:
-        logger.error(f"Error calculating time to expiry: {e}")
-        return 7.0
+        get_trading_logger("decision_engine").error(f"Error calculating time to expiry: {e}")
+        raise

@@ -467,3 +467,30 @@ def test_low_volume_market_never_builds_the_sentiment_analyzer(with_sentiment):
     with patch(SENT, fake):
         pos, *_ = _run_search(_market(volume=600), _decision(), AsyncMock(return_value="news"))
     assert pos is not None and fake.instances == []
+
+
+def test_time_to_expiry_is_a_week_when_missing():
+    m = _market()
+    for missing in (None, 0):
+        m.expiration_ts = missing
+        assert decide.get_time_to_expiry_days(m) == 7.0
+
+
+def test_market_helpers_raise_the_real_error_instead_of_inventing_a_default():
+    # These figures set stop levels on a position, so bad data must not become 7 days or 15%.
+    m = _market()
+    m.expiration_ts = "junk"
+    with pytest.raises(TypeError):
+        decide.get_time_to_expiry_days(m)
+    m = _market()
+    m.volume = None
+    with pytest.raises(TypeError):
+        decide.estimate_market_volatility(m)
+
+
+@pytest.mark.parametrize("helper", ["estimate_market_volatility", "get_time_to_expiry_days"])
+def test_a_helper_failure_ends_in_no_position_and_an_error_row(helper):
+    with patch.object(decide, helper, side_effect=TypeError("bad field")):
+        pos, db, _, _ = _run(_market(), _decision())
+    assert pos is None
+    assert _actions(db)[-1] == "ERROR"
