@@ -114,7 +114,8 @@ def roll_state(prev: Optional[Dict], current: int, today: str) -> Dict:
 
     New day (or no prior state): start-of-day resets to today's opening equity;
     the rolling peak carries forward (max of prior peak and current). Same day:
-    start-of-day is frozen; the peak only ratchets up.
+    start-of-day is frozen (a zero baseline adopts the first real equity); the
+    peak only ratchets up.
     """
     if not prev or prev.get("date") != today:
         prev_peak = int(prev.get("peak_equity_cents", 0)) if prev else 0
@@ -125,7 +126,7 @@ def roll_state(prev: Optional[Dict], current: int, today: str) -> Dict:
         }
     return {
         "date": today,
-        "sod_equity_cents": int(prev["sod_equity_cents"]),
+        "sod_equity_cents": int(prev["sod_equity_cents"]) or int(current),
         "peak_equity_cents": max(int(prev.get("peak_equity_cents", current)), int(current)),
     }
 
@@ -241,6 +242,17 @@ class RiskGovernor:
                 current_equity_cents=current_equity_cents,
                 sod_equity_cents=0,
                 peak_equity_cents=0,
+            )
+
+        if current_equity_cents <= 0:
+            # A zero/negative reading is a failed read, not an equity: never persist
+            # a baseline from it, and refuse to trade on it.
+            return GovernorDecision(
+                halted=True,
+                reasons=[f"EQUITY_UNREADABLE: equity {current_equity_cents}c is not a usable reading"],
+                current_equity_cents=current_equity_cents,
+                sod_equity_cents=int(prev.get("sod_equity_cents", 0)) if prev else 0,
+                peak_equity_cents=int(prev.get("peak_equity_cents", 0)) if prev else 0,
             )
 
         state = roll_state(prev, current_equity_cents, self._today())

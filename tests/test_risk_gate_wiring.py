@@ -201,12 +201,33 @@ def test_peak_never_decreases_within_a_day_even_if_equity_dips_then_recovers(tmp
     assert gov.load_state()["sod_equity_cents"] == 10_000
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: src/risk/risk_governor.py roll_state/check freeze start-of-day at the first "
-    "reading of the day even when that reading is 0 (e.g. get_balance() returned {} -> "
-    "current_equity_cents()==0). sod=0 then disables the DAILY_LOSS check "
-    "(`if sod > 0`) until the date changes; the first zero reading also fails open."))
 def test_zero_start_of_day_is_replaced_by_first_real_equity_same_day():
     state = roll_state({"date": "2026-11-02", "sod_equity_cents": 0, "peak_equity_cents": 0},
                        10_000, "2026-11-02")
     assert state["sod_equity_cents"] == 10_000
+
+
+def test_zero_first_read_on_new_state_fails_closed_and_persists_nothing(tmp_path):
+    gov = RiskGovernor(None, str(tmp_path / "s.json"), str(tmp_path / "H"))
+    d = asyncio.run(gov.check(current_equity_cents=0))
+    assert d.halted is True
+    assert d.reasons[0].startswith("EQUITY_UNREADABLE")
+    assert not (tmp_path / "s.json").exists()  # no baseline from a failed read
+
+
+def test_zero_read_midday_does_not_overwrite_existing_baseline(tmp_path):
+    t = datetime(2026, 11, 2, tzinfo=timezone.utc)
+    gov = RiskGovernor(None, str(tmp_path / "s.json"), str(tmp_path / "H"), clock=lambda: t)
+    asyncio.run(gov.check(current_equity_cents=10_000))
+    before = (tmp_path / "s.json").read_text()
+    assert asyncio.run(gov.check(current_equity_cents=0)).halted is True
+    assert (tmp_path / "s.json").read_text() == before
+
+
+def test_daily_loss_still_fires_after_a_zero_baseline_left_by_older_state(tmp_path):
+    t = datetime(2026, 11, 2, tzinfo=timezone.utc)
+    gov = RiskGovernor(None, str(tmp_path / "s.json"), str(tmp_path / "H"), clock=lambda: t)
+    gov.save_state({"date": "2026-11-02", "sod_equity_cents": 0, "peak_equity_cents": 0})
+    assert asyncio.run(gov.check(current_equity_cents=10_000)).halted is False
+    assert any(r.startswith("DAILY_LOSS") for r in
+               asyncio.run(gov.check(current_equity_cents=5_000)).reasons)
