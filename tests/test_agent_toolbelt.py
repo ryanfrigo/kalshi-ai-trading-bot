@@ -129,6 +129,10 @@ class _MarketClient:
                            "no_ask_dollars": self._no_ask}}
     async def get_balance(self):
         return {"balance": self._cash, "portfolio_value": 0}
+    async def get_positions(self, ticker=None):
+        return {"market_positions": []}
+    async def get_orders(self, ticker=None, status=None):
+        return {"orders": []}
     async def place_order(self, **kw):
         self.placed.append(kw)
         return {"order": {"order_id": "oid", "fill_count": kw.get("count")}}

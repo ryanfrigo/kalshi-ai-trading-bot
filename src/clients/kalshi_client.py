@@ -296,11 +296,17 @@ class KalshiClient(TradingLoggerMixin):
         """Get account balance."""
         return await self._make_authenticated_request("GET", "/trade-api/v2/portfolio/balance")
     
-    async def get_positions(self, ticker: Optional[str] = None) -> Dict[str, Any]:
-        """Get portfolio positions."""
+    async def get_positions(self, ticker: Optional[str] = None,
+                            limit: Optional[int] = None,
+                            cursor: Optional[str] = None) -> Dict[str, Any]:
+        """Get portfolio positions (one page; pass ``limit``/``cursor`` to page)."""
         params = {}
         if ticker:
             params["ticker"] = ticker
+        if limit:
+            params["limit"] = limit
+        if cursor:
+            params["cursor"] = cursor
         return await self._make_authenticated_request("GET", "/trade-api/v2/portfolio/positions", params=params)
     
     async def get_fills(self, ticker: Optional[str] = None, limit: int = 100,
@@ -321,13 +327,19 @@ class KalshiClient(TradingLoggerMixin):
         return await self._make_authenticated_request(
             "GET", f"/trade-api/v2/portfolio/orders/{order_id}")
 
-    async def get_orders(self, ticker: Optional[str] = None, status: Optional[str] = None) -> Dict[str, Any]:
-        """Get orders."""
+    async def get_orders(self, ticker: Optional[str] = None, status: Optional[str] = None,
+                         limit: Optional[int] = None,
+                         cursor: Optional[str] = None) -> Dict[str, Any]:
+        """Get orders (one page; pass ``limit``/``cursor`` to page)."""
         params = {}
         if ticker:
             params["ticker"] = ticker
         if status:
             params["status"] = status
+        if limit:
+            params["limit"] = limit
+        if cursor:
+            params["cursor"] = cursor
         return await self._make_authenticated_request("GET", "/trade-api/v2/portfolio/orders", params=params)
     
     async def get_markets(
