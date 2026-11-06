@@ -123,14 +123,20 @@ async def test_portfolio_counts_only_nonzero_positions_and_values_contracts_at_5
     assert len(data["positions_detail"]) == 2
 
 
-async def test_portfolio_with_an_empty_balance_reply_reads_zero(analyzer):
+async def test_portfolio_with_an_empty_balance_reply_raises(analyzer):
     class Empty(FakeKalshi):
         async def get_balance(self):
             return {}
 
     analyzer.kalshi_client = Empty()
+    with pytest.raises(ValueError, match="no balance field"):
+        await analyzer._gather_portfolio_data()
+
+
+async def test_portfolio_with_a_real_zero_balance_reads_zero(analyzer):
+    analyzer.kalshi_client = FakeKalshi(balance_cents=0)
     data = await analyzer._gather_portfolio_data()
-    assert data["active_positions"] == 0
+    assert data["available_cash"] == 0
     assert data["total_portfolio_value"] == 0
 
 
@@ -221,10 +227,32 @@ async def test_cash_warning_names_the_shortfall(analyzer):
     assert "$30.00" in _by_name(checks)["Cash Reserve Threshold"].impact
 
 
-async def test_empty_account_reads_as_critical_cash(analyzer):
+async def test_zero_value_with_positions_held_stays_critical(analyzer):
     checks = await analyzer._run_risk_checks(_portfolio(total=0), _metrics(available_cash=0))
     check = _by_name(checks)["Cash Reserve Threshold"]
     assert (check.status, check.current_value) == ("CRITICAL", 0)
+    assert "Close some positions" in check.recommendation
+
+
+async def test_empty_account_is_a_warning_with_nothing_to_close(analyzer):
+    checks = await analyzer._run_risk_checks(
+        _portfolio(total=0), _metrics(available_cash=0, active_positions=0))
+    check = _by_name(checks)["Cash Reserve Threshold"]
+    assert (check.status, check.current_value, check.threshold_value) == ("WARNING", 0, 15.0)
+    assert check.recommendation == "No capital and no open positions, so there is nothing to close"
+    assert check.impact == "The bot cannot trade until the account holds cash"
+
+
+async def test_no_positions_with_cash_still_passes(analyzer):
+    checks = await analyzer._run_risk_checks(
+        _portfolio(total=1000.0), _metrics(available_cash=1000.0, active_positions=0))
+    assert _by_name(checks)["Cash Reserve Threshold"].status == "PASS"
+
+
+async def test_no_positions_with_low_cash_share_stays_critical(analyzer):
+    checks = await analyzer._run_risk_checks(
+        _portfolio(total=1000.0), _metrics(available_cash=50.0, active_positions=0))
+    assert _by_name(checks)["Cash Reserve Threshold"].status == "CRITICAL"
 
 
 @pytest.mark.parametrize("count,status", [(12, "PASS"), (13, "WARNING")])
@@ -420,6 +448,15 @@ async def test_full_run_with_no_cash_completes_and_reports_it(analyzer):
     assert report["summary"]["critical_actions"] >= 1
 
 
+async def test_full_run_on_an_empty_account_has_no_close_advice(analyzer):
+    analyzer.kalshi_client = FakeKalshi(balance_cents=0)
+    report = await analyzer.run_full_analysis()
+    assert report["summary"]["total_critical_issues"] == 0
+    assert report["summary"]["critical_actions"] == 0
+    assert report["summary"]["total_warnings"] >= 1
+    assert "Build cash reserves immediately" not in [a["action"] for a in report["action_items"]]
+
+
 async def test_report_priorities_are_the_strings_every_reader_compares(analyzer):
     # performance_scheduler and performance_dashboard_integration compare
     # action['priority'] with 'CRITICAL', and read the saved JSON too.
@@ -466,6 +503,23 @@ async def test_full_run_reraises_a_failed_read(analyzer):
     analyzer.kalshi_client = Down()
     with pytest.raises(ConnectionError):
         await analyzer.run_full_analysis()
+
+
+async def test_full_run_with_an_empty_balance_reply_makes_no_ai_call_and_saves_no_report(analyzer):
+    class Empty(FakeKalshi):
+        async def get_balance(self):
+            return {}
+
+    analyzer.kalshi_client = Empty()
+    with pytest.raises(ValueError, match="no balance field"):
+        await analyzer.run_full_analysis()
+    assert analyzer.xai_client.prompts == []
+    async with aiosqlite.connect(analyzer.db.db_path) as db:
+        cursor = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='analysis_reports'")
+        if await cursor.fetchone():
+            row = await (await db.execute("SELECT COUNT(*) FROM analysis_reports")).fetchone()
+            assert row[0] == 0
 
 
 # --- lifecycle ------------------------------------------------------------------------

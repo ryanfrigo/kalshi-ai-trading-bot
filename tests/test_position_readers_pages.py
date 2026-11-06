@@ -152,3 +152,32 @@ def test_fallback_calls_a_low_win_rate_critical_only_with_trades():
 
     assert "Win rate" not in text(total_trades=0, win_rate=0)
     assert "Win rate is 25.0%" in text(total_trades=4, win_rate=0.25)
+
+
+class NoBalance(Fake):
+    async def get_balance(self):
+        return {}
+
+
+ONE_POSITION = {None: {"market_positions": [{"ticker": "A", "position_fp": "5.00"}], "cursor": ""}}
+
+
+async def test_performance_analyzer_skips_the_paid_call_on_a_balance_reply_with_no_balance(tmp_path):
+    from src.utils.database import DatabaseManager
+    db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+    await db.initialize()
+    xai = MagicMock(get_completion=AsyncMock(return_value="advice"))
+    report = await TradingPerformanceAnalyzer(db, NoBalance(ONE_POSITION), xai).run_comprehensive_analysis()
+    xai.get_completion.assert_not_awaited()
+    assert report["performance_data"]["portfolio"] == {}
+
+
+async def test_performance_analyzer_still_reads_a_real_zero_balance(tmp_path):
+    from src.utils.database import DatabaseManager
+    db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+    await db.initialize()
+    fake = Fake(ONE_POSITION)
+    fake.get_balance = AsyncMock(return_value={"balance": 0})
+    data = await TradingPerformanceAnalyzer(db, fake, None)._gather_performance_data()
+    assert data["portfolio"]["available_cash"] == 0
+    assert data["portfolio"]["active_positions"] == 1

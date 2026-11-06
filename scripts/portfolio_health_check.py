@@ -32,7 +32,7 @@ async def get_portfolio_health() -> Dict:
     try:
         # Get available cash
         balance_response = await kalshi_client.get_balance()
-        available_cash = balance_response.get('balance', 0) / 100
+        available_cash = balance_response['balance'] / 100
         
         # Get current positions
         market_positions = await _fetch_all_pages(kalshi_client.get_positions, 'market_positions')

@@ -35,7 +35,7 @@ async def run_quick_analysis():
         
         # Balance
         balance_response = await kalshi_client.get_balance()
-        available_cash = balance_response.get('balance', 0) / 100
+        available_cash = balance_response['balance'] / 100
         
         # 2. Get historical performance
         async with aiosqlite.connect(db.db_path) as database:

@@ -77,7 +77,7 @@ async def comprehensive_analysis():
         print("-" * 40)
         
         balance_response = await kalshi_client.get_balance()
-        available_cash = balance_response.get('balance', 0) / 100
+        available_cash = balance_response['balance'] / 100
         
         print(f"Available Cash: ${available_cash:.2f}")
         

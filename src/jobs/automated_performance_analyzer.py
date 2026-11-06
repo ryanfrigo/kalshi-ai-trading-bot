@@ -173,6 +173,8 @@ class AutomatedPerformanceAnalyzer:
         # Get positions and balance
         kalshi_positions = await _fetch_all_pages(self.kalshi_client.get_positions, 'market_positions')
         balance_response = await self.kalshi_client.get_balance()
+        if 'balance' not in balance_response:
+            raise ValueError("Balance reply has no balance field")
 
         active_positions = [p for p in kalshi_positions if signed_position(p) != 0]
 
@@ -278,7 +280,16 @@ class AutomatedPerformanceAnalyzer:
         
         # 1. Cash Reserve Check (Grok4: maintain 15-20%)
         cash_pct = (metrics.available_cash / portfolio_data['total_portfolio_value']) * 100 if portfolio_data['total_portfolio_value'] > 0 else 0
-        if cash_pct < 15:
+        if portfolio_data['total_portfolio_value'] == 0 and metrics.active_positions == 0:
+            checks.append(RiskCheck(
+                check_name="Cash Reserve Threshold",
+                status="WARNING",
+                current_value=0,
+                threshold_value=15.0,
+                recommendation="No capital and no open positions, so there is nothing to close",
+                impact="The bot cannot trade until the account holds cash"
+            ))
+        elif cash_pct < 15:
             status = "CRITICAL" if cash_pct < 10 else "WARNING"
             checks.append(RiskCheck(
                 check_name="Cash Reserve Threshold",
