@@ -79,6 +79,11 @@ async def run_quick_analysis():
             print("\nNo completed trades in the ledger. Skipping the Grok4 analysis.")
             return
 
+        # Capital utilization divides by this, and there is nothing to pay to analyze
+        if available_cash + sum(abs(signed_position(p)) for p in active_positions) * 0.50 == 0:
+            print("\nNo cash and no positions. Skipping the Grok4 analysis.")
+            return
+
         # 3. Prepare analysis prompt for Grok4
         analysis_prompt = f"""
 You are an expert quantitative trading analyst reviewing a Kalshi prediction market trading system.
@@ -108,7 +113,7 @@ ANALYSIS REQUEST:
 Provide a comprehensive performance analysis with specific recommendations:
 
 1. **Performance Diagnosis**: What are the main strengths and issues?
-2. **Capital Management**: Is the capital utilization above optimal?
+2. **Capital Management**: Is the current capital utilization appropriate?
 3. **Position Strategy**: Are we trading appropriate market types?
 4. **Risk Assessment**: What are the key risks with current approach?
 5. **Improvement Recommendations**: 3-5 specific actionable improvements

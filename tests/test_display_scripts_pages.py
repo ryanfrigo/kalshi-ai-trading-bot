@@ -174,6 +174,32 @@ async def test_quick_analysis_makes_no_paid_call_on_an_empty_ledger(script, monk
     xai.close.assert_awaited_once()
 
 
+async def test_quick_analysis_makes_no_paid_call_with_no_capital(script, monkeypatch, capsys):
+    mod, fake, xai = _quick(script, monkeypatch, {None: {"market_positions": [], "cursor": ""}})
+    fake.get_balance = AsyncMock(return_value={"balance": 0})
+    await _settled_trade(mod)
+    await mod.run_quick_analysis()
+    xai.get_completion.assert_not_awaited()
+    assert "No cash and no positions" in capsys.readouterr().out
+    assert fake.closed == 1
+
+
+async def test_quick_analysis_still_calls_with_cash_and_no_positions(script, monkeypatch):
+    mod, _, xai = _quick(script, monkeypatch, {None: {"market_positions": [], "cursor": ""}})
+    await _settled_trade(mod)
+    await mod.run_quick_analysis()
+    xai.get_completion.assert_awaited_once()
+    assert "current capital utilization appropriate" in str(xai.get_completion.await_args)
+
+
+async def test_quick_analysis_still_calls_with_positions_and_no_cash(script, monkeypatch):
+    mod, fake, xai = _quick(script, monkeypatch, TWO_PAGES)
+    fake.get_balance = AsyncMock(return_value={"balance": 0})
+    await _settled_trade(mod)
+    await mod.run_quick_analysis()
+    xai.get_completion.assert_awaited_once()
+
+
 async def test_quick_analysis_prompt_states_no_fixed_facts(script, monkeypatch):
     mod, _, xai = _quick(script, monkeypatch, TWO_PAGES)
     await _settled_trade(mod)
