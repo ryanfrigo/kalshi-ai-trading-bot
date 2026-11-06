@@ -91,7 +91,7 @@ class TradingPerformanceAnalyzer:
             
             # Portfolio value
             balance_response = await self.kalshi_client.get_balance()
-            available_cash = balance_response.get('balance', 0) / 100
+            available_cash = balance_response['balance'] / 100
             
             data['portfolio'] = {
                 'active_positions': len(active_positions),

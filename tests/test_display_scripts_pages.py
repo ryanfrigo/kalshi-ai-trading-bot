@@ -438,3 +438,54 @@ async def test_performance_analysis_prints_the_win_rate_with_its_count(script, c
 async def test_performance_analysis_says_when_nothing_has_settled(script, capsys):
     await _analysis(script, EMPTY)
     assert "No settled trades yet" in capsys.readouterr().out
+
+
+class NoBalance(Fake):
+    async def get_balance(self):
+        return {}
+
+
+async def test_health_check_raises_on_a_balance_reply_with_no_balance(script, monkeypatch):
+    mod, _ = script("scripts/portfolio_health_check.py", EMPTY)
+    client = NoBalance(EMPTY)
+    monkeypatch.setattr(mod, "KalshiClient", lambda: client)
+    with pytest.raises(KeyError):
+        await mod.get_portfolio_health()
+    assert client.closed == 1
+
+
+async def test_health_check_still_reads_a_real_zero_balance(script):
+    mod, fake = script("scripts/portfolio_health_check.py", EMPTY)
+    fake.get_balance = AsyncMock(return_value={"balance": 0})
+    health = await mod.get_portfolio_health()
+    assert health["available_cash"] == 0
+
+
+async def test_performance_analysis_raises_on_a_balance_reply_with_no_balance(script, monkeypatch, capsys):
+    with pytest.raises(KeyError):
+        await _analysis(script, EMPTY, monkeypatch, client=NoBalance(EMPTY))
+    assert "Available Cash" not in capsys.readouterr().out
+
+
+async def test_quick_analysis_makes_no_paid_call_on_a_balance_reply_with_no_balance(script, monkeypatch):
+    mod, fake, xai = _quick(script, monkeypatch, EMPTY)
+    fake.get_balance = AsyncMock(return_value={})
+    await _settled_trade(mod)
+    with pytest.raises(KeyError):
+        await mod.run_quick_analysis()
+    xai.get_completion.assert_not_awaited()
+    assert fake.closed == 1
+
+
+def test_dashboard_health_shows_an_error_on_a_balance_reply_with_no_balance(dashboard, monkeypatch):
+    mod, _ = dashboard(EMPTY)
+    monkeypatch.setattr(mod, "KalshiClient", lambda: NoBalance(EMPTY))
+    mod.load_system_health()
+    mod.st.error.assert_called_once()
+
+
+def test_dashboard_health_still_reads_a_real_zero_balance(dashboard):
+    mod, fake = dashboard(EMPTY)
+    fake.get_balance = AsyncMock(return_value={"balance": 0})
+    assert mod.load_system_health()["available_cash"] == 0
+    mod.st.error.assert_not_called()
