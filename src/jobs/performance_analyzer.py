@@ -13,6 +13,7 @@ import aiosqlite
 
 from src.clients.kalshi_client import KalshiClient
 from src.clients.xai_client import XAIClient
+from src.strategies.safe_compounder import _fetch_all_pages
 from src.utils.database import DatabaseManager, Position, TradeLog
 from src.utils.market_prices import signed_position
 from src.config.settings import settings
@@ -45,7 +46,18 @@ class TradingPerformanceAnalyzer:
         try:
             # Gather all performance data
             performance_data = await self._gather_performance_data()
-            
+
+            # A failed read leaves this block empty, and the prompt would state zero
+            # positions and zero cash as fact. Don't pay for advice on that.
+            if not performance_data.get('portfolio'):
+                self.logger.warning("Portfolio read failed; skipping the AI analysis")
+                return {
+                    'analysis_timestamp': datetime.now().isoformat(),
+                    'performance_data': performance_data,
+                    'ai_insights': {'error': 'portfolio read failed; AI analysis skipped'},
+                    'action_items': []
+                }
+
             # Generate AI analysis using Grok4
             ai_analysis = await self._generate_ai_analysis(performance_data)
             
@@ -54,7 +66,7 @@ class TradingPerformanceAnalyzer:
                 'analysis_timestamp': datetime.now().isoformat(),
                 'performance_data': performance_data,
                 'ai_insights': ai_analysis,
-                'action_items': self._extract_action_items(ai_analysis)
+                'action_items': []  # nothing parses them out of the AI text yet
             }
             
             # Log summary
@@ -74,8 +86,7 @@ class TradingPerformanceAnalyzer:
         # 1. Current Portfolio State
         try:
             # Kalshi positions
-            positions_response = await self.kalshi_client.get_positions()
-            kalshi_positions = positions_response.get('market_positions', [])
+            kalshi_positions = await _fetch_all_pages(self.kalshi_client.get_positions, 'market_positions')
             active_positions = [p for p in kalshi_positions if signed_position(p) != 0]
             
             # Portfolio value
@@ -279,7 +290,7 @@ Focus on actionable insights that can immediately improve performance.
         
         # Check win rate
         win_rate = perf.get('win_rate', 0)
-        if win_rate < 0.4:
+        if perf.get('total_trades') and win_rate < 0.4:
             issues.append(f"Critical: Win rate is {win_rate:.1%} - strategy needs major revision")
         
         # Check capital utilization
@@ -288,7 +299,7 @@ Focus on actionable insights that can immediately improve performance.
             issues.append(f"Critical: Low available cash (${cash:.2f}) - may block new trades")
         
         # Check total PnL
-        total_pnl = perf.get('total_pnl', 0)
+        total_pnl = perf.get('total_pnl') or 0  # SUM over no rows is NULL
         if total_pnl < -100:
             issues.append(f"Critical: Large cumulative loss (${total_pnl:.2f})")
         
@@ -302,40 +313,6 @@ Focus on actionable insights that can immediately improve performance.
         
         return f"FALLBACK ANALYSIS:\n\nKey Issues:\n" + "\n".join(issues) + "\n\nRecommendations:\n" + "\n".join(recommendations)
     
-    def _extract_action_items(self, ai_analysis: Dict[str, Any]) -> List[Dict[str, str]]:
-        """Extract concrete action items from AI analysis."""
-        
-        # This would parse the AI response to extract specific action items
-        # For now, return some basic action items based on common issues
-        
-        return [
-            {
-                'priority': 'High',
-                'action': 'Review and increase minimum confidence threshold',
-                'rationale': 'Current 0% win rate suggests overconfident AI predictions'
-            },
-            {
-                'priority': 'High', 
-                'action': 'Implement capital preservation mode',
-                'rationale': 'Low available cash ($9.84) blocks new trading opportunities'
-            },
-            {
-                'priority': 'Medium',
-                'action': 'Analyze market selection patterns',
-                'rationale': 'Identify which market types are most/least profitable'
-            },
-            {
-                'priority': 'Medium',
-                'action': 'Calibrate AI edge detection',
-                'rationale': 'Zero wins suggests poor probability estimation'
-            },
-            {
-                'priority': 'Low',
-                'action': 'Enable live trading for successful strategies',
-                'rationale': 'Currently all positions are non-live simulations'
-            }
-        ]
-    
     def _log_analysis_summary(self, report: Dict[str, Any]) -> None:
         """Log analysis summary for monitoring."""
         
@@ -345,7 +322,7 @@ Focus on actionable insights that can immediately improve performance.
         self.logger.info(
             "📊 Performance Analysis Complete",
             win_rate=f"{perf.get('win_rate', 0):.1%}",
-            total_pnl=f"${perf.get('total_pnl', 0):.2f}",
+            total_pnl=f"${perf.get('total_pnl') or 0:.2f}",
             active_positions=portfolio.get('active_positions', 0),
             available_cash=f"${portfolio.get('available_cash', 0):.2f}",
             action_items=len(report.get('action_items', []))

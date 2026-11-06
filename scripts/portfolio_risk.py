@@ -48,10 +48,11 @@ async def collect() -> list[dict]:
     from dotenv import load_dotenv
     load_dotenv(REPO / ".env")
     from src.clients.kalshi_client import KalshiClient
+    from src.strategies.safe_compounder import _fetch_all_pages
     c = KalshiClient()
     try:
-        pos = await c.get_positions()
-        mps = [m for m in pos["market_positions"] if abs(float(m.get("position_fp") or 0)) > 0.5]
+        rows = await _fetch_all_pages(c.get_positions, "market_positions")
+        mps = [m for m in rows if abs(float(m.get("position_fp") or 0)) > 0.5]
         out = []
         for m in mps:
             t = m["ticker"]

@@ -25,7 +25,7 @@ class FakeKalshi:
         self.positions = list(positions)
         self.closed = False
 
-    async def get_positions(self):
+    async def get_positions(self, **_):
         return {"market_positions": self.positions}
 
     async def get_balance(self):
@@ -123,11 +123,8 @@ async def test_portfolio_counts_only_nonzero_positions_and_values_contracts_at_5
     assert len(data["positions_detail"]) == 2
 
 
-async def test_portfolio_with_empty_replies_reads_zero(analyzer):
+async def test_portfolio_with_an_empty_balance_reply_reads_zero(analyzer):
     class Empty(FakeKalshi):
-        async def get_positions(self):
-            return {}
-
         async def get_balance(self):
             return {}
 
@@ -135,6 +132,16 @@ async def test_portfolio_with_empty_replies_reads_zero(analyzer):
     data = await analyzer._gather_portfolio_data()
     assert data["active_positions"] == 0
     assert data["total_portfolio_value"] == 0
+
+
+async def test_portfolio_with_an_unreadable_positions_reply_raises(analyzer):
+    class Empty(FakeKalshi):
+        async def get_positions(self, **_):
+            return {}
+
+    analyzer.kalshi_client = Empty()
+    with pytest.raises(RuntimeError, match="malformed market_positions page"):
+        await analyzer._gather_portfolio_data()
 
 
 # --- metrics --------------------------------------------------------------------------

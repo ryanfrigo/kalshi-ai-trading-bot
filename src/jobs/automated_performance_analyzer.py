@@ -23,6 +23,7 @@ import aiosqlite
 
 from src.clients.kalshi_client import KalshiClient
 from src.clients.xai_client import XAIClient
+from src.strategies.safe_compounder import _fetch_all_pages
 from src.utils.database import DatabaseManager, Position, TradeLog
 from src.utils.market_prices import signed_position
 from src.config.settings import settings
@@ -170,10 +171,9 @@ class AutomatedPerformanceAnalyzer:
         self.logger.debug("Gathering portfolio data from Kalshi")
         
         # Get positions and balance
-        positions_response = await self.kalshi_client.get_positions()
+        kalshi_positions = await _fetch_all_pages(self.kalshi_client.get_positions, 'market_positions')
         balance_response = await self.kalshi_client.get_balance()
-        
-        kalshi_positions = positions_response.get('market_positions', [])
+
         active_positions = [p for p in kalshi_positions if signed_position(p) != 0]
 
         return {
