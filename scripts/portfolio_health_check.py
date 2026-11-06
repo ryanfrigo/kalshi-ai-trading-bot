@@ -72,6 +72,8 @@ async def get_portfolio_health() -> Dict:
                 except Exception as e:
                     unvalued.append(ticker)
                     print(f"Warning: Could not value position {ticker}: {e}")
+            elif position_count != 0:
+                unvalued.append("(unnamed position)")
         
         # Calculate totals and metrics
         total_portfolio_value = available_cash + total_position_value

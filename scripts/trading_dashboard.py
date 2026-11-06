@@ -232,13 +232,16 @@ def load_system_health():
                             total_position_value += position_value
                         else:
                             unvalued.append(ticker)
-                            
+
+                    elif position_count != 0:
+                        unvalued.append("(unnamed position)")
+
                 except Exception as e:
                     # If we can't get market data for a position, skip it
                     unvalued.append(ticker)
                     print(f"Warning: Could not value position {ticker}: {e}")
                     continue
-            
+
             # Total portfolio value = cash + position values
             total_portfolio_value = available_cash + total_position_value
             

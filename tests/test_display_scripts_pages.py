@@ -292,6 +292,24 @@ def test_dashboard_health_names_positions_it_could_not_value(dashboard, monkeypa
     assert health["position_value"] == pytest.approx(5 * 0.42)
 
 
+NO_TICKER = {None: {"market_positions": [_row("A"), _row("", "2.00"), _row(None, "-1.00"), _row("", "0")],
+                    "cursor": ""}}
+
+
+async def test_health_check_names_a_position_with_no_ticker(script):
+    mod, _ = script("scripts/portfolio_health_check.py", NO_TICKER)
+    health = await mod.get_portfolio_health()
+    assert health["unvalued_tickers"] == ["(unnamed position)", "(unnamed position)"]
+    assert health["position_value"] == pytest.approx(5 * 0.42)
+
+
+def test_dashboard_health_names_a_position_with_no_ticker(dashboard):
+    mod, _ = dashboard(NO_TICKER)
+    health = mod.load_system_health()
+    assert health["unvalued_tickers"] == ["(unnamed position)", "(unnamed position)"]
+    assert health["position_value"] == pytest.approx(5 * 0.42)
+
+
 def test_dashboard_warns_on_partial_totals(dashboard):
     mod, _ = dashboard(TWO_PAGES)
     mod.warn_if_partial({"unvalued_tickers": ["A", "B"]})
