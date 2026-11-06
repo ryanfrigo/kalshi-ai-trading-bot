@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cli import open_positions_from_v2  # noqa: E402
@@ -22,7 +24,6 @@ def test_zero_rows_are_dropped():
     rows = [
         {"ticker": "ZERO-FP", "position_fp": "0.00"},
         {"ticker": "ZERO-LEGACY", "position": 0},
-        {"ticker": "NONE-FP", "position_fp": None},
         {"ticker": "KEEP", "position_fp": "-1.00"},
     ]
     assert open_positions_from_v2(rows) == [("KEEP", -1.0)]
@@ -54,8 +55,15 @@ class _FakeKalshiClient:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def get_positions(self):
+    async def get_positions(self, **kw):
         return {"market_positions": self.rows}
+
+    async def _held_on_side(self, ticker, side):
+        signed = dict(open_positions_from_v2(self.rows)).get(ticker, 0.0)
+        return abs(signed) if (signed > 0) == (side == "yes") else 0.0
+
+    async def get_orders(self, **kw):
+        return {"orders": []}
 
     async def get_orderbook(self, ticker, depth=1):
         return {"orderbook": {"yes": [[50, 10]], "no": [[40, 10]]}}
@@ -96,8 +104,10 @@ def test_close_all_sends_half_contract_not_zero(monkeypatch):
 
 
 def test_close_all_skips_position_that_rounds_to_zero(monkeypatch):
-    placed = _run_close_all(monkeypatch, [{"ticker": "DUST", "position_fp": "0.004"}])
-    assert placed == []
+    with pytest.raises(SystemExit) as e:
+        _run_close_all(monkeypatch, [{"ticker": "DUST", "position_fp": "0.004"}])
+    assert e.value.code == 1
+    assert _FakeKalshiClient.placed == []
 
 
 def test_close_all_dry_run_places_no_orders(monkeypatch):

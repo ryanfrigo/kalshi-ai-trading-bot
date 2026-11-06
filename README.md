@@ -254,7 +254,7 @@ python cli.py close-all --live       # actually send orders
 python cli.py status
 ```
 
-`close-all` queries Kalshi directly (not the local DB), so it works even when local state is stale. Sells are limit-priced, so they may rest unfilled on thin books — check Kalshi or `cli.py status` after a minute.
+`close-all` queries Kalshi directly (not the local DB), so it works even when local state is stale. Sells are limit-priced, so they may rest unfilled on thin books — check Kalshi or `cli.py status` after a minute. It won't sell past what's held net of resting orders, and it doesn't cancel them, so a position your resting orders already cover stays open, and that includes its own sells from an earlier run. It names any resting order that could rebuild a position it sold. It exits 1 if it can't read your positions or any position wasn't sold.
 
 ---
 
