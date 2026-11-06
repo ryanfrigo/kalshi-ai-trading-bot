@@ -220,3 +220,84 @@ def test_dashboard_health_shows_an_error_on_a_bad_later_page(dashboard):
     mod, _ = dashboard(BAD_LATER)
     assert mod.load_system_health()["positions_count"] == 0
     mod.st.error.assert_called_once()
+
+
+THREE = {None: {"market_positions": [_row("A"), _row("B", "-3.00"), _row("C")], "cursor": ""}}
+
+
+class FakeBadMarket(Fake):
+    async def get_market(self, ticker):
+        if ticker == "A":
+            raise ConnectionError("down")
+        if ticker == "B":
+            return {}
+        return await super().get_market(ticker)
+
+
+async def test_health_check_names_positions_it_could_not_value(script, monkeypatch):
+    mod, _ = script("scripts/portfolio_health_check.py", TWO_PAGES)
+    monkeypatch.setattr(mod, "KalshiClient", lambda: FakeBadMarket(THREE))
+    health = await mod.get_portfolio_health()
+    assert health["unvalued_tickers"] == ["A", "B"]
+    assert health["position_value"] == pytest.approx(5 * 0.42)
+
+
+async def test_health_check_summary_marks_partial_totals(script, monkeypatch, capsys):
+    mod, _ = script("scripts/portfolio_health_check.py", TWO_PAGES)
+    monkeypatch.setattr(mod, "KalshiClient", lambda: FakeBadMarket(THREE))
+    health = await mod.get_portfolio_health()
+    mod.print_portfolio_summary(health)
+    assert "PARTIAL: could not value A, B" in capsys.readouterr().out
+
+
+async def test_health_check_summary_has_no_mark_when_all_valued(script, capsys):
+    mod, _ = script("scripts/portfolio_health_check.py", TWO_PAGES)
+    health = await mod.get_portfolio_health()
+    mod.print_portfolio_summary(health)
+    assert "PARTIAL" not in capsys.readouterr().out
+    assert health["unvalued_tickers"] == []
+
+
+def test_dashboard_health_names_positions_it_could_not_value(dashboard, monkeypatch):
+    mod, _ = dashboard(TWO_PAGES)
+    monkeypatch.setattr(mod, "KalshiClient", lambda: FakeBadMarket(THREE))
+    health = mod.load_system_health()
+    assert health["unvalued_tickers"] == ["A", "B"]
+    assert health["position_value"] == pytest.approx(5 * 0.42)
+
+
+def test_dashboard_warns_on_partial_totals(dashboard):
+    mod, _ = dashboard(TWO_PAGES)
+    mod.warn_if_partial({"unvalued_tickers": ["A", "B"]})
+    mod.st.warning.assert_called_once()
+    assert "A, B" in mod.st.warning.call_args.args[0]
+
+
+def test_dashboard_stays_quiet_when_all_valued(dashboard):
+    mod, _ = dashboard(TWO_PAGES)
+    mod.warn_if_partial({"unvalued_tickers": []})
+    mod.st.warning.assert_not_called()
+
+
+def test_dashboard_main_calls_the_warning_with_the_health_data(dashboard, monkeypatch):
+    mod, _ = dashboard(TWO_PAGES)
+    mod.st.columns.return_value = (MagicMock(), MagicMock())
+    mod.st.button.return_value = False
+    health = {"unvalued_tickers": ["A"]}
+    monkeypatch.setattr(mod, "load_performance_data", lambda: ({}, []))
+    monkeypatch.setattr(mod, "load_llm_data", lambda: ([], {}))
+    monkeypatch.setattr(mod, "load_system_health", lambda: health)
+
+    class Reached(Exception):
+        pass
+
+    seen = []
+
+    def stop_here(data):
+        seen.append(data)
+        raise Reached
+
+    monkeypatch.setattr(mod, "warn_if_partial", stop_here)
+    with pytest.raises(Reached):
+        mod.main()
+    assert seen == [health]

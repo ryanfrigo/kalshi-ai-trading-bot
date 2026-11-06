@@ -211,6 +211,7 @@ def load_system_health():
             
             total_position_value = 0
             positions_count = sum(1 for p in market_positions if signed_position(p) != 0)
+            unvalued = []
             
             # Calculate current value of all positions
             for position in market_positions:
@@ -229,25 +230,29 @@ def load_system_health():
                             
                             position_value = abs(position_count) * current_price
                             total_position_value += position_value
+                        else:
+                            unvalued.append(ticker)
                             
                 except Exception as e:
                     # If we can't get market data for a position, skip it
+                    unvalued.append(ticker)
                     print(f"Warning: Could not value position {ticker}: {e}")
                     continue
             
             # Total portfolio value = cash + position values
             total_portfolio_value = available_cash + total_position_value
             
-            return available_cash, total_portfolio_value, positions_count, total_position_value
+            return available_cash, total_portfolio_value, positions_count, total_position_value, unvalued
         
-        available_cash, total_portfolio_value, positions_count, position_value = loop.run_until_complete(get_health())
+        available_cash, total_portfolio_value, positions_count, position_value, unvalued = loop.run_until_complete(get_health())
         loop.close()
         
         return {
             'available_cash': available_cash,
             'total_portfolio_value': total_portfolio_value, 
             'positions_count': positions_count,
-            'position_value': position_value
+            'position_value': position_value,
+            'unvalued_tickers': unvalued
         }
         
     except Exception as e:
@@ -256,8 +261,14 @@ def load_system_health():
             'available_cash': 0.0,
             'total_portfolio_value': 0.0,
             'positions_count': 0,
-            'position_value': 0.0
+            'position_value': 0.0,
+            'unvalued_tickers': []
         }
+
+def warn_if_partial(health):
+    """Name the positions missing from the totals."""
+    if health.get('unvalued_tickers'):
+        st.warning(f"Partial totals: could not value {', '.join(health['unvalued_tickers'])}. Figures read low.")
 
 def main():
     """Main dashboard function."""
@@ -296,6 +307,7 @@ def main():
         st.error(f"Error loading dashboard data: {e}")
         st.info("Please check your system connections and try refreshing.")
         return
+    warn_if_partial(system_health_data)
     
     # Show data status in sidebar
     st.sidebar.markdown("---")
