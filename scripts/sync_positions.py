@@ -5,16 +5,19 @@ Position Sync Tool
 This script syncs your current Kalshi positions into the database
 so the dashboard shows accurate data.
 
-It will:
-1. Get current positions from Kalshi
-2. Mark old database positions as closed  
-3. Add current positions to database
-4. Update the dashboard data source
+It reads every position and its market first, then replaces every local position
+row in one transaction. A failed read changes nothing. Entry prices become today's
+mid, and stops, strategy and exit-order ids on the old rows are lost. Closed-status
+rows are deleted too, and markets.has_position stays 1 on markets that lost their row.
+
+Stop the bot first: a run writing this table between the read and the commit is lost.
 """
 
 import asyncio
+import math
 import sys
 import os
+from dataclasses import asdict
 from datetime import datetime
 from typing import List, Dict
 
@@ -22,11 +25,28 @@ from typing import List, Dict
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.clients.kalshi_client import KalshiClient
+from src.strategies.safe_compounder import _fetch_all_pages
 from src.utils.database import DatabaseManager, Position, TradeLog
 from src.utils.logging_setup import get_trading_logger
-from src.utils.market_prices import held_side_mid, signed_position
+from src.utils.market_prices import get_market_prices, held_side_mid, signed_position
 
 logger = get_trading_logger(__name__)
+
+
+async def _read_all_positions(kalshi_client) -> List[Dict]:
+    """Every market_positions row, or raise. A null list can't be told from a bad reply,
+    and this list decides which local rows survive."""
+    rows: List[Dict] = []
+
+    async def page(**kw):
+        resp = await kalshi_client.get_positions(**kw)
+        if not isinstance(resp, dict) or not isinstance(resp.get('market_positions'), list):
+            raise RuntimeError("positions reply has no market_positions list")
+        rows.extend(resp['market_positions'])
+        return resp
+
+    await _fetch_all_pages(page, 'market_positions')
+    return rows
 
 
 async def sync_positions_to_database():
@@ -41,69 +61,79 @@ async def sync_positions_to_database():
         print("🔄 Syncing positions from Kalshi to database...")
         
         # Get current Kalshi positions
-        positions_response = await kalshi_client.get_positions()
-        market_positions = positions_response.get('market_positions', [])
-        
+        market_positions = await _read_all_positions(kalshi_client)
+
         print(f"📊 Found {len(market_positions)} positions on Kalshi")
-        
+
         # Get current database positions
         db_positions = await db_manager.get_open_positions()
         print(f"💾 Found {len(db_positions)} open positions in database")
-        
-        # Clear ALL existing positions from database to avoid conflicts
-        print("🔄 Deleting all existing database positions...")
-        import aiosqlite
-        async with aiosqlite.connect(db_manager.db_path) as db:
-            # Delete ALL positions to avoid unique constraint conflicts
-            await db.execute("DELETE FROM positions")
-            await db.commit()
-            print(f"   ✅ Deleted all old positions from database")
-        
-        # Add current Kalshi positions to database
-        active_positions = 0
+
+        # Build every new row before touching the table: any failure here deletes nothing
+        new_positions = []
         total_value = 0
-        
+
         for kalshi_pos in market_positions:
             ticker = kalshi_pos.get('ticker')
             position_count = signed_position(kalshi_pos)
+            if not math.isfinite(position_count):
+                raise RuntimeError(f"position row has an unreadable count: {kalshi_pos}")
+            if position_count == 0:
+                continue
+            if not ticker:
+                raise RuntimeError(f"position row has no ticker: {kalshi_pos}")
 
-            if ticker and position_count != 0:
-                try:
-                    # Get market data for pricing
-                    market_data = await kalshi_client.get_market(ticker)
-                    if market_data and 'market' in market_data:
-                        market_info = market_data['market']
+            # Get market data for pricing
+            market_data = await kalshi_client.get_market(ticker)
+            if not market_data or 'market' not in market_data:
+                raise RuntimeError(f"no market data for {ticker}")
+            market_info = market_data['market']
 
-                        # Determine side and current price
-                        side = 'YES' if position_count > 0 else 'NO'
-                        current_price = held_side_mid(market_info, position_count)
+            # Determine side and current price
+            side = 'YES' if position_count > 0 else 'NO'
+            current_price = held_side_mid(market_info, position_count)
 
-                        # Create database position
-                        position = Position(
-                            market_id=ticker,
-                            side=side,
-                            entry_price=current_price,  # Use current price as entry
-                            quantity=abs(position_count),
-                            timestamp=datetime.now(),
-                            rationale="Synced from Kalshi",
-                            confidence=0.5,  # Default confidence
-                            live=True,
-                            status='open',
-                            strategy='manual_sync'  # Mark as synced
-                        )
-                        
-                        # Add to database
-                        await db_manager.add_position(position)
-                        
-                        position_value = abs(position_count) * current_price
-                        total_value += position_value
-                        active_positions += 1
-                        
-                        print(f"   ➕ Added {ticker}: {side} {abs(position_count)} @ ${current_price:.2f} = ${position_value:.2f}")
-                        
-                except Exception as e:
-                    print(f"   ❌ Error syncing {ticker}: {e}")
-        
+            # The exit logic reads this as an entry price, so half a quote can't stand in
+            yes_bid, yes_ask, no_bid, no_ask = get_market_prices(market_info)
+            bid, ask = (yes_bid, yes_ask) if position_count > 0 else (no_bid, no_ask)
+            if not (bid > 0 and ask > 0 and 0 < current_price < 1):
+                raise RuntimeError(f"no two-sided {side} quote for {ticker}: bid {bid}, ask {ask}")
+
+            new_positions.append(Position(
+                market_id=ticker,
+                side=side,
+                entry_price=current_price,  # Use current price as entry
+                quantity=abs(position_count),
+                timestamp=datetime.now(),
+                rationale="Synced from Kalshi",
+                confidence=0.5,  # Default confidence
+                live=True,
+                status='open',
+                strategy='manual_sync'  # Mark as synced
+            ))
+
+            position_value = abs(position_count) * current_price
+            total_value += position_value
+
+            print(f"   ➕ {ticker}: {side} {abs(position_count)} @ ${current_price:.2f} = ${position_value:.2f}")
+
+        # One transaction: a failed insert rolls the delete back
+        print("🔄 Replacing all database positions...")
+        import aiosqlite
+        async with aiosqlite.connect(db_manager.db_path) as db:
+            await db.execute("DELETE FROM positions")
+            for position in new_positions:
+                row = asdict(position)
+                row['timestamp'] = position.timestamp.isoformat()
+                await db.execute("""
+                    INSERT OR REPLACE INTO positions (market_id, side, entry_price, quantity, timestamp, rationale, confidence, live, status, strategy, stop_loss_price, take_profit_price, max_hold_hours, target_confidence_change)
+                    VALUES (:market_id, :side, :entry_price, :quantity, :timestamp, :rationale, :confidence, :live, :status, :strategy, :stop_loss_price, :take_profit_price, :max_hold_hours, :target_confidence_change)
+                """, row)
+                await db.execute("UPDATE markets SET has_position = 1 WHERE market_id = ?", (position.market_id,))
+            await db.commit()
+
+        active_positions = len(new_positions)
+
         print(f"\n✅ Sync complete!")
         print(f"📊 Active positions: {active_positions}")
         print(f"💰 Total position value: ${total_value:.2f}")
@@ -164,8 +194,7 @@ async def verify_sync():
         await db_manager.initialize()
         
         # Get Kalshi positions
-        positions_response = await kalshi_client.get_positions()
-        kalshi_positions = positions_response.get('market_positions', [])
+        kalshi_positions = await _read_all_positions(kalshi_client)
         kalshi_active = len([p for p in kalshi_positions if signed_position(p) != 0])
         
         # Get database positions
@@ -205,8 +234,10 @@ async def main():
         print("📊 Refresh your dashboard to see updated data")
         print("🚀 Run: python launch_dashboard.py")
     else:
-        print("\n❌ Sync failed - check errors above")
+        print("\n❌ Sync failed, no database rows changed - check errors above")
+
+    return success
 
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    sys.exit(0 if asyncio.run(main()) else 1)

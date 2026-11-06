@@ -134,3 +134,48 @@ async def test_brief_is_read_only_passthrough(patched_client):
     ab.assert_awaited_once()
     assert out == {"equity": 123.45, "positions": []}
     patched_client.close.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# status reads every page of positions
+# ---------------------------------------------------------------------------
+
+def _event_row(event, exposure="1.00"):
+    return {"event_ticker": event, "event_exposure_dollars": exposure}
+
+
+async def test_status_follows_the_positions_cursor(patched_client):
+    pages = {
+        None: {"event_positions": [_event_row("P1")], "cursor": "next"},
+        "next": {"event_positions": [_event_row("P2", "2.50"), _event_row("FLAT", "0")], "cursor": ""},
+    }
+    patched_client.get_balance.return_value = {"balance": 1_000, "portfolio_value": 350}
+    patched_client.get_positions.side_effect = lambda cursor=None, **_: pages[cursor]
+
+    out = await server.status()
+
+    assert [p["event"] for p in out["active_positions"]] == ["P1", "P2"]
+    assert out["active_positions"][1]["exposure"] == 2.5
+    assert out["equity"] == 13.5
+
+
+async def test_status_raises_on_a_failed_later_page(patched_client):
+    def page(cursor=None, **_):
+        if cursor:
+            raise ConnectionError("down")
+        return {"event_positions": [_event_row("P1")], "cursor": "next"}
+
+    patched_client.get_balance.return_value = {"balance": 0, "portfolio_value": 0}
+    patched_client.get_positions.side_effect = page
+
+    with pytest.raises(ConnectionError):  # a partial list would read as the whole book
+        await server.status()
+    patched_client.close.assert_awaited_once()
+
+
+async def test_status_raises_on_an_unreadable_reply(patched_client):
+    patched_client.get_balance.return_value = {"balance": 0, "portfolio_value": 0}
+    patched_client.get_positions.return_value = {}
+
+    with pytest.raises(RuntimeError, match="malformed event_positions page"):
+        await server.status()

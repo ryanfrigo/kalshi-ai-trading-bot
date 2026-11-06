@@ -79,7 +79,8 @@ class Exchange:
             t = q.get("ticker", [None])[0]
             rows = [{"ticker": k, "position_fp": v} for k, v in self.positions.items()
                     if t is None or k == t]
-            return httpx.Response(200, json={"market_positions": rows, "cursor": ""})
+            return httpx.Response(200, json={"market_positions": rows, "event_positions": [],
+                                             "cursor": ""})
         if path.startswith("/trade-api/v2/markets/"):
             t = path.rsplit("/", 1)[-1]
             if t not in self.markets:

@@ -1101,6 +1101,7 @@ def cmd_status(args: argparse.Namespace) -> None:
 
     async def _status() -> None:
         from src.clients.kalshi_client import KalshiClient
+        from src.strategies.safe_compounder import _fetch_all_pages
 
         client = KalshiClient()
         try:
@@ -1113,8 +1114,8 @@ def cmd_status(args: argparse.Namespace) -> None:
             portfolio_value_cents = balance_resp.get("portfolio_value", 0)
             portfolio_value_usd = portfolio_value_cents / 100.0
 
-            positions_resp = await client.get_positions()
-            event_positions = positions_resp.get("event_positions", [])
+            # Every page: one page undercounts a large account and looks complete.
+            event_positions = await _fetch_all_pages(client.get_positions, "event_positions")
             active_positions = [
                 p for p in event_positions
                 if float(p.get("event_exposure_dollars", "0")) > 0

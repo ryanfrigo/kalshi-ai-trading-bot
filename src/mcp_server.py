@@ -182,11 +182,13 @@ async def status() -> Dict[str, Any]:
     """Portfolio balance, position value, and active event positions. Read-only.
     Mirrors ``cli.py status`` as structured JSON."""
 
+    from src.strategies.safe_compounder import _fetch_all_pages
+
     async def _run(c):
         bal = await c.get_balance()
         cash = (bal.get("balance", 0) or 0) / 100.0
         pv = (bal.get("portfolio_value", 0) or 0) / 100.0
-        positions = await c.get_positions()
+        positions = await _fetch_all_pages(c.get_positions, "event_positions")
         active = [
             {
                 "event": p.get("event_ticker"),
@@ -195,7 +197,7 @@ async def status() -> Dict[str, Any]:
                 "realized_pnl": float(p.get("realized_pnl_dollars", "0") or 0),
                 "fees": float(p.get("fees_paid_dollars", "0") or 0),
             }
-            for p in positions.get("event_positions", [])
+            for p in positions
             if float(p.get("event_exposure_dollars", "0") or 0) > 0
         ]
         return {
