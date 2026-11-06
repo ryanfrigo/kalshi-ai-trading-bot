@@ -173,6 +173,8 @@ class AutomatedPerformanceAnalyzer:
         # Get positions and balance
         kalshi_positions = await _fetch_all_pages(self.kalshi_client.get_positions, 'market_positions')
         balance_response = await self.kalshi_client.get_balance()
+        if 'balance' not in balance_response:
+            raise ValueError("Balance reply has no balance field")
 
         active_positions = [p for p in kalshi_positions if signed_position(p) != 0]
 

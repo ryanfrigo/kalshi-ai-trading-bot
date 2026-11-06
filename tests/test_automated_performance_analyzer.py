@@ -123,14 +123,20 @@ async def test_portfolio_counts_only_nonzero_positions_and_values_contracts_at_5
     assert len(data["positions_detail"]) == 2
 
 
-async def test_portfolio_with_an_empty_balance_reply_reads_zero(analyzer):
+async def test_portfolio_with_an_empty_balance_reply_raises(analyzer):
     class Empty(FakeKalshi):
         async def get_balance(self):
             return {}
 
     analyzer.kalshi_client = Empty()
+    with pytest.raises(ValueError, match="no balance field"):
+        await analyzer._gather_portfolio_data()
+
+
+async def test_portfolio_with_a_real_zero_balance_reads_zero(analyzer):
+    analyzer.kalshi_client = FakeKalshi(balance_cents=0)
     data = await analyzer._gather_portfolio_data()
-    assert data["active_positions"] == 0
+    assert data["available_cash"] == 0
     assert data["total_portfolio_value"] == 0
 
 
@@ -466,6 +472,23 @@ async def test_full_run_reraises_a_failed_read(analyzer):
     analyzer.kalshi_client = Down()
     with pytest.raises(ConnectionError):
         await analyzer.run_full_analysis()
+
+
+async def test_full_run_with_an_empty_balance_reply_makes_no_ai_call_and_saves_no_report(analyzer):
+    class Empty(FakeKalshi):
+        async def get_balance(self):
+            return {}
+
+    analyzer.kalshi_client = Empty()
+    with pytest.raises(ValueError, match="no balance field"):
+        await analyzer.run_full_analysis()
+    assert analyzer.xai_client.prompts == []
+    async with aiosqlite.connect(analyzer.db.db_path) as db:
+        cursor = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='analysis_reports'")
+        if await cursor.fetchone():
+            row = await (await db.execute("SELECT COUNT(*) FROM analysis_reports")).fetchone()
+            assert row[0] == 0
 
 
 # --- lifecycle ------------------------------------------------------------------------
