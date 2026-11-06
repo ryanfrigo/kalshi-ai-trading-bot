@@ -19,6 +19,7 @@ from typing import Dict, List
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.clients.kalshi_client import KalshiClient
+from src.strategies.safe_compounder import _fetch_all_pages
 from src.utils.database import DatabaseManager
 from src.utils.market_prices import held_side_mid, signed_position
 
@@ -34,11 +35,11 @@ async def get_portfolio_health() -> Dict:
         available_cash = balance_response.get('balance', 0) / 100
         
         # Get current positions
-        positions_response = await kalshi_client.get_positions()
-        market_positions = positions_response.get('market_positions', [])
+        market_positions = await _fetch_all_pages(kalshi_client.get_positions, 'market_positions')
         
         total_position_value = 0
         position_details = []
+        unvalued = []
         
         # Calculate value of each position
         for position in market_positions:
@@ -65,9 +66,14 @@ async def get_portfolio_health() -> Dict:
                             'value': position_value,
                             'title': market_info.get('title', ticker)
                         })
-                        
+                    else:
+                        unvalued.append(ticker)
+
                 except Exception as e:
+                    unvalued.append(ticker)
                     print(f"Warning: Could not value position {ticker}: {e}")
+            elif position_count != 0:
+                unvalued.append("(unnamed position)")
         
         # Calculate totals and metrics
         total_portfolio_value = available_cash + total_position_value
@@ -81,7 +87,8 @@ async def get_portfolio_health() -> Dict:
             'positions_count': len([p for p in position_details if p['contracts'] > 0]),
             'utilization_pct': utilization_pct,
             'cash_pct': cash_pct,
-            'position_details': position_details
+            'position_details': position_details,
+            'unvalued_tickers': unvalued
         }
         
     finally:
@@ -99,6 +106,8 @@ def print_portfolio_summary(health: Dict):
     # Financial overview
     print("💵 FINANCIAL OVERVIEW")
     print("-" * 30)
+    if health['unvalued_tickers']:
+        print(f"⚠️ PARTIAL: could not value {', '.join(health['unvalued_tickers'])}. Totals read low.")
     print(f"💰 Total Portfolio Value:  ${health['total_portfolio_value']:.2f}")
     print(f"💵 Available Cash:         ${health['available_cash']:.2f}")
     print(f"📊 Position Value:         ${health['position_value']:.2f}")

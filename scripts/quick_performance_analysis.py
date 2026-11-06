@@ -6,6 +6,7 @@ import json
 sys.path.append('.')
 
 from src.clients.kalshi_client import KalshiClient
+from src.strategies.safe_compounder import _fetch_all_pages
 from src.clients.xai_client import XAIClient
 from src.utils.database import DatabaseManager
 from src.utils.market_prices import signed_position
@@ -29,8 +30,7 @@ async def run_quick_analysis():
         print("\n📊 Gathering portfolio data...")
         
         # Kalshi positions
-        positions_response = await kalshi_client.get_positions()
-        kalshi_positions = positions_response.get('market_positions', [])
+        kalshi_positions = await _fetch_all_pages(kalshi_client.get_positions, 'market_positions')
         active_positions = [p for p in kalshi_positions if signed_position(p) != 0]
         
         # Balance
@@ -73,7 +73,17 @@ async def run_quick_analysis():
                 LIMIT 5
             """)
             market_patterns = await cursor.fetchall()
-        
+
+        # SUM and AVG are NULL on an empty ledger, and there is nothing to pay to analyze
+        if not trade_stats[0]:
+            print("\nNo completed trades in the ledger. Skipping the Grok4 analysis.")
+            return
+
+        # Capital utilization divides by this, and there is nothing to pay to analyze
+        if available_cash + sum(abs(signed_position(p)) for p in active_positions) * 0.50 == 0:
+            print("\nNo cash and no positions. Skipping the Grok4 analysis.")
+            return
+
         # 3. Prepare analysis prompt for Grok4
         analysis_prompt = f"""
 You are an expert quantitative trading analyst reviewing a Kalshi prediction market trading system.
@@ -99,17 +109,11 @@ POSITION DISTRIBUTION:
 TOP MARKET PATTERNS (by trade count):
 {json.dumps(market_patterns, indent=2)}
 
-KEY CONTEXT:
-- Recent positions are mostly unrealized P&L (haven't closed yet)
-- Earlier positions include profitable manual trades to learn from
-- System has 16 active positions with high capital utilization (91.4%)
-- Mix of automated and manual trading decisions
-
 ANALYSIS REQUEST:
 Provide a comprehensive performance analysis with specific recommendations:
 
 1. **Performance Diagnosis**: What are the main strengths and issues?
-2. **Capital Management**: Is the high capital utilization (91.4%) optimal?
+2. **Capital Management**: Is the current capital utilization appropriate?
 3. **Position Strategy**: Are we trading appropriate market types?
 4. **Risk Assessment**: What are the key risks with current approach?
 5. **Improvement Recommendations**: 3-5 specific actionable improvements
@@ -171,13 +175,6 @@ Focus on actionable insights that can immediately improve the trading system.
             
             if len(active_positions) > 10:
                 print("⚠️ HIGH: Many active positions - ensure proper risk management")
-            
-            print("\nRECOMMENDATIONS:")
-            print("1. [CRITICAL] Review confidence thresholds - current results suggest overconfidence")
-            print("2. [HIGH] Implement capital preservation mode to rebuild cash reserves")
-            print("3. [MEDIUM] Analyze successful manual trades to improve automated strategy")
-            print("4. [MEDIUM] Consider reducing position sizes until win rate improves")
-            print("5. [LOW] Enable live trading only after demonstrating consistent profitability")
         
     finally:
         await kalshi_client.close()

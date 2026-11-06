@@ -4,6 +4,7 @@ import asyncio
 import sys
 sys.path.append('.')
 from src.clients.kalshi_client import KalshiClient
+from src.strategies.safe_compounder import _fetch_all_pages
 from src.utils.database import DatabaseManager
 from src.clients.xai_client import XAIClient
 from src.utils.market_prices import held_side_mid, signed_position
@@ -26,8 +27,7 @@ async def comprehensive_analysis():
         print("-" * 40)
         
         # Kalshi actual positions
-        positions_response = await kalshi_client.get_positions()
-        kalshi_positions = positions_response.get('market_positions', [])
+        kalshi_positions = await _fetch_all_pages(kalshi_client.get_positions, 'market_positions')
         
         non_zero_positions = [p for p in kalshi_positions if signed_position(p) != 0]
         total_contracts = sum(abs(signed_position(p)) for p in non_zero_positions)
@@ -39,7 +39,7 @@ async def comprehensive_analysis():
             print("\nTop Positions:")
             sorted_positions = sorted(non_zero_positions, key=lambda x: abs(signed_position(x)), reverse=True)
             for i, pos in enumerate(sorted_positions[:5]):
-                ticker = pos.get('ticker', 'Unknown')
+                ticker = pos.get('ticker') or '(unnamed position)'
                 position = signed_position(pos)
                 direction = "LONG" if position > 0 else "SHORT"
                 print(f"  {i+1}. {ticker[:25]}: {direction} {abs(position)} contracts")
@@ -83,24 +83,32 @@ async def comprehensive_analysis():
         
         # Calculate total position value from Kalshi
         total_position_value = 0
+        unvalued = []
         for pos in kalshi_positions:
             quantity = signed_position(pos)
             if quantity != 0:
                 ticker = pos.get('ticker')
+                if not ticker:
+                    unvalued.append("(unnamed position)")
+                    continue
                 try:
                     market_data = await kalshi_client.get_market(ticker)
-                    market_info = market_data.get('market', {})
+                    market_info = market_data['market']
                     current_price = held_side_mid(market_info, quantity)
                     position_value = abs(quantity) * current_price
                     total_position_value += position_value
-                except:
-                    # Fallback estimate
-                    total_position_value += abs(quantity) * 0.50
+                except Exception:
+                    unvalued.append(ticker)
         
         total_portfolio_value = available_cash + total_position_value
         print(f"Position Value: ${total_position_value:.2f}")
         print(f"Total Portfolio: ${total_portfolio_value:.2f}")
-        print(f"Capital Utilization: {(total_position_value/total_portfolio_value)*100:.1f}%")
+        if total_portfolio_value:
+            print(f"Capital Utilization: {(total_position_value/total_portfolio_value)*100:.1f}%")
+        else:
+            print("Capital Utilization: n/a (no cash and no valued positions)")
+        if unvalued:
+            print(f"⚠️ PARTIAL: could not value {', '.join(unvalued)}. Totals read low.")
         
         # 4. RECENT TRADING ACTIVITY
         print(f"\n📈 RECENT TRADING ACTIVITY")
@@ -139,45 +147,37 @@ async def comprehensive_analysis():
             # Find corresponding Kalshi position
             kalshi_pos = next((p for p in kalshi_positions if p.get('ticker') == market_id), None)
             
+            expected_quantity = quantity if side == "YES" else -quantity
+
             if kalshi_pos:
                 kalshi_quantity = signed_position(kalshi_pos)
-                expected_quantity = quantity if side == "YES" else -quantity
                 
                 if kalshi_quantity != expected_quantity:
                     discrepancies += 1
                     print(f"⚠️  {market_id}: DB={expected_quantity}, Kalshi={kalshi_quantity}")
+            elif live == 1:
+                discrepancies += 1
+                print(f"⚠️  {market_id}: DB={expected_quantity}, Kalshi=no position")
         
         if discrepancies == 0:
             print("✅ All database positions match Kalshi positions")
         else:
             print(f"❌ Found {discrepancies} position discrepancies")
         
-        # 6. TRADING RECOMMENDATIONS
-        print(f"\n🎯 TRADING SYSTEM ASSESSMENT")
+        # 6. TRADE HISTORY
+        print(f"\n🎯 TRADE HISTORY")
         print("-" * 40)
         
-        if len(non_zero_positions) == 0:
-            print("🔍 Status: NO ACTIVE POSITIONS - System may be too conservative")
-            print("💡 Suggestion: Check eligibility filters and confidence thresholds")
-        elif len(non_zero_positions) < 5:
-            print("📊 Status: LOW ACTIVITY - Conservative trading approach")
-            print("💡 Suggestion: Consider expanding eligibility criteria")
-        else:
-            print("🚀 Status: ACTIVE TRADING - Good position diversification")
-            
         # Calculate win rate if we have trade logs
         try:
             async with aiosqlite.connect(db.db_path) as database:
-                cursor = await database.execute("SELECT AVG(CASE WHEN pnl > 0 THEN 1.0 ELSE 0.0 END) FROM trade_logs WHERE pnl IS NOT NULL")
-                win_rate_result = await cursor.fetchone()
-                win_rate = win_rate_result[0] if win_rate_result and win_rate_result[0] is not None else None
+                cursor = await database.execute("SELECT AVG(CASE WHEN pnl > 0 THEN 1.0 ELSE 0.0 END), COUNT(*) FROM trade_logs WHERE pnl IS NOT NULL")
+                win_rate, settled = await cursor.fetchone()
                 
                 if win_rate is not None:
-                    print(f"📈 Historical Win Rate: {win_rate:.1%}")
-                    if win_rate < 0.4:
-                        print("⚠️  Low win rate - consider adjusting strategy")
-                    elif win_rate > 0.6:
-                        print("✅ Strong win rate - system performing well")
+                    print(f"📈 Historical Win Rate: {win_rate:.1%} (settled trades: {settled})")
+                else:
+                    print("No settled trades yet")
                         
         except Exception as e:
             print("📊 Win rate data not available yet")
