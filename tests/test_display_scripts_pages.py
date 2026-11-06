@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.utils.database import DatabaseManager, TradeLog
+from src.utils.database import DatabaseManager, TradeLog, Position
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -345,3 +345,96 @@ def test_dashboard_main_calls_the_warning_with_the_health_data(dashboard, monkey
     with pytest.raises(Reached):
         mod.main()
     assert seen == [health]
+
+
+EMPTY = {None: {"market_positions": [], "cursor": ""}}
+
+
+async def _analysis(script, pages, monkeypatch=None, client=None, balance=None, rows=(), trades=()):
+    mod, fake = script("scripts/performance_analysis.py", pages)
+    if client:
+        monkeypatch.setattr(mod, "KalshiClient", lambda: client)
+        fake = client
+    if balance is not None:
+        fake.get_balance = AsyncMock(return_value={"balance": balance})
+    db = mod.DatabaseManager()
+    await db.initialize()
+    now = datetime.now()
+    for market_id, side, quantity, live in rows:
+        await db.add_position(Position(market_id=market_id, side=side, entry_price=0.5, quantity=quantity,
+                                       timestamp=now, rationale="t", confidence=0.5, live=live,
+                                       status="open", strategy="s"))
+    for pnl in trades:
+        await db.add_trade_log(TradeLog(market_id="OLD", side="YES", entry_price=0.5, exit_price=0.6,
+                                        quantity=1, pnl=pnl, entry_timestamp=now, exit_timestamp=now,
+                                        rationale="t", strategy="s"))
+    await mod.comprehensive_analysis()
+    return fake
+
+
+async def test_performance_analysis_survives_no_capital(script, capsys):
+    await _analysis(script, EMPTY, balance=0)
+    assert "Capital Utilization: n/a" in capsys.readouterr().out
+
+
+async def test_performance_analysis_still_shows_utilization_with_capital(script, capsys):
+    await _analysis(script, EMPTY)
+    assert "Capital Utilization: 0.0%" in capsys.readouterr().out
+
+
+async def test_performance_analysis_names_what_it_could_not_value(script, monkeypatch, capsys):
+    await _analysis(script, TWO_PAGES, monkeypatch, client=FakeBadMarket(THREE))
+    out = capsys.readouterr().out
+    assert "PARTIAL: could not value A, B" in out
+    assert "Position Value: $2.10" in out
+    assert "Total Portfolio: $102.10" in out
+
+
+async def test_performance_analysis_names_a_position_with_no_ticker(script, capsys):
+    await _analysis(script, NO_TICKER)
+    out = capsys.readouterr().out
+    assert "PARTIAL: could not value (unnamed position), (unnamed position)" in out
+    assert "Position Value: $2.10" in out
+
+
+async def test_performance_analysis_has_no_partial_mark_when_all_valued(script, capsys):
+    await _analysis(script, TWO_PAGES)
+    assert "PARTIAL" not in capsys.readouterr().out
+
+
+async def test_performance_analysis_flags_a_live_row_with_no_kalshi_position(script, capsys):
+    await _analysis(script, EMPTY, rows=[("GONE", "YES", 5, True)])
+    out = capsys.readouterr().out
+    assert "GONE: DB=5, Kalshi=no position" in out
+    assert "Found 1 position discrepancies" in out
+    assert "All database positions match" not in out
+
+
+async def test_performance_analysis_leaves_out_a_paper_row_with_no_kalshi_position(script, capsys):
+    await _analysis(script, EMPTY, rows=[("PAPER", "YES", 5, False)])
+    assert "All database positions match" in capsys.readouterr().out
+
+
+async def test_performance_analysis_passes_a_row_that_matches(script, capsys):
+    await _analysis(script, TWO_PAGES, rows=[("A", "YES", 5, True), ("B", "NO", 3, True)])
+    assert "All database positions match" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("pages", [EMPTY, TWO_PAGES])
+@pytest.mark.parametrize("pnl", [0.1, -0.1])
+async def test_performance_analysis_prints_no_verdicts(script, capsys, pages, pnl):
+    await _analysis(script, pages, trades=[pnl])
+    out = capsys.readouterr().out
+    for verdict in ("conservative", "Conservative", "diversification", "Suggestion",
+                    "performing well", "consider adjusting"):
+        assert verdict not in out
+
+
+async def test_performance_analysis_prints_the_win_rate_with_its_count(script, capsys):
+    await _analysis(script, EMPTY, trades=[0.1, -0.1, 0.2, -0.2])
+    assert "Historical Win Rate: 50.0% (settled trades: 4)" in capsys.readouterr().out
+
+
+async def test_performance_analysis_says_when_nothing_has_settled(script, capsys):
+    await _analysis(script, EMPTY)
+    assert "No settled trades yet" in capsys.readouterr().out
