@@ -743,6 +743,11 @@ async def place_profit_taking_orders(
                     logger.warning(f"Could not get market data for {position.market_id}")
                     continue
                 
+                if str(market_data.get('status') or '').strip().lower() != 'active':
+                    logger.info(f"Skipping {position.market_id}: market status "
+                                f"{market_data.get('status')!r} is not active; no exit order.")
+                    continue
+                
                 # Price the held side at its bid, what a sell can get. v2 sends
                 # *_dollars fields only; there is no yes_price/no_price key.
                 yes_bid, _, no_bid, _ = get_market_prices(market_data)
@@ -836,6 +841,11 @@ async def place_stop_loss_orders(
                 
                 if not market_data:
                     logger.warning(f"Could not get market data for {position.market_id}")
+                    continue
+                
+                if str(market_data.get('status') or '').strip().lower() != 'active':
+                    logger.info(f"Skipping {position.market_id}: market status "
+                                f"{market_data.get('status')!r} is not active; no exit order.")
                     continue
                 
                 # Price the held side at its bid, what a sell can get. v2 sends
