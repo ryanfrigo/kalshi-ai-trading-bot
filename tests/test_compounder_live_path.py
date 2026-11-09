@@ -514,7 +514,7 @@ class TClient:
 def _guarded(tmp_path, client, gov=None, **kw):
     from src.agent.toolbelt import place_guarded_order
     args = dict(ticker="KXT", side="no", count=10, price=0.90, est_prob=0.95, governor=gov or _Gov(),
-                journal_path=str(tmp_path / "j.jsonl"), policy_path=str(tmp_path / "none.json"))
+                dry=False, journal_path=str(tmp_path / "j.jsonl"), policy_path=str(tmp_path / "none.json"))
     args.update(kw)
     return asyncio.run(place_guarded_order(client, **args))
 

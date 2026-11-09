@@ -9,8 +9,23 @@
 """
 from __future__ import annotations
 
+import math
+import re
 import uuid
 from typing import Any, Dict, Optional, Tuple
+
+
+_TICKER_RE = re.compile(r"[A-Z0-9][A-Z0-9._-]{0,99}")
+
+
+def _normalize_ticker(ticker) -> Optional[str]:
+    """``ticker`` stripped and upper-cased if it is then a plain Kalshi ticker, else
+    None. It is spliced into request paths, so URL syntax (/ ? # %) must never
+    get through."""
+    if not isinstance(ticker, str):
+        return None
+    t = ticker.strip().upper()
+    return t if _TICKER_RE.fullmatch(t) else None
 
 
 def cap_count(
@@ -129,7 +144,7 @@ async def place_guarded_order(
     category: str = "",
     governor=None,
     max_position_pct: float = 0.10,
-    dry: bool = False,
+    dry: bool = True,
     journal_path: Optional[str] = None,
     policy_path: Optional[str] = None,
     override_policy: bool = False,
@@ -159,7 +174,21 @@ async def place_guarded_order(
     from src.agent.policy import load_policy, apply_policy, DEFAULT_POLICY_PATH
     from src.agent.settle import series_category
 
-    side = side.lower()
+    from src.config.settings import settings
+
+    # The caller may only tighten the configured per-position cap, never widen it.
+    cap_pct = settings.trading.max_position_size_pct / 100.0
+    max_position_pct = float(max_position_pct)
+    if not max_position_pct <= cap_pct:  # also catches NaN
+        max_position_pct = cap_pct
+
+    clean = _normalize_ticker(ticker)
+    if clean is None:
+        return {"ok": False, "reason": f"invalid ticker {ticker!r}"}
+    ticker = clean
+    side = side.lower() if isinstance(side, str) else ""
+    if side not in ("yes", "no"):
+        return {"ok": False, "reason": "side must be 'yes' or 'no'"}
     gov = governor or RiskGovernor(kalshi_client=kalshi_client)
     decision = await gov.check()
     if decision.halted:
@@ -272,24 +301,41 @@ async def close_position(
     count: Optional[int] = None,
     price: Optional[float] = None,
     rationale: str = "close position",
-    dry: bool = False,
+    dry: bool = True,
     journal_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Sell (close) an existing position with a marketable limit at the bid.
 
-    Reads the live holding, sells the side held (capped to held count), at the
-    current bid for that side (or `price` if given). Journals the close. Selling
-    reduces risk, so it is allowed even when the governor is halted.
+    Reads the live holding, sells the side held (capped to held count net of our
+    resting orders; nothing if those can't be read), at the current bid for that
+    side (or `price` if given). Journals the close. Under a governor halt,
+    ``KalshiClient.place_order`` blocks the sell on MANUAL_HALT and allows a
+    reduce-only IOC sell up to held on DAILY_LOSS / DRAWDOWN.
     """
     from src.utils.market_prices import get_market_prices
     from src.agent.journal import make_decision_record, append_decision, DEFAULT_JOURNAL_PATH
 
+    clean = _normalize_ticker(ticker)
+    if clean is None:
+        return {"ok": False, "reason": f"invalid ticker {ticker!r}", "ticker": ticker}
+    ticker = clean
     pos = await kalshi_client.get_positions(ticker=ticker)
     mine = [p for p in pos.get("market_positions", []) if p.get("ticker") == ticker]
     fp = float(mine[0].get("position_fp", "0")) if mine else 0.0
     side, n = resolve_sell(fp, count)
     if not side or n < 1:
         return {"ok": False, "reason": "no position to close", "ticker": ticker}
+
+    # Net our resting orders against the holding (same rules as the exit jobs),
+    # so a repeated close cannot sell past the position. Unreadable -> sell nothing.
+    from src.jobs.execute import _sellable_contracts
+    sellable = await _sellable_contracts(kalshi_client, ticker, side)
+    if sellable is None:
+        return {"ok": False, "reason": "sellable_unreadable", "ticker": ticker, "side": side}
+    n = min(n, int(math.floor(sellable + 1e-9)))
+    if n < 1:
+        return {"ok": False, "reason": "nothing sellable (resting orders cover the holding)",
+                "ticker": ticker, "side": side}
 
     m = (await kalshi_client.get_market(ticker)).get("market", {})
     yb, ya, nb, na = get_market_prices(m)
