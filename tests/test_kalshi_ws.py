@@ -526,16 +526,327 @@ async def test_unexpected_exception_in_loop_triggers_reconnect(ws, transport, de
     assert len(transport.calls) == 2
 
 
-# ----------------------------------------------------------------- known gaps
+# ------------------------------------------------- sequence gaps / resubscribe
 
 
-async def test_no_sequence_gap_tracking_exists():
-    """Pin the absence: orderbook deltas carry a ``seq`` on Kalshi, but the
-    client neither tracks nor resyncs on gaps. If gap handling is added,
-    replace this with real tests."""
-    import inspect
+def _ob(kind, sid, seq):
+    return json.dumps({"type": kind, "sid": sid, "seq": seq, "msg": {}})
 
-    assert "seq" not in inspect.getsource(kalshi_ws.KalshiWebSocket)
+
+async def _collecting(ws):
+    got = []
+
+    async def cb(m):
+        got.append((m["sid"], m["seq"], m["type"]))
+
+    ws.on_orderbook(cb)
+    return got
+
+
+async def test_in_order_sequence_passes_through_without_resync(ws, transport):
+    sock = await _connected(ws, transport)
+    got = await _collecting(ws)
+    for kind, seq in [("orderbook_snapshot", 1), ("orderbook_delta", 2), ("orderbook_delta", 3)]:
+        await ws._dispatch(_ob(kind, 7, seq))
+    assert [g[1] for g in got] == [1, 2, 3]
+    assert sock.sent == []
+
+
+async def test_sequence_gap_drops_message_and_requests_snapshot(ws, transport):
+    sock = await _connected(ws, transport)
+    got = await _collecting(ws)
+    await ws._dispatch(_ob("orderbook_snapshot", 7, 1))
+    await ws._dispatch(_ob("orderbook_delta", 7, 4))  # 2, 3 missing
+    assert [g[1] for g in got] == [1]
+    assert len(sock.sent) == 1
+    assert sock.sent[0]["cmd"] == "update_subscription"
+    assert sock.sent[0]["params"] == {"sid": 7, "action": "get_snapshot"}
+
+
+async def test_deltas_stay_dropped_until_snapshot_then_resume(ws, transport):
+    sock = await _connected(ws, transport)
+    got = await _collecting(ws)
+    await ws._dispatch(_ob("orderbook_snapshot", 7, 1))
+    await ws._dispatch(_ob("orderbook_delta", 7, 4))
+    await ws._dispatch(_ob("orderbook_delta", 7, 5))  # still stale: no 2nd request
+    assert len(sock.sent) == 1
+    await ws._dispatch(_ob("orderbook_snapshot", 7, 6))
+    await ws._dispatch(_ob("orderbook_delta", 7, 7))
+    assert [g[1] for g in got] == [1, 6, 7]
+
+
+async def test_gap_warning_is_logged(ws, transport, monkeypatch):
+    from unittest.mock import MagicMock
+
+    await _connected(ws, transport)
+    await ws._dispatch(_ob("orderbook_snapshot", 7, 1))
+    log = MagicMock()
+    monkeypatch.setattr(type(ws), "logger", log, raising=False)
+    await ws._dispatch(_ob("orderbook_delta", 7, 9))
+    assert any(c.args and "gap" in c.args[0].lower() for c in log.warning.call_args_list)
+
+
+async def test_duplicate_and_old_seq_are_dropped(ws, transport):
+    sock = await _connected(ws, transport)
+    got = await _collecting(ws)
+    for seq in (1, 2, 2, 1, 3):
+        await ws._dispatch(_ob("orderbook_delta", 7, seq))
+    assert [g[1] for g in got] == [1, 2, 3]
+    assert sock.sent == []  # duplicates are not gaps
+
+
+async def test_seq_is_tracked_per_sid(ws, transport):
+    sock = await _connected(ws, transport)
+    got = await _collecting(ws)
+    for sid, seq in [(1, 1), (2, 5), (1, 2), (2, 6), (1, 3)]:
+        await ws._dispatch(_ob("orderbook_delta", sid, seq))
+    assert got == [(1, 1, "orderbook_delta"), (2, 5, "orderbook_delta"), (1, 2, "orderbook_delta"),
+                   (2, 6, "orderbook_delta"), (1, 3, "orderbook_delta")]
+    assert sock.sent == []
+    await ws._dispatch(_ob("orderbook_delta", 2, 9))  # gap on sid 2 only
+    assert sock.sent[-1]["params"]["sid"] == 2
+    await ws._dispatch(_ob("orderbook_delta", 1, 4))  # sid 1 unaffected
+    assert got[-1] == (1, 4, "orderbook_delta")
+
+
+async def test_failed_snapshot_request_is_retried_on_next_message(ws, transport):
+    sock = await _connected(ws, transport)
+    got = await _collecting(ws)
+    await ws._dispatch(_ob("orderbook_delta", 7, 1))
+    real_send, calls = sock.send, {"n": 0}
+
+    async def flaky(data):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("send failed")
+        await real_send(data)
+
+    sock.send = flaky
+    await ws._dispatch(_ob("orderbook_delta", 7, 5))
+    await ws._dispatch(_ob("orderbook_delta", 7, 6))
+    assert [g[1] for g in got] == [1]
+    assert len(sock.sent) == 1 and sock.sent[0]["params"]["action"] == "get_snapshot"
+
+
+async def test_messages_without_sid_or_seq_pass_through(ws, transport):
+    await _connected(ws, transport)
+    got = []
+
+    async def cb(m):
+        got.append(m)
+
+    ws.on_ticker(cb)
+    for m in ({"type": "ticker"}, {"type": "ticker", "sid": 1}, {"type": "ticker", "sid": 1, "seq": "x"},
+              {"type": "ticker", "sid": 1, "seq": True}):
+        await ws._dispatch(json.dumps(m))
+    assert len(got) == 4
+
+
+async def test_reconnect_resets_sequence_state(ws, transport, delays):
+    first = await _connected(ws, transport, FakeWS())
+    second = FakeWS([_ob("orderbook_delta", 1, 1)])  # new connection restarts seq at 1
+    transport.sockets.append(second)
+    got = await _collecting(ws)
+
+    async def cb(m):
+        await ws.close()
+
+    await ws._dispatch(_ob("orderbook_delta", 1, 5))
+    ws.on_orderbook(cb)
+    first.inbox.put_nowait(_closed())
+    await asyncio.wait_for(ws.run(), 5)
+    assert [g[1] for g in got] == [5, 1]
+    assert second.sent == []
+
+
+async def test_reconnect_restores_exactly_the_prior_subscriptions(ws, transport, delays):
+    first = await _connected(ws, transport, FakeWS())
+    await ws.subscribe(["A"], [CHANNEL_TICKER])
+    await ws.subscribe(["B"], [CHANNEL_TRADE, CHANNEL_ORDERBOOK_DELTA])
+    second = FakeWS([json.dumps({"type": "ticker"})])
+    transport.sockets.append(second)
+
+    async def cb(m):
+        await ws.close()
+
+    ws.on_ticker(cb)
+    first.inbox.put_nowait(_closed())
+    await asyncio.wait_for(ws.run(), 5)
+
+    restored = {(c, t) for m in second.sent for c in m["params"]["channels"] for t in m["params"]["market_tickers"]}
+    assert restored == {(CHANNEL_TICKER, "A"), (CHANNEL_TRADE, "B"), (CHANNEL_ORDERBOOK_DELTA, "B")}
+    assert all(m["cmd"] == "subscribe" for m in second.sent)
+
+
+async def test_reconnect_does_not_restore_unsubscribed_tickers(ws, transport, delays):
+    first = await _connected(ws, transport, FakeWS())
+    await ws.subscribe(["A", "B"], [CHANNEL_TICKER])
+    await ws.unsubscribe(["A"])
+    second = FakeWS([json.dumps({"type": "ticker"})])
+    transport.sockets.append(second)
+
+    async def cb(m):
+        await ws.close()
+
+    ws.on_ticker(cb)
+    first.inbox.put_nowait(_closed())
+    await asyncio.wait_for(ws.run(), 5)
+    assert [m["params"]["market_tickers"] for m in second.sent] == [["B"]]
+
+
+def _ack(msg_id, channel, sid):
+    return json.dumps({"id": msg_id, "type": "subscribed", "msg": {"channel": channel, "sid": sid}})
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    t = {"now": 1000.0}
+    monkeypatch.setattr(kalshi_ws, "_now", lambda: t["now"])
+    return t
+
+
+async def _gapped(ws, transport, sid=7):
+    """Connected, subscribed to A on orderbook_delta (acked as ``sid``), then a gap."""
+    sock = await _connected(ws, transport)
+    await ws.subscribe(["A"], [CHANNEL_ORDERBOOK_DELTA])
+    await ws._dispatch(_ack(sock.sent[-1]["id"], CHANNEL_ORDERBOOK_DELTA, sid))
+    await ws._dispatch(_ob("orderbook_snapshot", sid, 1))
+    await ws._dispatch(_ob("orderbook_delta", sid, 5))  # gap -> get_snapshot sent
+    return sock
+
+
+async def test_snapshot_in_time_means_no_fallback(ws, transport, clock):
+    sock = await _gapped(ws, transport)
+    clock["now"] += 4.9
+    await ws._dispatch(_ob("orderbook_snapshot", 7, 6))
+    clock["now"] += 60
+    await ws._dispatch(_ob("orderbook_delta", 7, 7))
+    await ws._check_snapshot_timeouts()
+    assert [m["cmd"] for m in sock.sent[1:]] == ["update_subscription"]
+
+
+async def test_snapshot_timeout_unsubscribes_then_resubscribes_and_tracks_new_sid(ws, transport, clock):
+    sock = await _gapped(ws, transport)
+    got = await _collecting(ws)
+    clock["now"] += 5.0
+    await ws._dispatch(_ob("orderbook_delta", 7, 6))  # message for the sid triggers the check
+    assert sock.sent[-1] == {"id": sock.sent[-1]["id"], "cmd": "unsubscribe", "params": {"sids": [7]}}
+    n = len(sock.sent)
+    await ws._dispatch(_ob("orderbook_delta", 7, 7))  # old sid stays dropped meanwhile
+    assert len(sock.sent) == n and got == []
+    # docs: wait for 'unsubscribed', then subscribe again
+    await ws._dispatch(json.dumps({"type": "unsubscribed", "sid": 7, "seq": 8}))
+    resub = sock.sent[-1]
+    assert resub["cmd"] == "subscribe"
+    assert resub["params"] == {"channels": [CHANNEL_ORDERBOOK_DELTA], "market_tickers": ["A"]}
+    # new sid 9 gets its own baseline
+    await ws._dispatch(_ack(resub["id"], CHANNEL_ORDERBOOK_DELTA, 9))
+    await ws._dispatch(_ob("orderbook_snapshot", 9, 1))
+    await ws._dispatch(_ob("orderbook_delta", 9, 2))
+    assert [(g[0], g[1]) for g in got] == [(9, 1), (9, 2)]
+    await ws._dispatch(_ob("orderbook_delta", 9, 5))  # gap on the NEW sid is detected
+    assert sock.sent[-1]["params"] == {"sid": 9, "action": "get_snapshot"}
+
+
+async def test_fallback_fires_only_once_per_gap(ws, transport, clock):
+    sock = await _gapped(ws, transport)
+    clock["now"] += 6
+    for seq in (6, 7, 8):
+        await ws._dispatch(_ob("orderbook_delta", 7, seq))
+    await ws._check_snapshot_timeouts()
+    clock["now"] += 1
+    await ws._check_snapshot_timeouts()
+    assert [m["cmd"] for m in sock.sent].count("unsubscribe") == 1
+
+
+async def test_no_repeat_fallback_after_resubscribe_completes(ws, transport, clock):
+    sock = await _gapped(ws, transport)
+    clock["now"] += 5
+    await ws._check_snapshot_timeouts()
+    await ws._dispatch(json.dumps({"type": "unsubscribed", "sid": 7, "seq": 8}))
+    n = len(sock.sent)
+    assert ws._awaiting_snapshot == {}
+    clock["now"] += 30
+    await ws._check_snapshot_timeouts()
+    await ws._check_snapshot_timeouts()
+    assert len(sock.sent) == n
+
+
+async def test_missing_unsubscribed_ack_resubscribes_after_timeout(ws, transport, clock):
+    sock = await _gapped(ws, transport)
+    clock["now"] += 5
+    await ws._check_snapshot_timeouts()
+    assert sock.sent[-1]["cmd"] == "unsubscribe"
+    clock["now"] += 5
+    await ws._check_snapshot_timeouts()
+    assert sock.sent[-1]["cmd"] == "subscribe"
+
+
+async def test_run_loop_checks_timeout_without_traffic(ws, transport, clock, delays):
+    sock = await _gapped(ws, transport)
+    clock["now"] += 6
+    task = asyncio.create_task(ws.run())
+    await _REAL_SLEEP(0.05)
+    assert sock.sent[-1]["cmd"] == "unsubscribe"
+    await ws.close()
+    await asyncio.wait_for(task, 5)
+
+
+async def test_subscribed_acks_map_channels_to_sids(ws, transport):
+    sock = await _connected(ws, transport)
+    await ws.subscribe(["A", "B"], [CHANNEL_TICKER, CHANNEL_TRADE])
+    mid = sock.sent[-1]["id"]
+    await ws._dispatch(_ack(mid, CHANNEL_TICKER, 3))
+    await ws._dispatch(_ack(mid, CHANNEL_TRADE, 4))
+    assert ws._sid_info == {3: (CHANNEL_TICKER, {"A", "B"}), 4: (CHANNEL_TRADE, {"A", "B"})}
+    assert ws._pending_acks == {}
+
+
+async def test_unsubscribe_all_tickers_of_a_sid_sends_sids(ws, transport):
+    sock = await _connected(ws, transport)
+    await ws.subscribe(["A", "B"], [CHANNEL_TICKER, CHANNEL_TRADE])
+    mid = sock.sent[-1]["id"]
+    await ws._dispatch(_ack(mid, CHANNEL_TICKER, 3))
+    await ws._dispatch(_ack(mid, CHANNEL_TRADE, 4))
+    await ws.unsubscribe(["A", "B"])
+    msgs = sock.sent[1:]
+    assert len(msgs) == 1
+    assert msgs[0]["cmd"] == "unsubscribe" and msgs[0]["params"] == {"sids": [3, 4]}
+    assert ws._sid_info == {}
+
+
+async def test_unsubscribe_some_tickers_trims_instead_of_dropping_the_sid(ws, transport):
+    sock = await _connected(ws, transport)
+    await ws.subscribe(["A", "B"], [CHANNEL_TICKER])
+    await ws._dispatch(_ack(sock.sent[-1]["id"], CHANNEL_TICKER, 3))
+    await ws.unsubscribe(["A"])
+    msg = sock.sent[-1]
+    assert msg["cmd"] == "update_subscription"
+    assert msg["params"] == {"sid": 3, "market_tickers": ["A"], "action": "delete_markets"}
+    assert ws._sid_info[3] == (CHANNEL_TICKER, {"B"})
+
+
+async def test_unsubscribe_unknown_sid_keeps_legacy_message_and_logs(ws, transport, monkeypatch):
+    from unittest.mock import MagicMock
+
+    sock = await _connected(ws, transport)
+    await ws.subscribe(["A", "B"], [CHANNEL_TICKER])  # never acked
+    log = MagicMock()
+    monkeypatch.setattr(type(ws), "logger", log, raising=False)
+    await ws.unsubscribe(["A"])
+    assert sock.sent[-1]["params"] == {"channels": [CHANNEL_TICKER], "market_tickers": ["A"]}
+    assert log.warning.called
+
+
+async def test_unsubscribe_mixes_known_and_unknown(ws, transport):
+    sock = await _connected(ws, transport)
+    await ws.subscribe(["A"], [CHANNEL_TICKER])
+    await ws._dispatch(_ack(sock.sent[-1]["id"], CHANNEL_TICKER, 3))
+    await ws.subscribe(["B"], [CHANNEL_TRADE])  # unacked
+    await ws.unsubscribe(["A", "B"])
+    cmds = [(m["cmd"], m["params"]) for m in sock.sent[2:]]
+    assert cmds[0] == ("unsubscribe", {"sids": [3]})
+    assert cmds[1][0] == "unsubscribe" and cmds[1][1]["market_tickers"] == ["B"]
 
 
 async def test_valid_json_non_object_frame_does_not_drop_the_connection(ws, transport, delays):
