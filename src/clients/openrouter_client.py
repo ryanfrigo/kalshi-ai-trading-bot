@@ -6,6 +6,7 @@ Gemini, DeepSeek, and other frontier models for market analysis.
 
 import asyncio
 import json
+import math
 import os
 import pickle
 import re
@@ -25,6 +26,10 @@ from src.utils.logging_setup import TradingLoggerMixin, log_error_with_context
 # ---------------------------------------------------------------------------
 # Model registry: pricing per 1K tokens (USD)
 # ---------------------------------------------------------------------------
+
+class _BudgetExhausted(Exception):
+    """Raised mid-call when the daily AI budget is spent; no further request may be made."""
+
 
 MODEL_PRICING: Dict[str, Dict[str, float]] = {
     "anthropic/claude-sonnet-4": {
@@ -310,6 +315,43 @@ class OpenRouterClient(TradingLoggerMixin):
         output_cost = (output_tokens / 1000.0) * pricing["output_per_1k"]
         return input_cost + output_cost
 
+    def _estimate_billed_tokens(
+        self, messages: List[Dict[str, str]], max_tokens: int
+    ) -> Tuple[int, int]:
+        """Conservative token estimate when the provider reports no usage:
+        prompt chars / 4 for input, the full max_tokens for output."""
+        prompt_chars = sum(len(str(m.get("content", ""))) for m in messages)
+        return max(1, prompt_chars // 4), int(max_tokens)
+
+    def _billed_usage(
+        self, model: str, response: Any, messages: List[Dict[str, str]], max_tokens: int
+    ) -> Tuple[int, int]:
+        """Token counts for a reply that reached the API. Falls back to the
+        estimate (with a WARNING) when usage is absent or reports zero tokens."""
+        usage = getattr(response, "usage", None)
+        input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+        output_tokens = getattr(usage, "completion_tokens", 0) or 0
+        if input_tokens or output_tokens:
+            return input_tokens, output_tokens
+        input_tokens, output_tokens = self._estimate_billed_tokens(messages, max_tokens)
+        self.logger.warning(
+            "OpenRouter reply had no usage data -- recording estimated cost",
+            model=model,
+            est_input_tokens=input_tokens,
+            est_output_tokens=output_tokens,
+        )
+        return input_tokens, output_tokens
+
+    async def _record_spend(
+        self, model: str, input_tokens: int, output_tokens: int, cost: float
+    ) -> None:
+        """Book a cost against the model, client and daily trackers."""
+        self._track_model_cost(model, input_tokens, output_tokens, cost)
+        self.total_cost += cost
+        self.request_count += 1
+        self._update_daily_cost(cost)
+        await self._flush_db_costs()
+
     def _track_model_cost(
         self, model: str, input_tokens: int, output_tokens: int, cost: float
     ) -> None:
@@ -402,6 +444,9 @@ class OpenRouterClient(TradingLoggerMixin):
         last_exc: Optional[Exception] = None
 
         for attempt in range(self.MAX_RETRIES_PER_MODEL):
+            # The caller checked the budget before attempt 0; recheck every retry.
+            if attempt > 0 and not await self._check_daily_limits():
+                raise _BudgetExhausted()
             try:
                 start = time.time()
 
@@ -420,6 +465,11 @@ class OpenRouterClient(TradingLoggerMixin):
                     or not response.choices[0].message
                     or not response.choices[0].message.content
                 ):
+                    # The call reached the API and may have been billed.
+                    bad_in, bad_out = self._billed_usage(model, response, messages, max_tokens)
+                    await self._record_spend(
+                        model, bad_in, bad_out, self._calculate_cost(model, bad_in, bad_out)
+                    )
                     raise ValueError(
                         f"Empty response from {model} on attempt {attempt + 1}"
                     )
@@ -427,8 +477,9 @@ class OpenRouterClient(TradingLoggerMixin):
                 content = response.choices[0].message.content
 
                 # Token usage
-                input_tokens = getattr(response.usage, "prompt_tokens", 0) or 0
-                output_tokens = getattr(response.usage, "completion_tokens", 0) or 0
+                input_tokens, output_tokens = self._billed_usage(
+                    model, response, messages, max_tokens
+                )
                 cost = self._calculate_cost(model, input_tokens, output_tokens)
 
                 self.logger.debug(
@@ -500,7 +551,10 @@ class OpenRouterClient(TradingLoggerMixin):
         messages = [{"role": "user", "content": prompt}]
         fallback_chain = self._build_fallback_chain(model)
 
-        for candidate_model in fallback_chain:
+        for idx, candidate_model in enumerate(fallback_chain):
+            # Recheck the budget before every fallback attempt (first was checked above).
+            if idx > 0 and not await self._check_daily_limits():
+                return None
             try:
                 content, cost, input_tok, output_tok = await self._request_single_model(
                     messages=messages,
@@ -510,11 +564,7 @@ class OpenRouterClient(TradingLoggerMixin):
                 )
 
                 # Update tracking
-                self._track_model_cost(candidate_model, input_tok, output_tok, cost)
-                self.total_cost += cost
-                self.request_count += 1
-                self._update_daily_cost(cost)
-                await self._flush_db_costs()
+                await self._record_spend(candidate_model, input_tok, output_tok, cost)
 
                 # Log query if db_manager is available
                 await self._log_query(
@@ -529,6 +579,8 @@ class OpenRouterClient(TradingLoggerMixin):
 
                 return content
 
+            except _BudgetExhausted:
+                return None
             except Exception as exc:
                 self.logger.warning(
                     "Model failed, trying next in fallback chain",
@@ -567,7 +619,10 @@ class OpenRouterClient(TradingLoggerMixin):
         messages = [{"role": "user", "content": prompt}]
         fallback_chain = self._build_fallback_chain(model)
 
-        for candidate_model in fallback_chain:
+        for idx, candidate_model in enumerate(fallback_chain):
+            # Recheck the budget before every fallback attempt (first was checked above).
+            if idx > 0 and not await self._check_daily_limits():
+                return None
             try:
                 content, cost, input_tok, output_tok = await self._request_single_model(
                     messages=messages,
@@ -577,11 +632,7 @@ class OpenRouterClient(TradingLoggerMixin):
                 )
 
                 # Update tracking
-                self._track_model_cost(candidate_model, input_tok, output_tok, cost)
-                self.total_cost += cost
-                self.request_count += 1
-                self._update_daily_cost(cost)
-                await self._flush_db_costs()
+                await self._record_spend(candidate_model, input_tok, output_tok, cost)
 
                 decision = self._parse_trading_decision(content)
 
@@ -605,6 +656,8 @@ class OpenRouterClient(TradingLoggerMixin):
                     response_preview=content[:200] if content else "EMPTY",
                 )
 
+            except _BudgetExhausted:
+                return None
             except Exception as exc:
                 self.logger.warning(
                     "Model failed for trading decision, trying fallback",
@@ -725,9 +778,26 @@ If you do not recommend trading, use action "SKIP":
             else:
                 action = "SKIP"
 
-            side = data.get("side", "YES").upper()
+            side = str(data.get("side", "YES")).strip().lower()
             confidence = float(data.get("confidence", 0.5))
-            limit_price = int(data.get("limit_price", 50)) if data.get("limit_price") is not None else None
+            if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+                self.logger.warning("Rejecting decision: confidence out of range", confidence=confidence)
+                return None
+
+            raw_price = data.get("limit_price")
+            limit_price = None
+            if action in ("BUY", "SELL"):
+                if side not in ("yes", "no"):
+                    self.logger.warning("Rejecting decision: invalid side", side=side)
+                    return None
+                price = float(raw_price) if raw_price is not None else float("nan")
+                if not math.isfinite(price) or not 1 <= price <= 99:
+                    self.logger.warning("Rejecting decision: invalid limit_price", limit_price=raw_price)
+                    return None
+                limit_price = int(price)
+            elif raw_price is not None:
+                limit_price = int(float(raw_price))
+            side = side.upper()
 
             return TradingDecision(
                 action=action,

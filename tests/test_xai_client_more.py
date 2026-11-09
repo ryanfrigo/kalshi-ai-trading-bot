@@ -227,10 +227,6 @@ def test_update_daily_cost_exhausts_at_limit_and_persists(make):
     assert t.total_cost == pytest.approx(1.0) and t.is_exhausted
 
 
-@pytest.mark.xfail(strict=True, reason="xai_client.py:204,235 XAIClient mirrors cost from "
-                   "getattr(client, '_last_request_cost', 0.0) but openrouter_client.py never sets "
-                   "that attribute, so every call (e.g. $0.0105 sonnet 1000/500) is added to the XAI "
-                   "daily tracker as $0.00 and its cap (logs/daily_ai_usage.pkl) can never bind")
 async def test_completion_cost_reaches_the_xai_daily_tracker(make):
     c = make(FakeOR("ok", spend=0.0105))
     await c.get_completion("p")
@@ -238,9 +234,6 @@ async def test_completion_cost_reaches_the_xai_daily_tracker(make):
     assert c.total_cost == pytest.approx(0.0105)
 
 
-@pytest.mark.xfail(strict=True, reason="xai_client.py:235 same dead _last_request_cost read on the "
-                   "decision path: decide.py's get_trading_decision bills $0.00 to XAIClient.total_cost "
-                   "and the pickle tracker (real spend only lands in the OpenRouter tracker/DB)")
 async def test_decision_cost_reaches_the_xai_daily_tracker(make):
     c = make(FakeOR(decision=_decision(), spend=0.012))
     await c.get_trading_decision({}, {})
