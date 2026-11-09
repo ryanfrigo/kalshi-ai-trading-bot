@@ -7,9 +7,10 @@ news article sentiment relative to prediction market questions.
 import asyncio
 import hashlib
 import json
+import math
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from openai import AsyncOpenAI
 
@@ -68,8 +69,9 @@ class SentimentAnalyzer(TradingLoggerMixin):
         self._model = settings.sentiment.sentiment_model
         self._news = news_aggregator or NewsAggregator()
 
-        # Sentiment cache: hash(text + market_title) -> SentimentResult
-        self._cache: Dict[str, SentimentResult] = {}
+        # Sentiment cache: hash(text + market_title) -> (stored_at, SentimentResult)
+        self._cache: Dict[str, Tuple[float, SentimentResult]] = {}
+        self._cache_ttl_seconds: float = settings.sentiment.cache_ttl_minutes * 60
 
         # Cost tracking
         self.total_cost: float = 0.0
@@ -98,12 +100,13 @@ class SentimentAnalyzer(TradingLoggerMixin):
             A SentimentResult with score, confidence, and reasoning.
         """
         cache_key = self._cache_key(text, market_context)
-        if cache_key in self._cache:
+        cached = self._cache.get(cache_key)
+        if cached is not None and (time.monotonic() - cached[0]) < self._cache_ttl_seconds:
             self.logger.debug("Returning cached sentiment result", cache_key=cache_key[:16])
-            return self._cache[cache_key]
+            return cached[1]
 
         result = await self._call_sentiment_model(text, market_context)
-        self._cache[cache_key] = result
+        self._cache[cache_key] = (time.monotonic(), result)
         return result
 
     async def analyze_market_sentiment(
@@ -126,6 +129,12 @@ class SentimentAnalyzer(TradingLoggerMixin):
         Returns:
             MarketSentiment with per-article and aggregate scores.
         """
+        if relevance_scores is not None and len(relevance_scores) != len(articles):
+            raise ValueError(
+                f"relevance_scores has {len(relevance_scores)} entries for "
+                f"{len(articles)} articles"
+            )
+
         if not articles:
             return MarketSentiment(
                 overall_score=0.0,
@@ -190,7 +199,7 @@ class SentimentAnalyzer(TradingLoggerMixin):
             num_articles=len(article_sentiments),
         )
 
-    async def get_market_sentiment_summary(self, market_title: str) -> str:
+    async def get_market_sentiment_summary(self, market_title: str) -> Optional[str]:
         """
         High-level convenience method: fetch relevant articles, run sentiment
         analysis, and return a concise text summary suitable for inclusion in
@@ -200,7 +209,8 @@ class SentimentAnalyzer(TradingLoggerMixin):
             market_title: The prediction market question.
 
         Returns:
-            A human-readable summary string.
+            A human-readable summary string, or None when articles were found but
+            every sentiment call failed (decide.py then falls back to xAI search).
         """
         if not settings.sentiment.enabled:
             return "Sentiment analysis is disabled."
@@ -227,6 +237,15 @@ class SentimentAnalyzer(TradingLoggerMixin):
                 articles=articles,
                 relevance_scores=relevance_scores,
             )
+
+            # Every model call failed: the signal is unavailable, not absent. None
+            # makes decide.py fall back to its xAI news search.
+            if market_sentiment.num_articles == 0:
+                self.logger.warning(
+                    "Sentiment unavailable: every model call failed",
+                    market_title=market_title[:80],
+                )
+                return None
 
             # Build summary
             return self._format_summary(market_title, market_sentiment)
@@ -347,6 +366,12 @@ class SentimentAnalyzer(TradingLoggerMixin):
 
         score = float(data.get("score", 0.0))
         confidence = float(data.get("confidence", 0.5))
+        # json.loads accepts NaN/Infinity; clamping would turn NaN into +1.0.
+        if not (math.isfinite(score) and math.isfinite(confidence)):
+            raise ValueError(
+                f"Non-finite score/confidence in sentiment model response: "
+                f"score={score}, confidence={confidence}"
+            )
         reasoning = str(data.get("reasoning", "No reasoning provided."))
 
         # Clamp values to expected ranges
@@ -395,7 +420,8 @@ class SentimentAnalyzer(TradingLoggerMixin):
         ]
 
         for item in sentiment.article_sentiments[:3]:
-            direction = "positive" if item.sentiment.score > 0 else "negative"
+            score = item.sentiment.score
+            direction = "positive" if score > 0 else "negative" if score < 0 else "neutral"
             lines.append(
                 f"    - [{direction} {item.sentiment.score:+.2f}] "
                 f"{item.article.title[:90]} "

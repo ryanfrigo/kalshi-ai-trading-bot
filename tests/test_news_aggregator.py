@@ -1,19 +1,19 @@
 """Behaviour tests for src/data/news_aggregator.py.
 
-No network: ``feedparser.parse`` is replaced by a fake that serves canned RSS
-text (or raises) per feed URL. The real feedparser still parses the canned text,
-so parsing behaviour is the real thing.
+No network: ``httpx.get`` is replaced by a fake that serves canned RSS text (or
+raises) per feed URL. The real feedparser still parses the bytes, so parsing
+behaviour is the real thing.
 """
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from src.config.settings import settings
 from src.data import news_aggregator as na
 from src.data.news_aggregator import NewsAggregator, NewsArticle
 
-_real_parse = na.feedparser.parse
 
 
 def rss(items, title="Wire One"):
@@ -46,16 +46,17 @@ class Clock:
 @pytest.fixture
 def world(monkeypatch):
     """feeds: url -> rss text | Exception. calls: list of parsed urls."""
-    feeds, calls = {}, []
+    feeds, calls, kwargs = {}, [], []
 
-    def fake_parse(url, *a, **kw):
+    def fake_get(url, **kw):
         calls.append(url)
+        kwargs.append(kw)
         v = feeds[url]
         if isinstance(v, Exception):
             raise v
-        return _real_parse(v)
+        return SimpleNamespace(content=v.encode(), raise_for_status=lambda: None)
 
-    monkeypatch.setattr(na.feedparser, "parse", fake_parse)
+    monkeypatch.setattr(na.httpx, "get", fake_get)
     clock = Clock()
     monkeypatch.setattr(na, "time", SimpleNamespace(monotonic=clock.monotonic))
     monkeypatch.setattr(settings.sentiment, "cache_ttl_minutes", 30)
@@ -66,7 +67,7 @@ def world(monkeypatch):
         monkeypatch.setattr(settings.sentiment, "rss_feeds", list(urls))
         return NewsAggregator()
 
-    return SimpleNamespace(feeds=feeds, calls=calls, clock=clock, make=make)
+    return SimpleNamespace(feeds=feeds, calls=calls, kwargs=kwargs, clock=clock, make=make)
 
 
 def art(title, summary=""):
@@ -344,29 +345,23 @@ async def test_fetch_feed_works_shortly_after_boot(world):
     world.feeds["f1"] = rss([item("first ever fetch")])
     assert [a.title for a in await world.make("f1").fetch_feed("f1")] == ["first ever fetch"]
 
-# ------------------------------------------------- known open bugs (not fixed)
-# Pinned strict-xfail with the behaviour a correct implementation has.
+
+# ------------------------------------------------- formerly open bugs, now fixed
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "news_aggregator.py:255 `len(t) > 2` discards 2-letter tokens like 'ai', 'eu', "
-    "'uk', 'un', which are decisive terms in market titles"))
 def test_two_letter_acronyms_are_kept_as_keywords():
     kws = NewsAggregator._extract_keywords("Will the EU ban AI")
     assert "eu" in kws and "ai" in kws
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "news_aggregator.py:134-141 keywords are not de-duplicated, so a repeated word in "
-    "the market title is counted twice and skews the score"))
 def test_repeated_query_word_counts_once():
     a = art("Tariff news")
-    assert NewsAggregator._score_relevance(a, NewsAggregator._extract_keywords("tariff tariff oil gas")) == 0.25
+    # 1 of 3 distinct keywords (the xfail's old expected 0.25 was itself wrong:
+    # it is neither the buggy 2/4 nor the correct 1/3)
+    kws = NewsAggregator._extract_keywords("tariff tariff oil gas")
+    assert NewsAggregator._score_relevance(a, kws) == pytest.approx(1 / 3)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "news_aggregator.py:67,95 a partially failed fetch_all caches the survivors for "
-    "the whole TTL, so a transiently failed feed is not retried for 30 minutes"))
 async def test_partial_failure_does_not_pin_cache_for_full_ttl(world):
     world.feeds["bad"] = RuntimeError("blip")
     world.feeds["good"] = rss([item("from good")])
@@ -375,3 +370,77 @@ async def test_partial_failure_does_not_pin_cache_for_full_ttl(world):
     world.feeds["bad"] = rss([item("from bad, recovered")])
     world.clock.t += 60
     assert "from bad, recovered" in [a.title for a in await agg.fetch_all()]
+
+
+def test_two_letter_stopwords_are_still_not_keywords():
+    kws = NewsAggregator._extract_keywords("Is it up or in the US vs EU am I")
+    assert kws == ["eu"]  # "us" is a stop word today; see report
+
+
+def test_keyword_dedupe_keeps_first_seen_order():
+    assert NewsAggregator._extract_keywords("oil gas oil ai gas") == ["oil", "gas", "ai"]
+
+
+async def test_partial_result_is_trusted_only_briefly_and_not_refetched_each_call(world):
+    world.feeds["bad"] = RuntimeError("blip")
+    world.feeds["good"] = rss([item("from good")])
+    agg = world.make("bad", "good")
+    await agg.fetch_all()
+    n = len(world.calls)
+    world.clock.t += na.PARTIAL_RETRY_SECONDS - 1  # inside the retry window: cached
+    await agg.fetch_all()
+    assert len(world.calls) == n
+    world.clock.t += 2  # past it: retried
+    await agg.fetch_all()
+    assert len(world.calls) == n + 2
+
+
+async def test_complete_result_is_still_cached_for_the_full_ttl(world):
+    world.feeds["a"] = rss([item("one")])
+    agg = world.make("a")
+    await agg.fetch_all()
+    world.clock.t += 29 * 60
+    await agg.fetch_all()
+    assert world.calls == ["a"]
+    world.clock.t += 2 * 60
+    await agg.fetch_all()
+    assert world.calls == ["a", "a"]
+
+
+async def test_feed_fetch_passes_a_finite_timeout(world):
+    world.feeds["a"] = rss([item("one")])
+    await world.make("a").fetch_all()
+    t = world.kwargs[0]["timeout"]
+    assert t is not None and 0 < t <= 60
+
+
+async def test_hung_feed_times_out_and_is_isolated(world, monkeypatch):
+    world.feeds["good"] = rss([item("from good")])
+    real_fake = na.httpx.get
+
+    hung_timeouts = []
+
+    def hanging_get(url, **kw):
+        if url == "hung":
+            # A real hang would block for ever; a bounded client raises instead.
+            hung_timeouts.append(kw.get("timeout"))
+            if not kw.get("timeout"):
+                raise AssertionError("would hang: no timeout")
+            raise httpx.ReadTimeout("hung")
+        return real_fake(url, **kw)
+
+    monkeypatch.setattr(na.httpx, "get", hanging_get)
+    agg = world.make("hung", "good")
+    assert [a.title for a in await agg.fetch_all()] == ["from good"]
+    assert hung_timeouts and all(hung_timeouts)  # fetched with a timeout, which fired
+
+
+async def test_http_error_status_is_a_failed_feed(world, monkeypatch):
+    def get_404(url, **kw):
+        def boom():
+            raise httpx.HTTPStatusError("404", request=None, response=None)
+        return SimpleNamespace(content=b"<html>not found</html>", raise_for_status=boom)
+
+    monkeypatch.setattr(na.httpx, "get", get_404)
+    with pytest.raises(httpx.HTTPStatusError):
+        await world.make("a").fetch_feed("a")

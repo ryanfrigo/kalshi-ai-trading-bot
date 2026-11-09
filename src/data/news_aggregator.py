@@ -12,9 +12,17 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 import feedparser
+import httpx
 
 from src.config.settings import settings
 from src.utils.logging_setup import TradingLoggerMixin
+
+# feedparser.parse(url) has no timeout, so one hung feed would hang fetch_all.
+# Fetch the bytes ourselves with a bound and hand them to feedparser.
+FEED_TIMEOUT_SECONDS = 10.0
+
+# A fetch_all that lost a feed is only trusted this long, not the full TTL.
+PARTIAL_RETRY_SECONDS = 30
 
 
 @dataclass
@@ -80,8 +88,10 @@ class NewsAggregator(TradingLoggerMixin):
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         all_articles: List[NewsArticle] = []
+        any_failed = False
         for url, result in zip(self._feeds, results):
             if isinstance(result, Exception):
+                any_failed = True
                 self.logger.warning(
                     "Feed fetch failed, continuing with remaining feeds",
                     feed_url=url,
@@ -92,7 +102,11 @@ class NewsAggregator(TradingLoggerMixin):
 
         deduplicated = self._deduplicate(all_articles)
         self._cache = deduplicated
-        self._cache_timestamp = now
+        # Don't let a partial result stand for the whole TTL: backdate the stamp
+        # so the failed feed is retried after PARTIAL_RETRY_SECONDS.
+        self._cache_timestamp = now - max(
+            0, self._cache_ttl_seconds - PARTIAL_RETRY_SECONDS
+        ) if any_failed else now
 
         self.logger.info(
             "Feed fetch complete",
@@ -156,7 +170,14 @@ class NewsAggregator(TradingLoggerMixin):
     def _parse_feed(self, url: str) -> List[NewsArticle]:
         """Parse a single RSS feed URL and return a list of NewsArticle objects."""
         try:
-            feed = feedparser.parse(url)
+            resp = httpx.get(
+                url,
+                timeout=FEED_TIMEOUT_SECONDS,
+                follow_redirects=True,
+                headers={"User-Agent": feedparser.USER_AGENT},
+            )
+            resp.raise_for_status()
+            feed = feedparser.parse(resp.content)
 
             if feed.bozo and not feed.entries:
                 raise ValueError(
@@ -237,7 +258,9 @@ class NewsAggregator(TradingLoggerMixin):
     def _extract_keywords(text: str) -> List[str]:
         """
         Extract significant keywords from text for relevance matching.
-        Filters out common stop words and short tokens.
+        Filters out common stop words and one-character tokens. Two-letter
+        tokens are kept (\"ai\", \"eu\", \"uk\") unless they are stop words, and
+        repeated words count once.
         """
         stop_words = {
             "a", "an", "the", "is", "are", "was", "were", "be", "been",
@@ -254,10 +277,14 @@ class NewsAggregator(TradingLoggerMixin):
             "which", "who", "whom", "this", "that", "these", "those",
             "it", "its", "they", "them", "their", "we", "us", "our",
             "you", "your", "he", "him", "his", "she", "her", "my",
+            "am", "vs",
         }
         # Tokenize: lowercase, keep only alphanumeric
         tokens = re.findall(r"[a-z0-9]+", text.lower())
-        return [t for t in tokens if t not in stop_words and len(t) > 2]
+        # dict.fromkeys de-duplicates while keeping first-seen order
+        return list(dict.fromkeys(
+            t for t in tokens if t not in stop_words and len(t) >= 2
+        ))
 
     @staticmethod
     def _score_relevance(article: NewsArticle, keywords: List[str]) -> float:
