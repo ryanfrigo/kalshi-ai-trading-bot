@@ -902,6 +902,7 @@ def cmd_verify(args: argparse.Namespace) -> None:
     ticker = args.ticker
     research_file = getattr(args, "research_file", None)
     use_jev = getattr(args, "jev", False)
+    use_drex = getattr(args, "drex", False)
     jev_record: dict = {}
 
     async def _run() -> dict:
@@ -984,11 +985,18 @@ def cmd_verify(args: argparse.Namespace) -> None:
 
             # 3b. Optional Jev floor: an independent calibrated P(YES) from the
             #     researched facts; can only make the gate stricter.
-            if use_jev:
-                from src.agent.jev import with_jev_floor
+            #     --drex sends the same request to Drex, falling back to Jev.
+            if use_jev or use_drex:
+                from functools import partial
+
+                from src.agent.drex import drex_yes_pct
+                from src.agent.jev import jev_yes_pct, with_jev_floor
 
                 facts = payload.get("facts") if research_file else None
-                llm_call = with_jev_floor(llm_call, question, facts=facts, record=jev_record)
+                forecast = partial(drex_yes_pct, record=jev_record) if use_drex else jev_yes_pct
+                llm_call = with_jev_floor(
+                    llm_call, question, forecast=forecast, facts=facts, record=jev_record
+                )
 
             # 4. Run the pure pipeline with the injected IO.
             verdict = await run_verify(candidate, llm_call)
@@ -1000,8 +1008,10 @@ def cmd_verify(args: argparse.Namespace) -> None:
     candidate = out["candidate"]
     verdict = out["verdict"]
 
+    drex_model = jev_record.get("drex_model")
     if jev_record:
-        verdict["jev_true_yes_pct"] = round(jev_record["jev_true_yes_pct"], 1)
+        key = "drex_true_yes_pct" if drex_model else "jev_true_yes_pct"
+        verdict[key] = round(jev_record["jev_true_yes_pct"], 1)
 
     if as_json:
         print(json.dumps(verdict, indent=2))
@@ -1021,7 +1031,9 @@ def cmd_verify(args: argparse.Namespace) -> None:
     print(f"  recommend:  {verdict['recommend']}   (size: {verdict['size_hint']})")
     print(f"  edge:       {verdict['edge_pts']:+d} pts   survives skeptic: {verdict['survives']}")
     print(f"  true-YES:   {verdict['true_yes']:.0f}%   direction: {verdict['direction']}")
-    if jev_record:
+    if drex_model:
+        print(f"  Drex P(YES): {jev_record['jev_true_yes_pct']:.1f}%   (floor on true-YES; {drex_model})")
+    elif jev_record:
         print(f"  Jev P(YES): {jev_record['jev_true_yes_pct']:.1f}%   (floor on true-YES; ~typesafe/jev-latest)")
     print()
     print(f"  {verdict['note']}")
@@ -1858,6 +1870,14 @@ def build_parser() -> argparse.ArgumentParser:
             "Floor the skeptic's true-YES at an independent calibrated P(YES) from "
             "TypeSafe Jev (~typesafe/jev-latest, OpenRouter Decisions API) given the "
             "researched facts (optional 'facts' list in the research file). Stricter only."
+        ),
+    )
+    p_verify.add_argument(
+        "--drex",
+        action="store_true",
+        help=(
+            "Like --jev, but the P(YES) comes from Nace's Drex (drex-max-finance, needs "
+            "NACE_API_KEY). Falls back to Jev if Drex is unavailable."
         ),
     )
     p_verify.set_defaults(func=cmd_verify)
