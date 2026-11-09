@@ -141,9 +141,9 @@ async def test_preview_reports_the_real_exit_decisions(tmp_path, wire, capsys):
     rc = await ep.run(await _db(tmp_path), _journal(tmp_path, ["J-1"]), client_factory=factory)
     out = capsys.readouterr().out
     rows = {line.split()[0]: line for line in out.splitlines() if line.startswith("T-")}
-    # NO bid .30 vs entry .40 is -25%: the stop-loss job sells first at
-    # .40 * (1 - .165) = 33c, then the should_exit stop finds nothing sellable
-    assert "stop_loss: sell 5 @ 33c" in rows["T-NO"]
+    # NO bid .30 vs entry .40 is -25%: the stop-loss job sells first at the
+    # bid, 30c, then the should_exit stop finds nothing sellable
+    assert "stop_loss: sell 5 @ 30c" in rows["T-NO"]
     assert "stop_loss_triggered_pnl_-0.15: blocked, nothing sellable" in rows["T-NO"]
     assert "hold" in rows["T-HOLD"] and "SELL" not in rows["T-HOLD"]
     assert "CLOSE" in rows["T-RES"] and "resolution: DB close at 1.00" in rows["T-RES"]
