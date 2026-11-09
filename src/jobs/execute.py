@@ -399,51 +399,97 @@ async def _sellable_contracts(kalshi_client: KalshiClient, ticker: str,
     return held - resting
 
 
-async def void_position_if_exchange_flat(db_manager: DatabaseManager, kalshi_client: KalshiClient,
-                                         position_id: int, ticker: str) -> bool:
-    """Void a pre-inserted position row only if the exchange shows nothing on ``ticker``.
+async def _read_ticker_state(kalshi_client: KalshiClient, ticker: str, logger):
+    """GET-only read of what the exchange shows on ``ticker``.
 
-    A failed ``execute_position`` does not prove no order went out: KalshiClient
-    retries a POST under one client_order_id, so an accepted first attempt can
-    surface as a 4xx duplicate, and ``update_position_to_live`` can raise after
-    the order was accepted. So read positions and resting orders first. Void
-    only when both reads succeed and show zero held and zero resting; any read
-    failure, held contract, resting order or unreadable row leaves the row open.
-    Returns True if the row was voided.
+    Returns ``(held_signed, resting_orders, resting_qty)`` or None when any read
+    fails or is unreadable (several position rows, a non-finite count, a full
+    orders page). Callers treat None as "unknown" and change nothing.
     """
-    logger = get_trading_logger("void_guard")
     try:
         from src.utils.market_prices import signed_position
         resp = await kalshi_client.get_positions(ticker=ticker)
         rows = resp.get("market_positions") if isinstance(resp, dict) else None
         if not isinstance(rows, list):
-            logger.error(f"Row {position_id} on {ticker} left open: positions response unreadable.")
-            return False
+            logger.error(f"{ticker}: positions response unreadable.")
+            return None
         mine = [r for r in rows if isinstance(r, dict) and r.get("ticker") == ticker]
         if len(mine) > 1:
-            logger.error(f"Row {position_id} on {ticker} left open: {len(mine)} position rows.")
-            return False
-        if mine:
-            held = signed_position(mine[0])
-            if not math.isfinite(held) or held != 0:
-                logger.error(f"Row {position_id} on {ticker} left open: exchange shows {held!r} held.")
-                return False
+            logger.error(f"{ticker}: {len(mine)} position rows.")
+            return None
+        held = signed_position(mine[0]) if mine else 0.0
+        if not math.isfinite(held):
+            logger.error(f"{ticker}: exchange position {held!r} is not finite.")
+            return None
         resp = await kalshi_client.get_orders(ticker=ticker, status="resting")
         orders = resp.get("orders") if isinstance(resp, dict) else None
         if not isinstance(orders, list):
-            logger.error(f"Row {position_id} on {ticker} left open: resting-orders response unreadable.")
-            return False
+            logger.error(f"{ticker}: resting-orders response unreadable.")
+            return None
         if resp.get("cursor") and len(orders) >= 100:
-            logger.error(f"Row {position_id} on {ticker} left open: resting orders span >1 page.")
-            return False
-        if any(not isinstance(o, dict) or o.get("ticker") == ticker for o in orders):
-            logger.error(f"Row {position_id} on {ticker} left open: a resting order exists.")
-            return False
+            logger.error(f"{ticker}: resting orders span more than one page.")
+            return None
+        n, qty = 0, 0.0
+        for o in orders:
+            if isinstance(o, dict) and o.get("ticker") != ticker:
+                continue
+            n += 1  # an unreadable entry still counts as an order
+            for key in ("remaining_count_fp", "remaining_count"):
+                try:
+                    q = float(o.get(key))  # type: ignore[union-attr]
+                except (TypeError, ValueError, AttributeError):
+                    continue
+                if math.isfinite(q):
+                    qty += q
+                break
+        return held, n, qty
     except Exception as e:
-        logger.error(f"Row {position_id} on {ticker} left open: exchange read failed ({e}).")
-        return False
-    await db_manager.update_position_status(position_id, 'voided')
-    return True
+        logger.error(f"{ticker}: exchange read failed ({e}).")
+        return None
+
+
+STALE_FAILED_ROW_MINUTES = 10
+
+
+async def reconcile_stale_failed_rows(db_manager: DatabaseManager, kalshi_client: KalshiClient,
+                                      min_age_minutes: int = STALE_FAILED_ROW_MINUTES) -> int:
+    """Void open ``live=0`` rows older than ``min_age_minutes`` that the exchange shows flat.
+
+    Such rows come from an ambiguous failed buy and otherwise block their market
+    and hold a position slot forever. Only GET requests are made. A row whose
+    ticker shows a holding or a resting order is NOT adopted or marked live: one
+    ERROR line names the ticker, side and exchange quantity and the row is left
+    as is. A read failure also leaves the row open. Returns the number voided.
+    """
+    from datetime import timedelta
+    logger = get_trading_logger("stale_failed_rows")
+    voided = 0
+    try:
+        rows = await db_manager.get_open_non_live_positions()
+    except Exception as e:
+        logger.error(f"Stale-row pass skipped: could not read rows ({e}).")
+        return 0
+    cutoff = datetime.now() - timedelta(minutes=min_age_minutes)
+    for row in rows:
+        try:
+            if row.id is None or row.timestamp > cutoff:
+                continue
+            state = await _read_ticker_state(kalshi_client, row.market_id, logger)
+            if state is None:
+                continue  # unknown: leave open
+            held, n_orders, resting_qty = state
+            if held == 0 and not n_orders:
+                await db_manager.update_position_status(row.id, 'voided')
+                voided += 1
+                logger.info(f"Voided stale failed row {row.id} on {row.market_id}: exchange flat.")
+            else:
+                logger.error(
+                    f"STALE FAILED ROW NOT RECONCILED: {row.market_id} side={row.side} "
+                    f"exchange held={held:g} resting_orders={n_orders} resting_qty={resting_qty:g}; "
+                    f"row {row.id} (live=0) left open for the owner.")
+        except Exception as e:
+            logger.error(f"Stale-row check failed for row {getattr(row, 'id', None)}: {e}")
+    return voided
 
 
 async def reconcile_exit_fill(position: Position, response: Dict, sell_ok: bool,

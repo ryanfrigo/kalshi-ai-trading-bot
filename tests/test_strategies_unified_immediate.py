@@ -222,10 +222,6 @@ def test_immediate_never_exceeds_cash_or_cap_with_ample_contracts(db):
     assert p.quantity * p.entry_price <= 1000 * settings.trading.max_single_position + 1e-6
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "shares = max(1, int(size / price)) forces one contract even when it costs "
-    "more than the position cap. $10 book, 3% cap = $0.30, YES at 45c: buys 1 "
-    "contract for $0.45 (4.5% of equity, 150% of the cap)."))
 def test_immediate_min_one_contract_respects_position_cap(db):
     kalshi = FakeKalshi(legacy_market(45, 55), balance_cents=1000)  # $10
     with Captured() as cap:
@@ -265,34 +261,65 @@ def test_immediate_skips_when_any_side_already_held(db):
     cap.execute.assert_not_awaited()
 
 
-def test_failed_execution_leaves_no_open_row(db):
-    kalshi = FakeKalshi(legacy_market(40, 60))
-    with Captured(execute_result=False):
-        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
-    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is None
+def _row_status(db, market_id="MKT-1"):
+    import sqlite3
+    c = sqlite3.connect(db.db_path)
+    try:
+        return c.execute("SELECT status, live FROM positions WHERE market_id=?", (market_id,)).fetchall()
+    finally:
+        c.close()
 
 
-def test_failed_execution_row_is_voided_and_retry_allowed(db):
+def _age_rows(db, minutes=11):
+    import sqlite3
+    from datetime import timedelta
+    c = sqlite3.connect(db.db_path)
+    try:
+        c.execute("UPDATE positions SET timestamp=?",
+                  ((datetime.now() - timedelta(minutes=minutes)).isoformat(),))
+        c.commit()
+    finally:
+        c.close()
+
+
+def test_failed_buy_leaves_row_open_and_next_cycle_does_not_rebuy(db):
     kalshi = FakeKalshi(legacy_market(40, 60))
     with Captured(execute_result=False) as cap:
         run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
         run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
-    assert cap.execute.await_count == 2  # the failed row did not block the retry
+    assert cap.execute.await_count == 1
+    assert _row_status(db) == [("open", 0)]
 
 
-def test_raising_execution_also_voids_row(db):
+def test_raising_buy_leaves_row_open_and_next_cycle_does_not_rebuy(db):
     kalshi = FakeKalshi(legacy_market(40, 60))
     with Captured() as cap:
         cap.execute.side_effect = RuntimeError("boom")
         run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
-    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is None
+        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
+    assert cap.execute.await_count == 1
+    assert _row_status(db) == [("open", 0)]
 
 
-def test_allocation_failed_execution_voids_row(db):
+def test_allocation_failed_buy_leaves_row_open_and_next_cycle_does_not_rebuy(db):
     s = make_system(db, FakeKalshi(legacy_market(40, 60)))
-    with Captured(execute_result=False):
+    with Captured(execute_result=False) as cap:
         run(s._execute_portfolio_allocations(alloc(), [make_opp(0.40, 0.60)]))
-    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is None
+        run(s._execute_portfolio_allocations(alloc(), [make_opp(0.40, 0.60)]))
+    assert cap.execute.await_count == 1
+    assert _row_status(db) == [("open", 0)]
+
+
+def test_stale_pass_voids_failed_row_after_ten_minutes_when_exchange_flat(db):
+    from src.jobs.execute import reconcile_stale_failed_rows
+    kalshi = FakeKalshi(legacy_market(40, 60))
+    with Captured(execute_result=False):
+        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
+    assert run(reconcile_stale_failed_rows(db, kalshi)) == 0  # too young
+    assert _row_status(db) == [("open", 0)]
+    _age_rows(db, 11)
+    assert run(reconcile_stale_failed_rows(db, kalshi)) == 1
+    assert _row_status(db) == [("voided", 0)]
 
 
 def test_halted_client_refuses_order_and_marks_nothing_live(db):
@@ -549,7 +576,7 @@ def test_allocation_blocked_when_resting_page_is_full(db):
     cap.execute.assert_not_awaited()
 
 
-# --- void-on-failure only when the exchange shows nothing (revision A)
+# --- accepted order whose call then fails: one order only
 
 def _accepted_then_4xx(kalshi):
     """place_order: the POST reaches the exchange (order rests), then the client raises."""
@@ -589,30 +616,6 @@ def test_allocation_keeps_row_open_when_order_reached_exchange_then_raised(db, m
         run(s._execute_portfolio_allocations(alloc(), [make_opp(0.40, 0.60)]))
         run(s._execute_portfolio_allocations(alloc(), [make_opp(0.40, 0.60)]))
     assert len(kalshi.orders) == 1
-    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is not None
-
-
-@pytest.mark.parametrize("kw", [
-    {"held": {"yes": 5.0}},
-    {"resting": [{"ticker": "MKT-1", "outcome_side": "yes", "remaining_count_fp": "5.00"}]},
-    {"positions_error": RuntimeError("503")},
-    {"position_rows": [{"ticker": "MKT-1", "position_fp": "x"}]},
-])
-def test_failed_execution_not_voided_unless_exchange_flat(db, kw):
-    kalshi = FakeKalshi(legacy_market(40, 60))
-    for k, v in kw.items():
-        setattr(kalshi, k, v)
-    with Captured(execute_result=False):
-        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
-    assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is not None
-
-
-def test_raise_not_voided_when_orders_read_fails(db):
-    kalshi = FakeKalshi(legacy_market(40, 60))
-    kalshi.get_orders = AsyncMock(side_effect=RuntimeError("503"))
-    with Captured() as cap:
-        cap.execute.side_effect = RuntimeError("boom")
-        run(_evaluate_immediate_trade(make_opp(0.40, 0.60), db, kalshi, 1000))
     assert run(db.get_position_by_market_and_side("MKT-1", "YES")) is not None
 
 
@@ -657,11 +660,6 @@ def test_cash_emergency_halt_stops_before_market_scan(db):
     s.db_manager.get_eligible_markets.assert_not_awaited()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "async_initialize falls back to total_capital = $100 when the balance call "
-    "fails ('Conservative fallback'). For a $20 account that is 5x reality: "
-    "directional capital $70 and market-making capital $30 are sized off money "
-    "that does not exist. Unreadable balance should mean no new buys (capital 0)."))
 def test_unreadable_balance_does_not_invent_capital(db):
     kalshi = FakeKalshi(legacy_market(40, 60))
     kalshi.get_balance = AsyncMock(side_effect=RuntimeError("boom"))
@@ -736,15 +734,47 @@ def test_mm_live_orders_map_side_to_price_field():
     assert y["action"] == n["action"] == "buy"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "_place_limit_order does int(order.price) on a float made by dollars*100, which "
-    "truncates: 0.58*100 = 57.99999999999999 -> a 57c bid instead of 58c, a "
-    "systematic 1c/contract mispricing on ~25% of tick values (250 contracts: $2.50)."))
-def test_mm_live_price_rounds_not_truncates():
+def test_mm_live_price_floors_with_epsilon_absorbing_float_error():
     mm = _mm()
     with patch.object(settings.trading, "live_trading_enabled", True):
         run(mm._place_limit_order(LimitOrder("MM-1", "YES", 0.58 * 100, 10)))
     assert mm.kalshi_client.orders[0]["yes_price"] == 58
+
+
+def test_mm_live_no_price_floors_with_epsilon_absorbing_float_error():
+    mm = _mm()
+    with patch.object(settings.trading, "live_trading_enabled", True):
+        run(mm._place_limit_order(LimitOrder("MM-1", "NO", 0.29 * 100, 10)))
+    assert mm.kalshi_client.orders[0]["no_price"] == 29
+
+
+def _mm_bid_sent(ai_prob, side):
+    """Run the real path (analysis -> opportunity -> LimitOrder -> _place_limit_order)
+    on a 40c/42c YES book (NO bid 58c / ask 60c) with a 3c spread; return the cents sent.
+
+    The nested-market read is an owner-gated xfail, so the book is the flattened
+    shape (as in test_mm_analysis_works_only_on_flat_shape...). max_spread is pinned to
+    min_spread so the quoted spread really is ~3c rather than the 10c default cap.
+    """
+    mm = _mm()
+    mm.min_spread = mm.max_spread = 0.03
+    mm.kalshi_client.market = v2_market(0.40, 0.42, 0.58, 0.60)["market"]
+    mm._get_ai_analysis = AsyncMock(return_value={"probability": ai_prob, "confidence": 0.9})
+    opp = run(mm.analyze_market_making_opportunities([_mm_market()]))[0]
+    with patch.object(settings.trading, "live_trading_enabled", True):
+        run(mm._place_market_making_orders(opp))
+    sent = {o["side"]: o for o in mm.kalshi_client.orders}[side]
+    return sent["yes_price" if side == "yes" else "no_price"]
+
+
+def test_mm_yes_bid_stays_below_the_ask_on_a_40_42_book():
+    # AI favours YES: computed bid is 41.905c; round() sent 42c == the ask (taker fill + fee).
+    assert _mm_bid_sent(0.7, "yes") < 42
+
+
+def test_mm_no_bid_stays_below_the_ask_on_a_40_42_book():
+    # AI favours NO: computed NO bid is 59.77c; round() sent 60c == the NO ask (100 - 40).
+    assert _mm_bid_sent(0.2, "no") < 60
 
 
 def test_mm_refused_order_is_marked_failed():
@@ -857,3 +887,26 @@ def test_mm_capital_too_small_for_one_contract_places_nothing():
     mm = _mm()
     res = run(mm.execute_market_making_strategy([_opportunity(mm)], capital=0.10))
     assert res["orders_placed"] == 0 and res["markets_count"] == 0
+
+
+# ---------------------------------- allocation sizing: no forced 1st contract
+
+def test_allocation_below_one_contract_is_skipped(db):
+    # directional $2 * 10% = $0.20 allotment; YES ask 41c -> 0 contracts fit.
+    # max(1, ...) used to buy 1 for $0.41 (205% of the allotment).
+    s = make_system(db, FakeKalshi(legacy_market(40, 60)), directional=2.0)
+    with Captured() as cap:
+        res = run(s._execute_portfolio_allocations(alloc(), [make_opp(0.40, 0.60)]))
+    cap.execute.assert_not_awaited()
+    assert res["successful_executions"] == 0 and res["total_capital_used"] == 0.0
+
+
+def test_capital_efficiency_is_zero_when_total_capital_is_zero(db):
+    # Without the guard the division raises, the broad except swallows it and
+    # returns an empty TradingSystemResults, so check the other fields survive.
+    s = make_system(db, FakeKalshi(legacy_market(40, 60)))
+    s.total_capital = 0
+    pa = alloc(frac=0.5)
+    res = s._compile_unified_results({}, pa, {})
+    assert res.capital_efficiency == 0.0
+    assert res.total_capital_used == 0.5
