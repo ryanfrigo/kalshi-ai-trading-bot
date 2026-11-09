@@ -170,7 +170,8 @@ def _filled_count(order: Dict) -> float:
 
 
 async def _record_ioc_exit(position: Position, order: Dict, limit_price: float,
-                           db_manager: DatabaseManager, logger) -> bool:
+                           db_manager: DatabaseManager, logger,
+                           reason: str = "partial IOC fill under risk halt") -> bool:
     """True only when the IOC sell filled the whole position.
 
     A partial fill logs the sold part and shrinks the open position to what is
@@ -185,11 +186,11 @@ async def _record_ioc_exit(position: Position, order: Dict, limit_price: float,
             entry_price=position.entry_price, exit_price=limit_price,
             quantity=filled, pnl=(limit_price - position.entry_price) * filled,
             entry_timestamp=position.timestamp, exit_timestamp=datetime.now(),
-            rationale=f"{position.rationale} | EXIT: partial IOC fill under risk halt"),
+            rationale=f"{position.rationale} | EXIT: {reason}"),
             round(position.quantity - filled, 2))
     logger.warning(
-        f"IOC exit for {position.market_id} filled {filled} of {position.quantity}; "
-        f"the rest stays open.")
+        f"Exit sell for {position.market_id} filled {filled} of {position.quantity} "
+        f"({reason}); the rest stays open.")
     return False
 
 
@@ -197,7 +198,8 @@ async def place_sell_limit_order(
     position: Position,
     limit_price: float,
     db_manager: DatabaseManager,
-    kalshi_client: KalshiClient
+    kalshi_client: KalshiClient,
+    order_out: Optional[Dict] = None,
 ) -> bool:
     """
     Place a sell limit order to close an existing position.
@@ -207,6 +209,8 @@ async def place_sell_limit_order(
         limit_price: The limit price for the sell order (in dollars)
         db_manager: Database manager
         kalshi_client: Kalshi API client
+        order_out: If given, filled with the order response so the caller can
+            reconcile fills (see reconcile_exit_fill)
     
     Returns:
         True if order placed successfully, False otherwise
@@ -214,11 +218,29 @@ async def place_sell_limit_order(
     logger = get_trading_logger("sell_limit_order")
     
     try:
+        # Convert price to cents for Kalshi API; round, since int() truncates
+        # float error (0.29 * 100 == 28.999...) and would sell 1c low.
+        limit_price_cents = int(round(limit_price * 100))
+        if not 1 <= limit_price_cents <= 99:
+            logger.warning(f"Not selling {position.market_id}: limit {limit_price_cents}c "
+                           f"is outside 1-99c.")
+            return False
+
+        # Never sell more than we hold on the exchange, net of our resting sells:
+        # a DB row can outlive the contracts, and an oversell opens the other side.
+        sellable = await _sellable_contracts(kalshi_client, position.market_id, position.side)
+        if sellable is None:
+            logger.warning(f"Not selling {position.market_id}: could not confirm held "
+                           f"contracts or resting sells on the exchange.")
+            return False
+        count = min(position.quantity, math.floor(sellable * 100) / 100)
+        if count <= 0:
+            logger.warning(f"Not selling {position.market_id}: nothing sellable "
+                           f"(held minus resting sells = {sellable}).")
+            return False
+
         import uuid
         client_order_id = str(uuid.uuid4())
-        
-        # Convert price to cents for Kalshi API
-        limit_price_cents = int(limit_price * 100)
         
         # For sell orders, we need to use the opposite side logic:
         # - If we have YES position, we sell YES shares (action="sell", side="yes")
@@ -230,7 +252,7 @@ async def place_sell_limit_order(
             "client_order_id": client_order_id,
             "side": side,
             "action": "sell",  # We're selling our existing position
-            "count": position.quantity,
+            "count": count,
             "type_": "limit"
         }
         
@@ -240,10 +262,12 @@ async def place_sell_limit_order(
         else:
             order_params["no_price"] = limit_price_cents
         
-        logger.info(f"🎯 Placing SELL LIMIT order: {position.quantity} {side.upper()} at {limit_price_cents}¢ for {position.market_id}")
+        logger.info(f"🎯 Placing SELL LIMIT order: {count} {side.upper()} at {limit_price_cents}¢ for {position.market_id}")
         
         # Place the sell limit order
         response = await kalshi_client.place_order(**order_params)
+        if order_out is not None and isinstance(response, dict):
+            order_out.update(response)
         
         if response and 'order' in response:
             order_id = response['order'].get('order_id', client_order_id)
@@ -257,9 +281,9 @@ async def place_sell_limit_order(
             # Record the sell order in the database (we could add a sell_orders table if needed)
             logger.info(f"✅ SELL LIMIT ORDER placed successfully! Order ID: {order_id}")
             logger.info(f"   Market: {position.market_id}")
-            logger.info(f"   Side: {side.upper()} (selling {position.quantity} shares)")
+            logger.info(f"   Side: {side.upper()} (selling {count} shares)")
             logger.info(f"   Limit Price: {limit_price_cents}¢")
-            logger.info(f"   Expected Proceeds: ${limit_price * position.quantity:.2f}")
+            logger.info(f"   Expected Proceeds: ${limit_price * count:.2f}")
             
             return True
         else:
@@ -269,6 +293,126 @@ async def place_sell_limit_order(
     except Exception as e:
         logger.error(f"❌ Error placing sell limit order for {position.market_id}: {e}")
         return False
+
+
+def _order_outcome(o: Dict) -> Optional[str]:
+    """Outcome ('yes'/'no') a resting order is positioned for; None if unreadable.
+
+    Kalshi's Order schema: outcome_side ("buy-yes and sell-no produce 'yes';
+    buy-no and sell-yes produce 'no'"), book_side ('bid' = yes, 'ask' = no), and
+    the deprecated side + action (https://docs.kalshi.com/api-reference/orders/get-orders).
+    """
+    outcome = str(o.get("outcome_side") or "").lower()
+    if outcome in ("yes", "no"):
+        return outcome
+    book = str(o.get("book_side") or "").lower()
+    if book in ("bid", "ask"):
+        return "yes" if book == "bid" else "no"
+    side, action = str(o.get("side") or "").lower(), str(o.get("action") or "").lower()
+    if side in ("yes", "no") and action in ("buy", "sell"):
+        return side if action == "buy" else ("no" if side == "yes" else "yes")
+    return None
+
+
+async def _sellable_contracts(kalshi_client: KalshiClient, ticker: str,
+                              side: str) -> Optional[float]:
+    """Contracts held on ``side`` of ``ticker`` minus our resting orders against it.
+
+    A resting order counts against a YES holding when it is positioned for NO
+    (sell YES, or buy NO, which nets the same contracts), and vice versa. None
+    when an exchange read fails or a resting order can't be read, so the caller
+    sends nothing (fail closed); an unreadable order is logged by its fields.
+    """
+    logger = get_trading_logger("sellable_guard")
+    held = await kalshi_client._held_on_side(ticker, side)
+    if isinstance(held, bool) or not isinstance(held, (int, float)) or not math.isfinite(held):
+        logger.error(f"Exit blocked on {ticker}: held {side} contracts unreadable ({held!r}).")
+        return None
+    try:
+        resp = await kalshi_client.get_orders(ticker=ticker, status="resting")
+    except Exception as e:
+        logger.error(f"Exit blocked on {ticker}: resting-orders read failed ({e}).")
+        return None
+    orders = resp.get("orders") if isinstance(resp, dict) else None
+    if not isinstance(orders, list):
+        logger.error(f"Exit blocked on {ticker}: resting-orders response has no 'orders' list.")
+        return None
+    if resp.get("cursor") and len(orders) >= 100:  # a full default page: there may be more
+        logger.error(f"Exit blocked on {ticker}: resting orders span more than one page.")
+        return None
+    against = "no" if side.lower() == "yes" else "yes"
+    resting = 0.0
+    for o in orders:
+        if not isinstance(o, dict) or o.get("ticker") != ticker:
+            continue
+        outcome = _order_outcome(o)
+        if outcome is None:
+            logger.error(f"Exit blocked on {ticker}: resting order {o.get('order_id')} has no "
+                         f"readable outcome_side, book_side or side+action; keys={sorted(o)}.")
+            return None
+        if outcome != against:
+            continue
+        left = None
+        for key in ("remaining_count_fp", "remaining_count"):
+            try:
+                left = float(o.get(key))
+                break
+            except (TypeError, ValueError):
+                continue
+        if left is None or not math.isfinite(left) or left < 0:
+            logger.error(f"Exit blocked on {ticker}: resting order {o.get('order_id')} has no "
+                         f"readable remaining_count_fp; keys={sorted(o)}.")
+            return None
+        resting += left
+    return held - resting
+
+
+async def reconcile_exit_fill(position: Position, response: Dict, sell_ok: bool,
+                              limit_price: float, db_manager: DatabaseManager,
+                              reason: str) -> str:
+    """Record what an exit sell filled, read from the order response, never assumed.
+
+    Returns "filled" (exit logged, position closed), "partial" (sold part logged,
+    position shrunk), "resting" (GTC order on the book, nothing recorded) or
+    "none" (no order went out, or it filled nothing).
+    """
+    logger = get_trading_logger("exit_fill")
+    order = response.get("order") if isinstance(response, dict) else None
+    if not isinstance(order, dict):
+        logger.warning(f"No {reason} sell sent for {position.market_id}; position unchanged.")
+        return "none"
+    if response.get("reduce_only_ioc"):
+        # place_sell_limit_order already ran _record_ioc_exit: True = all filled.
+        full = sell_ok
+    elif _filled_count(order) > 0:
+        full = await _record_ioc_exit(position, order, limit_price, db_manager, logger,
+                                      reason=f"partial fill ({reason})")
+    else:
+        logger.info(f"{reason} sell for {position.market_id} is resting; "
+                    f"not recorded as sold until it fills.")
+        return "resting"
+    if full:
+        await db_manager.add_trade_log(TradeLog(
+            market_id=position.market_id, side=position.side,
+            entry_price=position.entry_price, exit_price=limit_price,
+            quantity=position.quantity,
+            pnl=(limit_price - position.entry_price) * position.quantity,
+            entry_timestamp=position.timestamp, exit_timestamp=datetime.now(),
+            rationale=f"{position.rationale} | EXIT: {reason}"))
+        await db_manager.update_position_status(position.id, 'closed')
+        logger.info(f"✅ {reason} sell for {position.market_id} filled; position closed.")
+        return "filled"
+    if _filled_count(order) > 0:
+        logger.info(f"{reason} sell for {position.market_id} partly filled; "
+                    f"sold part logged, the rest stays open.")
+        return "partial"
+    logger.info(f"{reason} sell for {position.market_id} filled nothing; position unchanged.")
+    return "none"
+
+
+# Threshold compares allow float error: (0.45 - 0.50) / 0.50 is
+# -0.09999999999999998, which would miss an exact -10% stop.
+_PCT_EPS = 1e-9
 
 
 async def place_profit_taking_orders(
@@ -313,11 +457,10 @@ async def place_profit_taking_orders(
                     logger.warning(f"Could not get market data for {position.market_id}")
                     continue
                 
-                # Get current price based on position side
-                if position.side == "YES":
-                    current_price = market_data.get('yes_price', 0) / 100  # Convert cents to dollars
-                else:
-                    current_price = market_data.get('no_price', 0) / 100
+                # Price the held side at its bid, what a sell can get. v2 sends
+                # *_dollars fields only; there is no yes_price/no_price key.
+                yes_bid, _, no_bid, _ = get_market_prices(market_data)
+                current_price = yes_bid if position.side == "YES" else no_bid
                 
                 # Calculate current profit
                 if current_price > 0:
@@ -327,25 +470,26 @@ async def place_profit_taking_orders(
                     logger.debug(f"Position {position.market_id}: Entry=${position.entry_price:.3f}, Current=${current_price:.3f}, Profit={profit_pct:.1%}, PnL=${unrealized_pnl:.2f}")
                     
                     # Check if we should place a profit-taking sell order
-                    if profit_pct >= profit_threshold:
+                    if profit_pct >= profit_threshold - _PCT_EPS:
                         # Calculate sell limit price (slightly below current to ensure execution)
                         sell_price = current_price * 0.98  # 2% below current price for quick execution
                         
                         logger.info(f"💰 PROFIT TARGET HIT: {position.market_id} - {profit_pct:.1%} profit (${unrealized_pnl:.2f})")
                         
                         # Place sell limit order
+                        order = {}
                         success = await place_sell_limit_order(
                             position=position,
                             limit_price=sell_price,
                             db_manager=db_manager,
-                            kalshi_client=kalshi_client
+                            kalshi_client=kalshi_client,
+                            order_out=order,
                         )
-                        
-                        if success:
+                        # Logs the outcome; closes or shrinks the position only on a fill.
+                        await reconcile_exit_fill(position, order, success, sell_price,
+                                                  db_manager, "profit_take")
+                        if order:
                             results['orders_placed'] += 1
-                            logger.info(f"✅ Profit-taking order placed for {position.market_id}")
-                        else:
-                            logger.error(f"❌ Failed to place profit-taking order for {position.market_id}")
                 
             except Exception as e:
                 logger.error(f"Error processing position {position.market_id} for profit taking: {e}")
@@ -401,11 +545,10 @@ async def place_stop_loss_orders(
                     logger.warning(f"Could not get market data for {position.market_id}")
                     continue
                 
-                # Get current price based on position side
-                if position.side == "YES":
-                    current_price = market_data.get('yes_price', 0) / 100
-                else:
-                    current_price = market_data.get('no_price', 0) / 100
+                # Price the held side at its bid, what a sell can get. v2 sends
+                # *_dollars fields only; there is no yes_price/no_price key.
+                yes_bid, _, no_bid, _ = get_market_prices(market_data)
+                current_price = yes_bid if position.side == "YES" else no_bid
                 
                 # Calculate current loss
                 if current_price > 0:
@@ -413,7 +556,7 @@ async def place_stop_loss_orders(
                     unrealized_pnl = (current_price - position.entry_price) * position.quantity
                     
                     # Check if we need stop-loss protection
-                    if loss_pct <= stop_loss_threshold:  # Negative loss percentage
+                    if loss_pct <= stop_loss_threshold + _PCT_EPS:  # Negative loss percentage
                         # Calculate stop-loss sell price
                         stop_price = position.entry_price * (1 + stop_loss_threshold * 1.1)  # Slightly more aggressive
                         stop_price = max(0.01, stop_price)  # Ensure price is at least 1¢
@@ -421,18 +564,19 @@ async def place_stop_loss_orders(
                         logger.info(f"🛡️ STOP LOSS TRIGGERED: {position.market_id} - {loss_pct:.1%} loss (${unrealized_pnl:.2f})")
                         
                         # Place stop-loss sell order
+                        order = {}
                         success = await place_sell_limit_order(
                             position=position,
                             limit_price=stop_price,
                             db_manager=db_manager,
-                            kalshi_client=kalshi_client
+                            kalshi_client=kalshi_client,
+                            order_out=order,
                         )
-                        
-                        if success:
+                        # Logs the outcome; closes or shrinks the position only on a fill.
+                        await reconcile_exit_fill(position, order, success, stop_price,
+                                                  db_manager, "stop_loss")
+                        if order:
                             results['orders_placed'] += 1
-                            logger.info(f"✅ Stop-loss order placed for {position.market_id}")
-                        else:
-                            logger.error(f"❌ Failed to place stop-loss order for {position.market_id}")
                 
             except Exception as e:
                 logger.error(f"Error processing position {position.market_id} for stop loss: {e}")

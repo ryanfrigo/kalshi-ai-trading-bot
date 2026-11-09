@@ -34,7 +34,15 @@ def _client(order_resp=_DEFAULT, market=None, balance=1_000_000):
                               if order_resp is _DEFAULT else order_resp)
     c.get_market = AsyncMock(return_value={"market": market if market is not None else {}})
     c.get_balance = AsyncMock(return_value={"balance": balance})
+    # Exit sells first check what the exchange says is sellable: hold plenty, nothing resting.
+    c._held_on_side = AsyncMock(return_value=1_000_000.0)
+    c.get_orders = AsyncMock(return_value={"orders": [], "cursor": ""})
     return c
+
+
+def _bids(yes=0, no=0):
+    """A v2 market object: *_dollars fixed-point strings only, bids given in cents."""
+    return {"yes_bid_dollars": f"{yes / 100:.4f}", "no_bid_dollars": f"{no / 100:.4f}"}
 
 
 def _db(positions=()):
@@ -72,30 +80,24 @@ async def test_sell_limit_swallows_api_error_and_reports_failure():
     assert await place_sell_limit_order(_pos(), 0.5, _db(), c) is False
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: src/jobs/execute.py place_sell_limit_order uses int(limit_price*100), which "
-    "truncates float error: 0.29*100 == 28.999999999999996 -> 28c. A sell is sent 1c "
-    "below the intended limit (round() is used on the buy path)."))
 async def test_sell_limit_price_does_not_truncate_float_error():
     c = _client()
     await place_sell_limit_order(_pos("YES"), 0.29, _db(), c)
     assert c.place_order.call_args.kwargs["yes_price"] == 29
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: src/jobs/execute.py place_sell_limit_order has no 1-99c range check; a "
-    "limit under 1c is sent as yes_price=0 (buy path rejects <=0 or >=100)."))
 @pytest.mark.parametrize("price", [0.004, 0.0, 1.0, 1.5])
 async def test_sell_limit_out_of_range_price_is_not_sent(price):
     c = _client()
     ok = await place_sell_limit_order(_pos("YES"), price, _db(), c)
     assert ok is False
     c.place_order.assert_not_called()
+    c._held_on_side.assert_not_called()  # rejected before any exchange read
 
 
 # -------------------------------------------------------------- profit taking
 async def test_profit_taking_places_sell_at_98pct_of_current():
-    c = _client(market={"yes_price": 80})  # entry 0.50 -> +60%
+    c = _client(market=_bids(yes=80))  # entry 0.50 -> +60%
     res = await place_profit_taking_orders(_db([_pos("YES", 0.50)]), c, profit_threshold=0.25)
     assert res == {"orders_placed": 1, "positions_processed": 1}
     kw = c.place_order.call_args.kwargs
@@ -103,27 +105,33 @@ async def test_profit_taking_places_sell_at_98pct_of_current():
 
 
 async def test_profit_taking_below_threshold_places_nothing():
-    c = _client(market={"yes_price": 55})  # +10%
+    c = _client(market=_bids(yes=55))  # +10%
     res = await place_profit_taking_orders(_db([_pos("YES", 0.50)]), c, profit_threshold=0.25)
     assert res == {"orders_placed": 0, "positions_processed": 1}
     c.place_order.assert_not_called()
 
 
 async def test_profit_taking_exactly_at_threshold_triggers():
-    c = _client(market={"yes_price": 75})  # (0.75-0.60)/0.60 = 25%
+    c = _client(market=_bids(yes=75))  # (0.75-0.60)/0.60 = 25%
     res = await place_profit_taking_orders(_db([_pos("YES", 0.60)]), c, profit_threshold=0.25)
     assert res["orders_placed"] == 1
 
 
-async def test_profit_taking_no_side_reads_no_price():
-    c = _client(market={"yes_price": 5, "no_price": 90})
+async def test_profit_taking_exact_threshold_survives_float_error():
+    c = _client(market=_bids(yes=12))  # (0.12-0.10)/0.10 == 0.1999999999999999
+    res = await place_profit_taking_orders(_db([_pos("YES", 0.10)]), c, profit_threshold=0.20)
+    assert res["orders_placed"] == 1
+
+
+async def test_profit_taking_no_side_reads_no_bid():
+    c = _client(market=_bids(yes=5, no=90))
     res = await place_profit_taking_orders(_db([_pos("NO", 0.60)]), c, profit_threshold=0.25)
     assert res["orders_placed"] == 1
     kw = c.place_order.call_args.kwargs
     assert kw["side"] == "no" and kw["no_price"] == 88 and "yes_price" not in kw
 
 
-@pytest.mark.parametrize("market", [{}, {"yes_price": 0}])
+@pytest.mark.parametrize("market", [{}, _bids(yes=0)])
 async def test_profit_taking_skips_missing_or_zero_price(market):
     c = _client(market=market)
     res = await place_profit_taking_orders(_db([_pos()]), c)
@@ -133,7 +141,7 @@ async def test_profit_taking_skips_missing_or_zero_price(market):
 
 async def test_profit_taking_one_failure_does_not_stop_the_rest():
     c = _client()
-    c.get_market = AsyncMock(side_effect=[RuntimeError("boom"), {"market": {"yes_price": 90}}])
+    c.get_market = AsyncMock(side_effect=[RuntimeError("boom"), {"market": _bids(yes=90)}])
     res = await place_profit_taking_orders(
         _db([_pos(market_id="A"), _pos(market_id="B")]), c, profit_threshold=0.25)
     assert res == {"orders_placed": 1, "positions_processed": 2}
@@ -147,34 +155,56 @@ async def test_profit_taking_db_failure_returns_zero_counts():
                                                               "positions_processed": 0}
 
 
+@pytest.mark.parametrize("side,job,kw", [
+    ("YES", place_profit_taking_orders, {"profit_threshold": 0.25}),
+    ("NO", place_profit_taking_orders, {"profit_threshold": 0.25}),
+    ("YES", place_stop_loss_orders, {"stop_loss_threshold": -0.10}),
+    ("NO", place_stop_loss_orders, {"stop_loss_threshold": -0.10}),
+])
+async def test_exit_jobs_price_a_v2_market_at_the_held_bid(side, job, kw):
+    # Get Market as v2 sends it: *_dollars strings, no yes_price/no_price keys.
+    # Entry 0.50: the held side's bid is 0.80 for profit, 0.40 for stop; the
+    # ask and the other side are set to prices that would not trip the job.
+    win = job is place_profit_taking_orders
+    held_bid, held_ask = ("0.8000", "0.8100") if win else ("0.4000", "0.4100")
+    other_bid, other_ask = ("0.1900", "0.2000") if win else ("0.5900", "0.6000")
+    y = (held_bid, held_ask) if side == "YES" else (other_bid, other_ask)
+    n = (other_bid, other_ask) if side == "YES" else (held_bid, held_ask)
+    market = {"ticker": "T-1", "status": "active",
+              "yes_bid_dollars": y[0], "yes_ask_dollars": y[1],
+              "no_bid_dollars": n[0], "no_ask_dollars": n[1],
+              "last_price_dollars": "0.5000", "yes_bid_size_fp": "10.00"}
+    c = _client(market=market)
+    res = await job(_db([_pos(side, 0.50)]), c, **kw)
+    assert res["orders_placed"] == 1
+    sent = c.place_order.call_args.kwargs
+    assert sent["side"] == side.lower() and sent["action"] == "sell"
+
+
 # ------------------------------------------------------------------ stop loss
 async def test_stop_loss_triggers_and_prices_below_entry():
-    c = _client(market={"yes_price": 40})  # entry .50 -> -20%
+    c = _client(market=_bids(yes=40))  # entry .50 -> -20%
     res = await place_stop_loss_orders(_db([_pos("YES", 0.50)]), c, stop_loss_threshold=-0.10)
     assert res["orders_placed"] == 1
-    # entry*(1 + -0.10*1.1) = 0.445 -> int(44.5) = 44c
+    # entry*(1 + -0.10*1.1) = 0.445 -> round(44.5) = 44c (half to even)
     assert c.place_order.call_args.kwargs["yes_price"] == 44
 
 
 async def test_stop_loss_not_triggered_above_threshold():
-    c = _client(market={"yes_price": 46})  # -8%
+    c = _client(market=_bids(yes=46))  # -8%
     res = await place_stop_loss_orders(_db([_pos("YES", 0.50)]), c, stop_loss_threshold=-0.10)
     assert res["orders_placed"] == 0
     c.place_order.assert_not_called()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG: src/jobs/execute.py place_stop_loss_orders compares an unrounded float ratio: "
-    "(0.45-0.50)/0.50 == -0.09999999999999998 > -0.10, so a position exactly at the "
-    "stop-loss threshold does NOT trigger (needs ~1 more cent of loss)."))
 async def test_stop_loss_exactly_at_threshold_triggers():
-    c = _client(market={"yes_price": 45})  # exactly -10%
+    c = _client(market=_bids(yes=45))  # exactly -10%
     res = await place_stop_loss_orders(_db([_pos("YES", 0.50)]), c, stop_loss_threshold=-0.10)
     assert res["orders_placed"] == 1
 
 
 async def test_stop_loss_price_floors_at_one_cent():
-    c = _client(market={"yes_price": 1})
+    c = _client(market=_bids(yes=1))
     # threshold -0.9 -> stop = entry*(1-0.99) = 0.005 -> clamped to 0.01
     res = await place_stop_loss_orders(_db([_pos("YES", 0.50)]), c, stop_loss_threshold=-0.9)
     assert res["orders_placed"] == 1
@@ -182,7 +212,7 @@ async def test_stop_loss_price_floors_at_one_cent():
 
 
 async def test_stop_loss_no_side_sells_no_contract():
-    c = _client(market={"no_price": 30})  # entry .50 NO -> -40%
+    c = _client(market=_bids(no=30))  # entry .50 NO -> -40%
     res = await place_stop_loss_orders(_db([_pos("NO", 0.50)]), c, stop_loss_threshold=-0.10)
     assert res["orders_placed"] == 1
     kw = c.place_order.call_args.kwargs
@@ -190,7 +220,7 @@ async def test_stop_loss_no_side_sells_no_contract():
 
 
 async def test_stop_loss_halt_rejection_counts_no_order():
-    c = _client(market={"yes_price": 10})
+    c = _client(market=_bids(yes=10))
     c.place_order = AsyncMock(side_effect=KalshiAPIError("RISK_HALT: MANUAL_HALT: x"))
     res = await place_stop_loss_orders(_db([_pos("YES", 0.50)]), c)
     assert res == {"orders_placed": 0, "positions_processed": 1}
