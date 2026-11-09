@@ -331,3 +331,69 @@ def test_position_fp_wins_over_legacy_position(tmp_path):
         {"ticker": "KXT", "position_fp": "-1.00", "position": -88}]}})
     res = _buy(client, tmp_path)
     assert res["ok"] is True and res["count"] == 87
+
+
+# ---------------------------------------------------------------------------
+# fill_count: v2 fill_count_fp, legacy fill_count fallback, including an order
+# recovered by client_order_id after an ambiguous POST
+# ---------------------------------------------------------------------------
+from src.agent.toolbelt import close_position
+
+
+class _FillClient(_MarketClient):
+    def __init__(self, order):
+        super().__init__(no_ask=0.60)
+        self.order = order
+    async def get_positions(self, ticker=None):
+        return {"market_positions": [{"ticker": ticker, "position_fp": "5.00"}]}
+    async def _held_on_side(self, ticker, side):
+        return 5.0
+    async def place_order(self, **kw):
+        self.placed.append(kw)
+        return {"order": self.order, **self.order}
+
+
+_RECOVERED = {"order_id": "oid", "fill_count_fp": "3.00", "recovered_by_client_order_id": True}
+
+
+@pytest.mark.parametrize("order,expected", [
+    (_RECOVERED, 3.0),
+    ({"order_id": "oid", "fill_count_fp": "2.50", "fill_count": 9}, 2.5),
+    ({"order_id": "oid", "fill_count": 4}, 4.0),
+    ({"order_id": "oid"}, None),
+    ({"order_id": "oid", "fill_count_fp": "junk"}, None),
+])
+def test_fill_count_reads_fp_then_legacy(tmp_path, order, expected):
+    journal = str(tmp_path / "j.jsonl")
+    buy = asyncio.run(place_guarded_order(
+        _FillClient(order), ticker="KXX-1", side="no", count=5, price=0.60, est_prob=0.80,
+        governor=_Governor(), dry=False, journal_path=journal,
+        policy_path=str(tmp_path / "none.json")))
+    sell = asyncio.run(close_position(_FillClient(order), ticker="KXX-1", dry=False,
+                                      journal_path=journal))
+    assert buy["ok"] is True and buy["order_id"] == "oid" and buy["fill_count"] == expected
+    assert sell["ok"] is True and sell["order_id"] == "oid" and sell["fill_count"] == expected
+
+
+class _UnknownClient(_FillClient):
+    async def place_order(self, **kw):
+        from src.clients.kalshi_client import KalshiOrderOutcomeUnknown
+        self.placed.append(kw)
+        raise KalshiOrderOutcomeUnknown("outcome unknown; not resent")
+
+
+def test_outcome_unknown_is_reported_not_raised(tmp_path):
+    journal = tmp_path / "j.jsonl"
+    buyer, seller = _UnknownClient({}), _UnknownClient({})
+    buy = asyncio.run(place_guarded_order(
+        buyer, ticker="KXX-1", side="no", count=5, price=0.60, est_prob=0.80,
+        governor=_Governor(), dry=False, journal_path=str(journal),
+        policy_path=str(tmp_path / "none.json")))
+    sell = asyncio.run(close_position(seller, ticker="KXX-1", dry=False,
+                                      journal_path=str(journal)))
+    for res, client in ((buy, buyer), (sell, seller)):
+        assert res["ok"] is False and res["reason"] == "outcome_unknown"
+        assert len(client.placed) == 1  # sent once, never resent
+        assert res["client_order_id"] == client.placed[0]["client_order_id"]
+    assert sell["action"] == "sell"
+    assert not journal.exists()  # non-ok results are not journaled
