@@ -567,16 +567,20 @@ class SafeCompounder:
             yes_bids = ob.get("yes_dollars", ob.get("yes", []))
             no_bids = ob.get("no_dollars", ob.get("no", []))
 
+            # No YES bids means no real NO ask; never invent one from the NO bids.
+            if not yes_bids:
+                logger.info("no NO ask: no YES bids (%s)", ticker)
+                continue
+
             lowest_no_ask = None
-            if yes_bids:
-                try:
-                    highest_yes_bid = max(float(b[0]) for b in yes_bids)
-                    # Convert cents to dollars if needed
-                    if highest_yes_bid > 1.0:
-                        highest_yes_bid = highest_yes_bid / 100.0
-                    lowest_no_ask = 1.0 - highest_yes_bid
-                except (ValueError, TypeError):
-                    pass
+            try:
+                highest_yes_bid = max(float(b[0]) for b in yes_bids)
+                # Convert cents to dollars if needed
+                if highest_yes_bid > 1.0:
+                    highest_yes_bid = highest_yes_bid / 100.0
+                lowest_no_ask = 1.0 - highest_yes_bid
+            except (ValueError, TypeError):
+                pass
 
             best_no_bid = 0
             if no_bids:
@@ -587,9 +591,6 @@ class SafeCompounder:
                         best_no_bid = best_no_bid / 100.0
                 except (ValueError, TypeError):
                     pass
-
-            if lowest_no_ask is None and best_no_bid > 0:
-                lowest_no_ask = best_no_bid + 0.02  # 2¢ = $0.02
 
             if lowest_no_ask is None:
                 continue
