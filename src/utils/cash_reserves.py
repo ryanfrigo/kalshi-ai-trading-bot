@@ -359,7 +359,7 @@ class CashReservesManager:
         """Dollar value of one v2 ``market_positions`` row; 0.0 for malformed
         rows or flat positions (skipped, never poisons the whole portfolio).
 
-        Uses ``market_exposure_dollars`` when it is a finite number >= 0,
+        Uses ``market_exposure_dollars`` when it is a finite number > 0,
         otherwise estimates $0.50 per contract from signed ``position_fp``.
         """
         if not isinstance(position, dict):
@@ -372,7 +372,7 @@ class CashReservesManager:
             return 0.0
         try:
             exposure = float(position.get("market_exposure_dollars"))
-            if math.isfinite(exposure) and exposure >= 0:
+            if math.isfinite(exposure) and exposure > 0:
                 return exposure
         except (TypeError, ValueError):
             pass
