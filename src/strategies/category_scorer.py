@@ -64,6 +64,18 @@ KNOWN_DATA = {
 }
 
 
+def is_seeded_row(row: Dict) -> bool:
+    """True if a category_scores row still equals its KNOWN_DATA seed exactly
+    (same wins, total and total_pnl). Display-only; once real trades change the
+    counts the row is no longer marked."""
+    seed = KNOWN_DATA.get(row["category"])
+    return bool(seed) and (
+        row["win_count"] == seed["wins"]
+        and row["total_count"] == seed["total"]
+        and row["total_pnl"] == seed["total_pnl"]
+    )
+
+
 def _compute_score(
     win_rate: float,
     avg_roi: float,
@@ -374,6 +386,7 @@ class CategoryScorer:
 
     def format_scores_table(self, scores: List[Dict]) -> str:
         """Format scores as a readable table string."""
+        any_seeded = False
         lines = [
             "=" * 70,
             "  CATEGORY SCORES",
@@ -386,6 +399,9 @@ class CategoryScorer:
             total = row["total_count"]
             wins = row["win_count"]
             pnl = row["total_pnl"]
+            if is_seeded_row(row):
+                cat += "*"
+                any_seeded = True
             wr = f"{wins/total*100:.0f}%" if total > 0 else "n/a"
             avg_roi = f"{pnl/total*100:.1f}%" if total > 0 else "n/a"
             alloc = f"{get_allocation_pct(score)*100:.0f}%"
@@ -394,6 +410,11 @@ class CategoryScorer:
                 f"  {cat:<18} {score:>6.1f} {wr:>6} {avg_roi:>8} {total:>7} {alloc:>6}  {label}"
             )
         lines.append("=" * 70)
+        if any_seeded:
+            lines.append(
+                "  Rows marked * are starting estimates hard-coded in "
+                "category_scorer.py (KNOWN_DATA), not your trades."
+            )
         return "\n".join(lines)
 
 
