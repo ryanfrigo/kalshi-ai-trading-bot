@@ -8,6 +8,7 @@ corpus, or hide a real settlement on its ticker. Pure, in-memory fixtures.
 from src.agent.edge import edge_report
 from src.agent.journal import reconcile_fills
 from src.agent.learnings import calibration_table, edge_breakdown, reconcile_outcomes
+from src.agent.pending import _resolve_one
 from src.agent.policy import build_settled_records
 
 
@@ -56,3 +57,10 @@ def test_reconcile_fills_leaves_a_pending_record_untouched():
     rec = _rec("KXP-1", pending=True)
     out, changes = reconcile_fills([rec], [], set())
     assert out == [rec] and changes == []
+
+
+def test_fractional_count_with_partial_fill_stays_pending():
+    rec = dict(_rec("KXP-1", pending=True), count=2.5)
+    found = {"status": "resting", "fill_count_fp": "2.20", "order_id": "oid"}
+    out, change = _resolve_one(rec, found)
+    assert out is rec and change == ""

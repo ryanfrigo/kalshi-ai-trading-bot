@@ -97,15 +97,19 @@ def _fill_count(order: Dict[str, Any]) -> Optional[float]:
 
 async def _sum_pages(fetch, list_key: str, ticker: str, fp_key: str, legacy_key: str) -> float:
     """Sum contracts on ``ticker`` across every page of ``fetch``. Raises on a bad
-    list shape, an unreadable count, or more than _EXPOSURE_MAX_PAGES pages."""
+    list shape, a malformed row, an unreadable count, or more than
+    _EXPOSURE_MAX_PAGES pages."""
     total, cursor = 0.0, None
     for _ in range(_EXPOSURE_MAX_PAGES):
         resp = await (fetch(ticker=ticker, cursor=cursor) if cursor else fetch(ticker=ticker))
         rows = resp.get(list_key) if isinstance(resp, dict) else None
         if not isinstance(rows, list):
             raise ValueError(f"{list_key} missing or not a list")
+        for r in rows:
+            if not isinstance(r, dict) or not isinstance(r.get("ticker"), str) or not r["ticker"]:
+                raise ValueError(f"malformed row in {list_key}")
         total += sum(_contracts(r, fp_key, legacy_key)
-                     for r in rows if isinstance(r, dict) and r.get("ticker") == ticker)
+                     for r in rows if r.get("ticker") == ticker)
         cursor = resp.get("cursor")
         if not cursor:
             return total

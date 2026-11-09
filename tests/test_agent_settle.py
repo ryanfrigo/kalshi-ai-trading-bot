@@ -1,6 +1,8 @@
 """Tests for settlement_pnl — realized outcome from Kalshi's authoritative
 /portfolio/settlements records. won = held side matched market_result;
 pnl = revenue - cost - fees. Records where no contracts were held are skipped."""
+import pytest
+
 from src.agent.settle import settlement_pnl
 
 
@@ -73,3 +75,18 @@ def test_settlement_to_record_carries_side_category_and_outcome():
 def test_settlement_to_record_skips_rows_without_a_held_side():
     assert settlement_to_record({"ticker": "X", "held_side": None,
                                  "result": "no", "won": False, "pnl": 0.0}) is None
+
+
+def test_fractional_settlement_count_is_kept_and_prices_the_record():
+    s = {"ticker": "KXCPI-26JUN-3.2", "held_side": "yes", "count": 2.5,
+         "result": "yes", "cost": 1.0, "revenue": 250.0, "fee": 0.0, "pnl": 1.5}
+    rec = settlement_to_record(s)
+    assert rec["count"] == 2.5
+    assert rec["price"] == pytest.approx(0.4)
+
+
+def test_integral_settlement_count_stays_int():
+    s = {"ticker": "KXCPI-26JUN-3.2", "held_side": "yes", "count": 3,
+         "result": "yes", "cost": 1.2, "revenue": 300.0, "fee": 0.0, "pnl": 1.8}
+    count = settlement_to_record(s)["count"]
+    assert count == 3 and isinstance(count, int)

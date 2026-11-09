@@ -55,7 +55,7 @@ def _resolve_one(rec: Dict[str, Any], found: Any) -> Tuple[Dict[str, Any], str]:
     if filled > 0:
         # A non-terminal order short of the intended count may fill more: keep it
         # pending so a later pass captures the rest.
-        if found.get("status") not in _TERMINAL and filled < int(rec.get("count", 0)):
+        if found.get("status") not in _TERMINAL and filled < float(rec.get("count", 0)):
             return rec, ""
         try:
             price = _avg_fill_price(found, filled) or float(
