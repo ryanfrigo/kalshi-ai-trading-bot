@@ -396,4 +396,49 @@ def test_outcome_unknown_is_reported_not_raised(tmp_path):
         assert len(client.placed) == 1  # sent once, never resent
         assert res["client_order_id"] == client.placed[0]["client_order_id"]
     assert sell["action"] == "sell"
-    assert not journal.exists()  # non-ok results are not journaled
+    # journaled as pending, so the order is never invisible to the record
+    recs = [json.loads(line) for line in journal.read_text().splitlines()]
+    assert len(recs) == 2
+    for rec, res, action in zip(recs, (buy, sell), ("buy", "sell")):
+        assert rec["status"] == "pending" and rec["order_outcome"] == "outcome_unknown"
+        assert rec["client_order_id"] == res["client_order_id"]
+        assert rec["action"] == action and rec["ticker"] == "KXX-1"
+        assert rec["order_id"] is None and rec["outcome"] is None
+    assert recs[0]["count"] == 5 and recs[0]["price"] == 0.60 and recs[0]["est_prob"] == 0.80
+    assert recs[1]["count"] == sell["count"] and recs[1]["price"] == sell["price_cents"] / 100
+
+
+def _raising_journal(monkeypatch):
+    import src.agent.journal as journal_mod
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+    monkeypatch.setattr(journal_mod, "append_decision", boom)
+
+
+def test_outcome_unknown_buy_survives_journal_failure(tmp_path, monkeypatch, caplog):
+    _raising_journal(monkeypatch)
+    client = _UnknownClient({})
+    with caplog.at_level("WARNING"):
+        res = asyncio.run(place_guarded_order(
+            client, ticker="KXX-1", side="no", count=5, price=0.60, est_prob=0.80,
+            governor=_Governor(), dry=False, journal_path=str(tmp_path / "j.jsonl"),
+            policy_path=str(tmp_path / "none.json")))
+    assert res["ok"] is False and res["reason"] == "outcome_unknown"
+    assert res["client_order_id"] == client.placed[0]["client_order_id"]
+    assert res["journal_error"] == "disk full"
+    assert res["journaled"] is False
+    assert res["client_order_id"] in caplog.text
+
+
+def test_outcome_unknown_sell_survives_journal_failure(tmp_path, monkeypatch, caplog):
+    _raising_journal(monkeypatch)
+    client = _UnknownClient({})
+    with caplog.at_level("WARNING"):
+        res = asyncio.run(close_position(client, ticker="KXX-1", dry=False,
+                                         journal_path=str(tmp_path / "j.jsonl")))
+    assert res["ok"] is False and res["reason"] == "outcome_unknown"
+    assert res["client_order_id"] == client.placed[0]["client_order_id"]
+    assert res["journal_error"] == "disk full"
+    assert res["journaled"] is False
+    assert res["client_order_id"] in caplog.text

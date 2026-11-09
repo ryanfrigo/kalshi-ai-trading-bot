@@ -65,6 +65,22 @@ def make_decision_record(
     return record
 
 
+def mark_outcome_unknown(record: Dict[str, Any], client_order_id: str) -> Dict[str, Any]:
+    """Tag a record whose order POST outcome is unknown: it may or may not be live.
+
+    ``outcome`` stays None (it holds the settlement result); ``status`` "pending"
+    keeps every reader from settling or counting it until it is resolved.
+    """
+    record.update(status="pending", order_outcome="outcome_unknown",
+                  client_order_id=client_order_id)
+    return record
+
+
+def is_pending(record: Dict[str, Any]) -> bool:
+    """True for a record whose order may never have reached the book."""
+    return record.get("status") == "pending"
+
+
 def append_decision(record: Dict[str, Any], path: str = DEFAULT_JOURNAL_PATH) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
