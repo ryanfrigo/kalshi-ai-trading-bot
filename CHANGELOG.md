@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `run_daily.sh`, tests in `tests/test_ornn_data.py`, and `docs/ORNN.md` with the
   2026-09-26 case study (all-time-low A100 print 0.95 vs a 0.49 YES ask; bought
   40 on break-even math: remaining prints must average <= 0.9075 for the strike
-  to lose, MC P(loss) ~3%).
+  to lose, MC P(loss) ~3%; the position later lost, see docs/ORNN.md).
 - **AAA gas/diesel toolkit** — `scripts/aaa_data.py` (durable AAA Fuel Gauge print
   series rebuilt from Wayback Machine snapshots + daily live capture), `scripts/aaa_futures.py`
   (wholesale futures + retail-vs-wholesale convergence diagnostics), `scripts/aaa_pricer.py`
@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hyped: see **[docs/JEV.md](docs/JEV.md)**. `cli verify --jev` floors the skeptic's
   true-YES at Jev's independent P(YES) (stricter-only); `src/agent/jev.py` +
   `scripts/jev_classify.py` batch-classify text against a market rule (~50k pairs/min,
-  206/207 on endorsement posts); `scripts/jev_backtest.py` reproduces the blind test
+  206/207 on endorsement posts); `scripts/jev_backtest.py` re-runs the blind test (needs live Kalshi + OpenRouter access; results file not committed)
   where Jev lost to the book (Brier 0.209 vs 0.157, n=601).
 - **`cli report` shows all-time drawdown** after a governor peak re-baseline (read from
   `data/runtime/governor_audit.jsonl`), so a reset never hides a drawdown publicly.
@@ -134,7 +134,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Initial public release of Kalshi AI Trading Bot
-- Multi-agent AI decision engine with Forecaster, Critic, and Trader agents
+- ~~Multi-agent AI decision engine~~ (removed; scaffolding lives in experimental/agents)
 - Real-time market scanning and analysis
 - Portfolio optimization using Kelly Criterion and risk parity
 - Live trading integration with Kalshi API
@@ -150,7 +150,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Features
 - **Beast Mode Trading**: Aggressive multi-strategy trading system
-- **Grok-4 Integration**: Primary AI model for market analysis
+- ~~Grok-4 Integration~~ (replaced by OpenRouter, default claude-sonnet-4.5)
 - **Real-time Dashboard**: Web interface for monitoring and control
 - **Portfolio Management**: Advanced position sizing and risk management
 - **Market Making**: Automated spread trading and liquidity provision
@@ -198,7 +198,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### From Development to Production
 1. Set up environment variables in `.env` file
-2. Initialize database with `python init_database.py`
+2. Initialize database with `python scripts/init_database.py`
 3. Configure trading parameters in `src/config/settings.py`
 4. Test with paper trading before live trading
 5. Monitor performance and adjust settings as needed

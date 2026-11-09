@@ -17,8 +17,6 @@ keywords = [
     "trading",
     "prediction-markets",
     "ai",
-    "machine-learning",
-    "multi-agent",
     "llm",
 ]
 classifiers = [

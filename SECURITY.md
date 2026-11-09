@@ -18,8 +18,8 @@ unintended order placement, credential exposure, or position oversizing is in sc
   immediately** in your Kalshi account settings. Public git history is forever.
 - Use [Kalshi's demo environment](https://demo.kalshi.co) for development and
   experiments before pointing anything at production.
-- `LIVE_TRADING_ENABLED` defaults to `false`. Leave it that way until you have
-  read the execution path and tested in demo/paper mode.
+- Live orders need an explicit `--live` flag (or `confirm=true` over MCP). Everything
+  defaults to dry-run. Read the execution path and test in demo/paper mode first.
 
 ## Test Suite Safety
 

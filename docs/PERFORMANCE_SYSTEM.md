@@ -1,11 +1,11 @@
 # 🎯 Kalshi Automated Performance Analysis System
 
-A comprehensive, AI-powered performance analysis and risk management system for the Kalshi prediction market trading platform. This system provides real-time monitoring, automated analysis using Grok4, and actionable recommendations to optimize trading performance.
+A comprehensive, AI-powered performance analysis and risk management system for the Kalshi prediction market trading platform. This system provides real-time monitoring, automated analysis using the configured LLM, and actionable recommendations to optimize trading performance.
 
 ## 🚀 **System Overview**
 
 ### **What It Does**
-- **Automated Performance Analysis**: Runs daily/weekly analysis with Grok4 AI
+- **Automated Performance Analysis**: Runs daily/weekly analysis with the configured LLM
 - **Risk Management**: Monitors capital utilization, cash reserves, position limits
 - **Real-time Alerts**: Immediate notifications for critical issues
 - **Action Item Generation**: Specific, prioritized recommendations
@@ -15,26 +15,11 @@ A comprehensive, AI-powered performance analysis and risk management system for 
 ### **Key Features**
 - **Health Score (0-100)**: Overall system health rating
 - **Risk Checks**: Automated monitoring of 5+ critical risk factors
-- **Grok4 Intelligence**: AI-powered analysis and recommendations
+- **LLM Intelligence**: AI-powered analysis and recommendations
 - **Emergency Intervention**: Immediate analysis for critical situations
 - **Scheduler**: Automated daily (9 AM) and weekly (Monday) analysis
 - **Interactive CLI**: Command-line interface for manual operations
 
-## 📊 **Current System Status**
-
-Based on the latest analysis:
-- **Health Score**: 15.0/100 (CRITICAL)
-- **Critical Issues**: 2 (Cash reserves, Capital utilization)
-- **Warnings**: 2 (Position concentration, Single position risk)
-- **Available Cash**: $9.84 (CRITICAL - need ~$90+ for safety)
-- **Capital Utilization**: 91.4% (DANGEROUS - should be <80%)
-- **Active Positions**: 16 (HIGH - optimal: 10-12)
-
-### **Immediate Actions Required**
-1. **🚨 CRITICAL**: Build cash reserves immediately (close 2-3 positions)
-2. **🚨 CRITICAL**: Reduce capital utilization to <80%
-3. **⚠️ HIGH**: Reduce position count to improve concentration
-4. **⚠️ MEDIUM**: Analyze manual vs automated performance gap
 
 ## 🛠 **Installation & Setup**
 
@@ -46,25 +31,25 @@ pip install schedule aiosqlite structlog
 ### **Quick Start**
 ```bash
 # Start the automated system
-python3 performance_system_manager.py --start
+python3 scripts/performance_system_manager.py --start
 
 # Run immediate analysis
-python3 performance_system_manager.py --analyze
+python3 scripts/performance_system_manager.py --analyze
 
 # Check system status
-python3 performance_system_manager.py --status
+python3 scripts/performance_system_manager.py --status
 
 # Emergency intervention
-python3 performance_system_manager.py --emergency
+python3 scripts/performance_system_manager.py --emergency
 
 # Interactive mode
-python3 performance_system_manager.py --interactive
+python3 scripts/performance_system_manager.py --interactive
 ```
 
 ## 📋 **System Components**
 
 ### **1. Automated Performance Analyzer** (`src/jobs/automated_performance_analyzer.py`)
-- **Core Engine**: Main analysis logic with Grok4 integration
+- **Core Engine**: Main analysis logic with the configured LLM integration
 - **Risk Checks**: 5 automated risk management checks
 - **Performance Metrics**: Comprehensive trading statistics
 - **Action Items**: Prioritized recommendations (CRITICAL, HIGH, MEDIUM, LOW)
@@ -81,7 +66,7 @@ python3 performance_system_manager.py --interactive
 - **Quick Actions**: Emergency intervention tools
 - **API Endpoints**: Integration with beast mode dashboard
 
-### **4. System Manager** (`performance_system_manager.py`)
+### **4. System Manager** (`scripts/performance_system_manager.py`)
 - **Orchestration**: Complete system lifecycle management
 - **CLI Interface**: Command-line operations
 - **Signal Handling**: Graceful shutdown
@@ -90,38 +75,30 @@ python3 performance_system_manager.py --interactive
 ## 🔍 **Risk Management Checks**
 
 ### **1. Cash Reserve Threshold** (Target: 15-20%)
-- **Current**: ~9% (CRITICAL)
 - **Recommendation**: Close positions to build $90+ cash reserves
 - **Impact**: Prevents liquidity crisis, enables opportunistic trading
 
 ### **2. Capital Utilization** (Target: <80%)
-- **Current**: 91.4% (CRITICAL)
 - **Recommendation**: Reduce position sizes immediately
 - **Impact**: Reduces volatility risk, prevents margin calls
 
 ### **3. Position Concentration** (Target: ≤12 positions)
-- **Current**: 16 positions (WARNING)
 - **Recommendation**: Close 4 lowest-conviction positions
 - **Impact**: Improves capital efficiency, reduces management overhead
 
 ### **4. Single Position Risk** (Target: <10% per position)
-- **Current**: Largest position too concentrated (WARNING)
 - **Recommendation**: Reduce size of largest position
 - **Impact**: Prevents concentration risk in single market
 
 ### **5. Manual vs Automated Performance**
-- **Current**: Gap analysis needed
 - **Recommendation**: Extract patterns from profitable manual trades
 - **Impact**: Could improve automated trading win rate
 
-## 🤖 **Grok4 AI Integration**
+## 🤖 **LLM Integration**
 
 ### **Analysis Cost**: ~$0.01-0.02 per analysis
 ### **Response Time**: 25-30 seconds
 ### **Analysis Depth**: 3,000-4,000 character detailed reports
-
-### **Sample Grok4 Insights**:
-> "The system shows severe risk exposure, poor performance, and over-reliance on automation, leading to significant losses. Critical cash shortage and overutilization require immediate intervention..."
 
 ### **Key Capabilities**:
 - **Quantitative Analysis**: Specific metrics and thresholds
@@ -132,7 +109,6 @@ python3 performance_system_manager.py --interactive
 ## 📈 **Performance Metrics Tracked**
 
 ### **Trading Performance**
-- **Total Trades**: 20 (0% current win rate - mostly unrealized)
 - **Manual vs Automated**: Performance comparison and gap analysis
 - **P&L Tracking**: Realized and unrealized profit/loss
 - **Win Rate Analysis**: Success rate by trading method
@@ -166,14 +142,14 @@ python3 performance_system_manager.py --interactive
 ### **Emergency Procedures**
 ```bash
 # Immediate intervention
-python3 performance_system_manager.py --emergency
+python3 scripts/performance_system_manager.py --emergency
 
 # Manual override
-python3 performance_system_manager.py --interactive
+python3 scripts/performance_system_manager.py --interactive
 > emergency
 
 # Status check
-python3 performance_system_manager.py --status
+python3 scripts/performance_system_manager.py --status
 ```
 
 ## 🎯 **Usage Examples**
@@ -181,31 +157,31 @@ python3 performance_system_manager.py --status
 ### **Daily Operations**
 ```bash
 # Start automated monitoring
-python3 performance_system_manager.py --start
+python3 scripts/performance_system_manager.py --start
 
 # Check morning status
-python3 performance_system_manager.py --status
+python3 scripts/performance_system_manager.py --status
 
 # Run analysis after market close
-python3 performance_system_manager.py --analyze
+python3 scripts/performance_system_manager.py --analyze
 ```
 
 ### **Emergency Situations**
 ```bash
-# Immediate analysis with Grok4
-python3 performance_system_manager.py --emergency
+# Immediate analysis with the configured LLM
+python3 scripts/performance_system_manager.py --emergency
 
 # Interactive troubleshooting
-python3 performance_system_manager.py --interactive
+python3 scripts/performance_system_manager.py --interactive
 ```
 
 ### **System Management**
 ```bash
 # Custom schedule
-python3 performance_system_manager.py --start --daily-time "10:30" --weekly-day "friday"
+python3 scripts/performance_system_manager.py --start --daily-time "10:30" --weekly-day "friday"
 
 # Health threshold adjustment
-python3 performance_system_manager.py --start --health-threshold 60.0
+python3 scripts/performance_system_manager.py --start --health-threshold 60.0
 ```
 
 ## 📊 **Integration with Existing System**
@@ -267,7 +243,7 @@ config = ScheduleConfig(
 
 ### **Common Issues**
 1. **Database errors**: Check `trading_system.db` permissions
-2. **XAI API issues**: Verify API key and credits
+2. **OpenRouter API issues**: Verify `OPENROUTER_API_KEY` and credits
 3. **Scheduler not running**: Check system clock and permissions
 
 ### **Debug Commands**
@@ -289,7 +265,7 @@ python3 src/jobs/performance_dashboard_integration.py --summary
 
 This system provides:
 - **98% Automated**: Minimal manual intervention required
-- **Real-time**: <30 second analysis with Grok4
+- **Real-time**: <30 second analysis with the configured LLM
 - **Cost-effective**: ~$0.30/month for daily analysis
 - **Comprehensive**: 20+ metrics and 5+ risk checks
 - **Actionable**: Specific steps with target dates

@@ -1,3 +1,5 @@
+> Operator log, dated, not documentation. Figures may be stale. The risk governor is wired into the order path; no correlated-family cap exists in code.
+
 # Daily status — 2026-10-02 22:30 UTC
 
 ## Account

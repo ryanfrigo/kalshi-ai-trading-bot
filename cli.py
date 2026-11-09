@@ -24,7 +24,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 def cmd_run(args: argparse.Namespace) -> None:
-    """Start the trading bot (disciplined mode by default)."""
+    """Start the example trading strategy (lower-risk settings by default)."""
     from src.utils.logging_setup import setup_logging
 
     log_level = getattr(args, "log_level", "INFO")
@@ -58,7 +58,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     # --beast mode: original aggressive settings (NOT default)
     if beast:
         print("⚠️  BEAST MODE: Aggressive settings enabled.")
-        print("   WARNING: Aggressive settings with no guardrails. Use at your own risk.")
+        print("   WARNING: Looser settings. The risk governor still applies. Use at your own risk.")
         from beast_mode_bot import BeastModeBot
         bot = BeastModeBot(live_mode=live_mode)
         try:
@@ -72,9 +72,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     # per decision (with a fallback chain), not a parallel ensemble.
     print("🤖  AI DIRECTIONAL MODE (default)")
     print("   Single-model OpenRouter call per decision (fallback chain on error).")
-    print("   Category scoring + portfolio guardrails active.")
+    print("   Position size and loss limits come from the risk governor and settings.py; category scores are display-only (cli.py scores).")
     print("   Use --safe-compounder for conservative math-only mode.")
-    print("   Use --beast to run without guardrails (not recommended).")
+    print("   Use --beast for looser settings (not recommended).")
 
     from beast_mode_bot import BeastModeBot
     from src.strategies.category_scorer import CategoryScorer
@@ -882,8 +882,8 @@ def cmd_verify(args: argparse.Namespace) -> None:
     (``src.agent.verify.run_verify``) with the OpenRouter client injected as the
     LLM. The verdict gate is deterministic — it recomputes the edge in points and
     only says BUY_NO when the fade survives the skeptic AND clears every discipline
-    rule. READ-ONLY: never places an order, never writes the journal (its only
-    write is the AI-spend mirror into daily_cost). Pass --json
+    rule. Never places orders or writes the journal; records AI spend in the local DB.
+    Pass --json
     for machine output.
     """
     import json
@@ -1519,12 +1519,12 @@ def cmd_health(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kalshi-bot",
-        description="Kalshi AI Trading Bot -- Multi-model AI trading for prediction markets",
+        description="Kalshi AI Trading Bot -- an LLM-assisted toolkit for prediction-market trading",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "examples:\n"
-            "  python cli.py run                      Start AI Ensemble mode (default, paper)\n"
-            "  python cli.py run --live               AI Ensemble with real capital\n"
+            "  python cli.py run                      Start the AI directional example strategy (default, paper)\n"
+            "  python cli.py run --live               Same, with real capital\n"
             "  python cli.py run --safe-compounder    Safe Compounder: conservative, math-only\n"
             "  python cli.py run --safe-compounder --live  Safe Compounder live\n"
             "  python cli.py run --beast              Beast mode (aggressive, not recommended)\n"
@@ -1539,14 +1539,14 @@ def build_parser() -> argparse.ArgumentParser:
     # --- run ---
     p_run = subparsers.add_parser(
         "run",
-        help="Start the trading bot (disciplined mode by default)",
+        help="Start the trading bot (lower-risk settings by default)",
         description=(
             "Launch one of the example trading strategies. Default is the AI "
             "directional strategy: a single LLM call per market via OpenRouter "
-            "(fallback chain on error), with category scoring and portfolio "
-            "guardrails layered on top. Use --safe-compounder for the "
-            "conservative math-only NO-side strategy. Use --beast to run "
-            "without guardrails (not recommended). All three are starting "
+            "(fallback chain on error), with a 3% position cap, a 15% drawdown "
+            "halt and quarter-Kelly sizing. Use --safe-compounder for the "
+            "conservative math-only NO-side strategy. Use --beast for looser "
+            "settings (not recommended). All three are starting "
             "points — fork them, tune them, replace them."
         ),
     )
@@ -1566,12 +1566,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--disciplined",
         action="store_true",
         default=True,
-        help="Disciplined mode: category scoring + portfolio enforcement (DEFAULT)",
+        help="Lower-risk settings: 3% max position, 15% max drawdown, quarter-Kelly (DEFAULT)",
     )
     strategy_group.add_argument(
         "--beast",
         action="store_true",
-        help="Beast mode: aggressive settings, no guardrails (not recommended)",
+        help="Beast mode: looser settings (not recommended). The risk governor still applies.",
     )
     strategy_group.add_argument(
         "--safe-compounder",
@@ -1813,14 +1813,14 @@ def build_parser() -> argparse.ArgumentParser:
     # --- verify ---
     p_verify = subparsers.add_parser(
         "verify",
-        help="Adversarial-verify a single ticker (research -> skeptic -> verdict). Read-only.",
+        help="Adversarial-verify a single ticker (research -> skeptic -> verdict). Never places orders or writes the journal; records AI spend in the local DB.",
         description=(
             "Run the research/adversarial-verify pipeline on one market: read the "
             "LIVE orderbook for the executable NO ask we'd fade, research the "
             "catalyst and true-YES, then a SKEPTIC tries to REFUTE the fade, and "
             "a deterministic gate recomputes the edge and rules BUY_NO / PASS "
             "(BUY_NO only when the fade survives AND clears every discipline rule). "
-            "Read-only: never places an order or writes the journal. Pass --json "
+            "Never places orders or writes the journal; records AI spend in the local DB. Pass --json "
             "for machine output."
         ),
     )

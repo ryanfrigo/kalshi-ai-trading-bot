@@ -1,23 +1,14 @@
 """
 Unified Advanced Trading System - The Beast Mode 🚀
 
-This system orchestrates all cutting-edge strategies:
+Orchestrates market making and AI directional trading under one capital
+budget. Arbitrage is a placeholder. One LLM call per decision.
+
+Pieces:
 1. Market Making Strategy (limit orders for spreads)
-2. Advanced Portfolio Optimization (Kelly Criterion Extension)
+2. Portfolio Optimization (Kelly-based sizing)
 3. Risk Parity Allocation (equal risk, not equal capital)
 4. Dynamic Exit Strategies (time-based, confidence-based, volatility-based)
-5. Cross-Market Arbitrage Detection
-6. Multi-Model AI Ensemble
-
-The goal: Use ALL available capital optimally across the BEST opportunities
-with sophisticated risk management and dynamic rebalancing.
-
-Key innovations:
-- No time restrictions (trade any deadline with smart exits)
-- Market making for spread profits without directional risk
-- Portfolio optimization using latest Kelly Criterion research
-- Real-time rebalancing based on market conditions
-- Maximum capital utilization through diverse strategies
 """
 
 import asyncio
@@ -110,17 +101,13 @@ class UnifiedAdvancedTradingSystem:
     This orchestrates all advanced strategies to maximize returns while
     optimally using ALL available capital with sophisticated risk management.
     
-    Strategy allocation:
-    1. Market Making (40%): Profit from spreads without directional risk
-    2. Directional Trading (50%): Take positions based on AI edge
-    3. Arbitrage (10%): Cross-market and temporal arbitrage
-    
+    Default allocation as passed by `jobs/trade.py`: 40% market making,
+    50% directional, 10% reserved for arbitrage (not implemented).
+
     Features:
     - No time restrictions (trade any deadline)
     - Dynamic position sizing (Kelly Criterion Extension)
     - Risk parity allocation (equal risk contribution)
-    - Real-time rebalancing
-    - Multi-strategy diversification
     """
     
     def __init__(

@@ -1,3 +1,5 @@
+> Operator log, dated, not documentation. Figures may be stale. The risk governor is wired into the order path; no correlated-family cap exists in code.
+
 # Human review queue — for Ryan
 
 _Updated 2026-09-28 ~19:00 UTC. Ryan granted full trading autonomy and confirmed the risk
@@ -12,9 +14,6 @@ system; success = positive realized P&L on rolling 30-day windows inside the lim
   performance (start 5 contracts, n>=50 beating the book to double).
 * **No purchases**: no pro API (doesn't exist), no paid data for now. Polymarket creds exist on
   the machine but IP-ban risk -> cross-platform scanner is deprioritized.
-* **FIRST TASK for the next session**: `src/risk/risk_governor.py` is a pure module — wire it
-  into the order path so evaluate_risk() actually gates place_order (halt flag
-  data/runtime/TRADING_HALTED pauses buys). Until then the limits live in settings only.
 ## 1. KXA100MS-26SEP-1.000 (Sep A100 compute index, >$1.000 strike) — RESOLVED TO HOLD
 
 _Ryan granted full trading autonomy 2026-09-28; the approval request is void. Correction: the

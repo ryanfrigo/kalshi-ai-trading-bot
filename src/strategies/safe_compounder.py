@@ -1,21 +1,21 @@
 """
-Safe Compounder Strategy — Ported from ~/dev/apex/safe_compounder.py
+Safe Compounder Strategy
 
 NO-side only, edge-based, capital-efficient.
 
 STRATEGY:
 - NO side ONLY
 - Find near-certain outcomes (EV ~95-99¢)
-- Edge = estimated_true_prob - lowest_no_ask > 5¢
+- Edge = estimated true NO probability minus the lowest NO ask, required to exceed 3¢
 - Lowest NO ask must be > 80¢
-- Place resting order at lowest_no_ask - 1¢ (maker trade, near-zero fees)
+- Place resting order at lowest_no_ask - 1¢ (maker order)
 - Position size: max 10% of portfolio value per position (Kelly optional)
 
 KEY INSIGHT: We estimate true probability dynamically:
 - YES last price is our primary signal (lower = more certain NO wins)
 - Time to expiry amplifies certainty (if YES is at 3¢ with 2 days left, it's ~99%)
 - We compare our EV estimate to the actual NO ask price
-- Edge = EV - NO ask. Only trade when edge > 5¢.
+- Edge = EV - NO ask. Only trade when edge > 3¢.
 
 Integrated with the repo's KalshiClient and DatabaseManager.
 Available via: python cli.py run --safe-compounder

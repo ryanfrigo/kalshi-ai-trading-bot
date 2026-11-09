@@ -76,3 +76,7 @@ The 9/27 print came in **0.91 — a second consecutive all-time low** (1.02 → 
   means the previous day's print is missing from a morning fetch — always
   refetch before break-even math (the 0.91 print was invisible in the 9/27
   morning cache).
+
+## Outcome (2026-09-30)
+
+The Sep >1.000 strike settled NO (Sep mean 0.99967). The 115 YES lost $61.35. The ~3% loss case is what happened. One settlement can't show the estimate was miscalibrated, but the run of record-low prints before it says the historical change distribution likely understated the risk.

@@ -1,5 +1,7 @@
 # Jev on Kalshi: what worked, what didn't
 
+These are one-off measurements from 2026-09-25. The inputs are not committed, so you cannot reproduce them from this repo.
+
 [Jev](https://openrouter.ai/~typesafe/jev-latest) is TypeSafe's "decisions" model. You don't chat with it. You send a `state` (facts) and typed questions, and it sends back calibrated probabilities in about 0.3 seconds for roughly $0.00002 a call. It isn't on OpenRouter's chat endpoint at all — it lives at `POST https://openrouter.ai/api/alpha/decisions`, and `~typesafe/jev-latest` resolved to `typesafe/jev-1.13-20260917` when I tested it.
 
 A fast, cheap, calibrated probability engine sounds made for prediction markets. So on 2026-09-25 I pointed it at a live account and measured it. Most of what I expected was wrong.
@@ -18,13 +20,15 @@ It's a good text classifier. It's a bad pricer.
 
 ## Blind pricing loses to the book
 
-`scripts/jev_backtest.py` reproduces this. I took every market that settled Sep 19-25 (after Jev's build date, so it couldn't have seen the outcomes), read the book mid from Kalshi candlesticks on Sep 18, and asked Jev for P(YES) as of Sep 18 from the rules alone. No price in the prompt, because the price anchors it.
+`scripts/jev_backtest.py` is the script I used. It needs live Kalshi and OpenRouter access and the markets that settled Sep 19-25, so you can't rerun this exact result. I took every market that settled Sep 19-25 (after Jev's build date, so it couldn't have seen the outcomes), read the book mid from Kalshi candlesticks on Sep 18, and asked Jev for P(YES) as of Sep 18 from the rules alone. No price in the prompt, because the price anchors it.
 
 ```
 ALL     n=601  Brier book 0.1568  jev 0.2090  blend 0.1707
   disagreement > 0.05: 526 trades, P&L $-17.39
   disagreement > 0.30:  91 trades, P&L $-4.66
 ```
+
+The raw results file is not committed. `scripts/jev_backtest.py` needs live Kalshi and OpenRouter calls to run.
 
 Jev compresses everything toward 50% — all 601 forecasts landed between 0.2 and 0.7, so it never once called a market nearly settled in either direction, and averaging it with the book made the book's own score worse. The sample was 98% sports (that's what settles in a random week on Kalshi), so non-sports is barely tested — but nothing here suggests a reason to keep going.
 

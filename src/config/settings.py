@@ -64,8 +64,6 @@ class SentimentConfig:
 # Trading strategy configuration — DISCIPLINED DEFAULTS (sane risk management)
 # Beast mode is still available via --beast flag, but NOT the default.
 # Discipline defaults based on live prediction market trading experience.
-# NCAAB NO-side: 74% WR, +10% ROI — ONLY profitable category.
-# Economic trades: -70% ROI, 78% of all losses.
 @dataclass
 class TradingConfig:
     """Trading strategy configuration."""
@@ -82,11 +80,10 @@ class TradingConfig:
     # AI decision making — DATA-DRIVEN THRESHOLDS  
     min_confidence_to_trade: float = 0.45   # LOOSENED: 45% confidence minimum (was 60%, approved 2026-03-29)
                                            # Based on analysis: 65% was too conservative, bot finding 0 eligible markets
-                                           # NCAAB NO-side showed 74% WR at +10% ROI, suggesting value at lower thresholds
     
     # Category-specific confidence adjustments (applied as multipliers to base threshold)
     category_confidence_adjustments: Dict[str, float] = field(default_factory=lambda: {
-        "sports": 0.90,      # Sports showed best performance (NCAAB 74% WR), lower threshold
+        "sports": 0.90,      # Sports: lower threshold
         "economics": 1.15,   # Economics showed -70% ROI, higher threshold required  
         "politics": 1.05,    # Slight increase for political volatility
         "default": 1.0       # Base multiplier for other categories
@@ -240,7 +237,7 @@ performance_monitoring: bool = True     # Enable performance monitoring
 # === ADVANCED FEATURES ===
 # Cutting-edge features for maximum performance
 cross_market_arbitrage: bool = False    # Enable when arbitrage module ready
-multi_model_ensemble: bool = False      # Not wired into the live trading path. The scaffolding lives in src/agents/ — fork it if you want real parallel multi-model voting.
+multi_model_ensemble: bool = False      # Not wired into the live trading path. The scaffolding lives in experimental/agents/ — fork it if you want real parallel multi-model voting.
 sentiment_analysis: bool = True         # News sentiment analysis (ENABLED)
 websocket_streaming: bool = True        # WebSocket real-time data (ENABLED)
 options_strategies: bool = False        # Complex options strategies (future)

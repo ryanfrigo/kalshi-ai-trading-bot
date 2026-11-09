@@ -1,15 +1,14 @@
 """
 Advanced Portfolio Optimization - Kelly Criterion Extensions
 
-This module implements cutting-edge portfolio optimization techniques:
+This module implements these portfolio optimization techniques:
 1. Kelly Criterion Extension (KCE) for prediction markets
 2. Risk Parity allocation
 3. Dynamic position sizing based on market conditions
 4. Cross-correlation analysis between markets
 5. Multi-objective optimization (return vs risk vs drawdown)
 
-Based on latest research:
-- Kelly Criterion Extension for dynamic markets (Kim, 2024)
+Based on:
 - Fractional Kelly strategies for risk management
 - Portfolio optimization for prediction markets
 
