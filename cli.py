@@ -846,7 +846,9 @@ def cmd_report(args: argparse.Namespace) -> None:
         pass  # offline render is a supported mode, not an error
 
     # A governor peak re-baseline must not hide the all-time drawdown publicly.
-    audit = Path("data/runtime/governor_audit.jsonl")
+    from src.risk.risk_governor import resolve_audit_path
+
+    audit = resolve_audit_path()
     if equity and audit.exists():
         import json
 
