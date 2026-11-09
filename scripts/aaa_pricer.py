@@ -43,6 +43,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 import aaa_data  # noqa: E402
+from aaa_data import live_state_rows  # noqa: E402,F401  (single definition lives in aaa_data)
 
 PRICINGS_DIR = REPO / "data" / "aaa" / "pricings"
 SCORES_PATH = REPO / "data" / "aaa" / "scores.jsonl"
@@ -161,6 +162,7 @@ def fit_state_transfer(state_rows: dict, nat_rows: dict, retail_col: str,
     """
     import numpy as np
     from collections import defaultdict
+    state_rows = live_state_rows(state_rows)  # wayback state rows are national prints
     nat_seq = aaa_data.build_print_series(nat_rows, value_col=retail_col)
     st_seq = aaa_data.build_print_series(state_rows, value_col=retail_col)
     nat_by_date = {s["date"]: s["delta_cents"] for s in nat_seq}
@@ -281,7 +283,7 @@ def cmd_price(args) -> None:
     import numpy as np  # needed by the transfer model note before pricing
     transfer = None
     if state:
-        state_rows = aaa_data.load_state(state)
+        state_rows = aaa_data.load_live_state(state)  # drops wayback rows (national prints)
         seq = aaa_data.build_print_series(state_rows, value_col=retail_col)
         if not seq:
             print(f"state {state}: no series yet; run scripts/aaa_data.py fetch_state first",
@@ -630,7 +632,7 @@ def cmd_score() -> int:
     for st in ("NV", "WA", "OR", "MA", "NJ", "CA", "AZ", "CO", "CT", "FL", "GA",
                "IL", "MI", "MN", "NC", "NY", "OH", "PA", "TX", "VA", "WI"):
         vals = {}
-        for date, r in aaa_data.load_state(st).items():
+        for date, r in aaa_data.load_live_state(st).items():  # no src=wayback (national prints)
             try:
                 vals[date] = float(r["regular"])
             except (TypeError, ValueError):
