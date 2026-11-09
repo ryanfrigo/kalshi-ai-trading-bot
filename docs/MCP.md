@@ -92,7 +92,7 @@ Once the console script is installed (`pip install -e '.[mcp]'`), you can instea
 
 - A `trade` / `close` call with `confirm` unset (or `false`) **never places an order** —
   it returns the dry-run preview (guard checks + the size after the 10% cap).
-- The governor halt, manual kill switch (`data/runtime/TRADING_HALTED`), and 10% cap are
+- The governor halt, manual kill switch (`data/runtime/TRADING_HALTED`, or `$KALSHI_RUNTIME_DIR/TRADING_HALTED` if KALSHI_RUNTIME_DIR is set), and 10% cap are
   authoritative for live orders. The MCP layer cannot and does not bypass them.
 - This server uses real money when you confirm a trade. Treat `confirm=true` like the
   CLI's `--live`.
