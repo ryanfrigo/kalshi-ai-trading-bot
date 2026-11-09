@@ -54,7 +54,7 @@ async def test_run_tracking_empty_book_does_not_sell(mock_client, mock_sell, mar
     mock_client.return_value.close = AsyncMock()
     with patch("src.jobs.execute.place_profit_taking_orders", AsyncMock(return_value={"orders_placed": 0})), \
          patch("src.jobs.execute.place_stop_loss_orders", AsyncMock(return_value={"orders_placed": 0})):
-        await run_tracking(db)
+        await run_tracking(db, live=True)
     mock_sell.assert_not_called()
     db.add_trade_log.assert_not_called()
     db.update_position_status.assert_not_called()

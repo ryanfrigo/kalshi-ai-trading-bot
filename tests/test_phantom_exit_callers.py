@@ -94,7 +94,7 @@ def _run(tmp_path, kind, client, cycles=1):
 
     async def go():
         db, _ = await _setup(tmp_path)
-        results = [await fn(db_manager=db, kalshi_client=client) for _ in range(cycles)]
+        results = [await fn(db_manager=db, kalshi_client=client, live=True) for _ in range(cycles)]
         return results, await db.get_position_by_market_id("PH-1"), await db.get_all_trade_logs()
     return asyncio.run(go())
 
@@ -152,7 +152,7 @@ def _sell(tmp_path, client, side="YES"):
         db, pos = await _setup(tmp_path, side=side)
         order = {}
         ok = await place_sell_limit_order(position=pos, limit_price=0.30, db_manager=db,
-                                          kalshi_client=client, order_out=order)
+                                          kalshi_client=client, order_out=order, live=True)
         return ok, order
     return asyncio.run(go())
 
@@ -283,7 +283,7 @@ def _track(tmp_path, client, yes_bid=0.46):
                        take_profit_price=0.45, stop_loss_price=0.30)
         await db.add_position(pos)
         with patch("src.jobs.track.KalshiClient", return_value=client):
-            await run_tracking(db_manager=db)
+            await run_tracking(db_manager=db, live=True)
         return await db.get_position_by_market_id("PH-1"), await db.get_all_trade_logs()
     return asyncio.run(go())
 

@@ -27,7 +27,7 @@ def _run(tmp_path, response, quantity=10):
         client._held_on_side = AsyncMock(return_value=float(quantity))
         client.get_orders = AsyncMock(return_value={"orders": []})
         ok = await place_sell_limit_order(position=pos, limit_price=0.30,
-                                          db_manager=db, kalshi_client=client)
+                                          db_manager=db, kalshi_client=client, live=True)
         after = await db.get_position_by_market_id("IOC-1")
         logs = await db.get_all_trade_logs()
         return ok, after, logs
@@ -110,7 +110,7 @@ def test_partial_exit_is_atomic_when_quantity_write_fails(tmp_path):
         client = AsyncMock()
         client.place_order = AsyncMock(return_value=_ioc(fill_count_fp="4.00"))
         ok = await place_sell_limit_order(position=pos, limit_price=0.30,
-                                          db_manager=db, kalshi_client=client)
+                                          db_manager=db, kalshi_client=client, live=True)
         return (ok, await db.get_position_by_market_id("IOC-1"),
                 await db.get_all_trade_logs())
 
