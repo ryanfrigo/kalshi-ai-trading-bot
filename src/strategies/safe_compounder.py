@@ -225,6 +225,43 @@ def market_confidence_score(ticker: str, orderbook: dict, market: dict) -> Tuple
 # SafeCompounder class
 # -----------------------------------------------------------------------
 
+LOOKUP_PAGE_LIMIT = 200
+LOOKUP_MAX_PAGES = 50
+
+
+async def _fetch_all_pages(fetch, key: str, **kw) -> List[Dict]:
+    """Collect every row of a cursor-paginated Kalshi list. Raises (so callers can
+    fail closed) on a malformed page, a repeated cursor, or more than
+    LOOKUP_MAX_PAGES pages."""
+    rows: List[Dict] = []
+    seen = set()
+    cursor = None
+    for _ in range(LOOKUP_MAX_PAGES):
+        resp = await fetch(limit=LOOKUP_PAGE_LIMIT, cursor=cursor, **kw)
+        if not isinstance(resp, dict) or key not in resp or \
+                not isinstance(resp[key] or [], list):
+            raise RuntimeError(f"malformed {key} page")
+        rows.extend(resp[key] or [])
+        cursor = resp.get("cursor")
+        if not cursor:
+            return rows
+        if cursor in seen:
+            raise RuntimeError(f"repeated cursor while paging {key}")
+        seen.add(cursor)
+    raise RuntimeError(f"more than {LOOKUP_MAX_PAGES} pages of {key}")
+
+
+def _has_last_price(m: Dict) -> bool:
+    """True iff the market carries a last price > 0 (missing, "", 0 and "0.0000" all fail)."""
+    for k in ("last_price_dollars", "last_price"):
+        try:
+            if float(m.get(k) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 def _to_int_count(v) -> int:
     """Coerce a Kalshi count field to int. The v2 API returns these as strings
     ('0.00', '16.00'); comparing a str to an int raises TypeError."""
@@ -453,6 +490,8 @@ class SafeCompounder:
             if int(float(m.get("volume_fp", 0) or m.get("volume", 0) or 0)) < MIN_VOLUME:
                 continue
 
+            if not _has_last_price(m):
+                continue  # no observed price: don't treat it as a 0% YES chance
             yes_last = float(m.get("last_price_dollars", 0) or m.get("last_price", 0) or 0)
             # Convert old cent format to dollar format if needed
             if yes_last > 1.0:
@@ -609,24 +648,6 @@ class SafeCompounder:
         self, opportunities: List[Dict], portfolio: int, cash: int
     ) -> Dict:
         """Place NO-side resting orders at lowest_ask - 1¢."""
-        # Get existing positions and orders
-        try:
-            positions_resp = await self.client.get_positions()
-            positions = positions_resp.get("market_positions", [])
-            pos_tickers = {
-                p["ticker"] for p in positions
-                if abs(float(p.get("position_fp", 0) or 0)) > 0  # Kalshi uses position_fp, not position
-            }
-        except Exception:
-            pos_tickers = set()
-
-        try:
-            orders_resp = await self.client.get_orders(status="resting")
-            existing_orders = orders_resp.get("orders", [])
-            ord_tickers = {o["ticker"] for o in existing_orders}
-        except Exception:
-            ord_tickers = set()
-
         stats = {
             "placed": 0,
             "skipped_existing": 0,
@@ -636,6 +657,28 @@ class SafeCompounder:
             "total_potential_profit": 0,
             "total_deployed": 0,
         }
+
+        # Get existing positions and orders. If either lookup fails the dedupe set
+        # is unknowable: place nothing this run rather than risk doubling exposure.
+        try:
+            positions = await _fetch_all_pages(self.client.get_positions, "market_positions")
+            pos_tickers = {
+                p["ticker"] for p in positions
+                if abs(float(p.get("position_fp", 0) or 0)) > 0  # Kalshi uses position_fp, not position
+            }
+        except Exception as e:
+            logger.error("Positions lookup failed (%s); placing no orders this run", e)
+            stats["errors"] += 1
+            return stats
+
+        try:
+            existing_orders = await _fetch_all_pages(
+                self.client.get_orders, "orders", status="resting")
+            ord_tickers = {o["ticker"] for o in existing_orders}
+        except Exception as e:
+            logger.error("Resting-orders lookup failed (%s); placing no orders this run", e)
+            stats["errors"] += 1
+            return stats
 
         print(
             f"\n{'='*70}\nPLACING MAKER ORDERS — Portfolio: ${portfolio/100:.2f} | "
@@ -684,7 +727,7 @@ class SafeCompounder:
 
             try:
                 # Convert dollar price to cents for API call
-                price_cents = int(price * 100)
+                price_cents = int(round(price * 100))
                 client_order_id = str(uuid.uuid4())
                 r = await self.client.place_order(
                     ticker=ticker,
@@ -742,8 +785,8 @@ class SafeCompounder:
             position_value = max_position_value
 
         # Convert price to cents for position calculation
-        price_cents = int(price * 100)
-        contracts = max(1, position_value // price_cents)
+        price_cents = int(round(price * 100))
+        contracts = position_value // price_cents  # 0 when one contract exceeds the cap
         contracts = min(contracts, 200)
         return contracts
 
