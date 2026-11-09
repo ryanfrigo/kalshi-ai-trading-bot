@@ -24,7 +24,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.clients.kalshi_client import KalshiClient
 from src.utils.database import DatabaseManager, Position, TradeLog
 from src.utils.logging_setup import get_trading_logger
-from src.utils.market_prices import get_market_prices
+from src.utils.market_prices import held_side_mid, signed_position
 
 logger = get_trading_logger(__name__)
 
@@ -65,24 +65,19 @@ async def sync_positions_to_database():
         
         for kalshi_pos in market_positions:
             ticker = kalshi_pos.get('ticker')
-            position_count = kalshi_pos.get('position', 0)
-            
+            position_count = signed_position(kalshi_pos)
+
             if ticker and position_count != 0:
                 try:
                     # Get market data for pricing
                     market_data = await kalshi_client.get_market(ticker)
                     if market_data and 'market' in market_data:
                         market_info = market_data['market']
-                        
+
                         # Determine side and current price
-                        yes_bid, yes_ask, no_bid, no_ask = get_market_prices(market_info)
-                        if position_count > 0:  # YES position
-                            side = 'YES'
-                            current_price = (yes_bid + yes_ask) / 2
-                        else:  # NO position
-                            side = 'NO'
-                            current_price = (no_bid + no_ask) / 2
-                        
+                        side = 'YES' if position_count > 0 else 'NO'
+                        current_price = held_side_mid(market_info, position_count)
+
                         # Create database position
                         position = Position(
                             market_id=ticker,
@@ -171,7 +166,7 @@ async def verify_sync():
         # Get Kalshi positions
         positions_response = await kalshi_client.get_positions()
         kalshi_positions = positions_response.get('market_positions', [])
-        kalshi_active = len([p for p in kalshi_positions if p.get('position', 0) != 0])
+        kalshi_active = len([p for p in kalshi_positions if signed_position(p) != 0])
         
         # Get database positions
         db_positions = await db_manager.get_open_positions()
