@@ -57,3 +57,35 @@ def test_sizes_never_exceed_cap(maker, yes_edge, no_edge, confidence):
     )
     assert 0 < yes_size <= MARKET_MAKING_CAPITAL_CAP
     assert 0 < no_size <= MARKET_MAKING_CAPITAL_CAP
+
+
+def _update_check(maker, market, order_price_cents):
+    import asyncio
+    from unittest.mock import AsyncMock
+    from src.strategies.market_making import LimitOrder
+    maker.kalshi_client.get_market = AsyncMock(return_value=market)
+    order = LimitOrder(market_id="T", side="YES", price=order_price_cents, quantity=1, status="placed")
+    return asyncio.run(maker._should_update_order(order))
+
+
+def test_should_update_order_reads_v2_dollars_price(maker):
+    # v2-only dict: last price 0.70 vs resting 50c -> moved 20c, must update.
+    assert _update_check(maker, {"last_price_dollars": "0.7000"}, 50.0) is True
+
+
+def test_should_update_order_v2_price_near_order_does_not_update(maker):
+    assert _update_check(maker, {"last_price_dollars": "0.5200"}, 50.0) is False
+
+
+def test_should_update_order_unwraps_get_market_envelope(maker):
+    assert _update_check(maker, {"market": {"last_price_dollars": "0.5200"}}, 50.0) is False
+
+
+def test_should_update_order_legacy_cents_still_work(maker):
+    assert _update_check(maker, {"yes_price": 70}, 50.0) is True
+
+
+def test_should_update_order_legacy_cents_near_order_does_not_update(maker):
+    # 52c legacy price vs 50c resting order: 2c apart, below the 5c threshold.
+    # Kills the mutant that reads yes_price without dividing by 100.
+    assert _update_check(maker, {"yes_price": 52}, 50.0) is False
