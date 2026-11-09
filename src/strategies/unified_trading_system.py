@@ -21,6 +21,7 @@ Key innovations:
 """
 
 import asyncio
+import math
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
@@ -32,6 +33,7 @@ from src.clients.xai_client import XAIClient
 from src.utils.database import DatabaseManager, Market, Position
 from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
+from src.utils.market_prices import get_market_prices
 
 from src.strategies.market_making import (
     AdvancedMarketMaker, 
@@ -309,7 +311,9 @@ class UnifiedAdvancedTradingSystem:
             top_opportunities = opportunities[:max_opportunities]
             
             # Execute market making
-            results = await self.market_maker.execute_market_making_strategy(top_opportunities)
+            results = await self.market_maker.execute_market_making_strategy(
+                top_opportunities, capital=self.market_making_capital
+            )
             
             self.logger.info(
                 f"✅ Market Making: {results['orders_placed']} orders, "
@@ -413,14 +417,13 @@ class UnifiedAdvancedTradingSystem:
                         results['positions_created'] += 1  # Count as created since it exists
                         results['total_capital_used'] += allocation_fraction * self.directional_capital
                         continue
-                    else:
-                        # Check if we have the opposite side (just for logging)
-                        opposite_side = "NO" if intended_side == "YES" else "YES"
-                        opposite_position = await self.db_manager.get_position_by_market_and_side(market_id, opposite_side)
-                        if opposite_position:
-                            self.logger.info(f"📊 {market_id} - Adding {intended_side} position (already have {opposite_side})")
-                        else:
-                            self.logger.info(f"📊 {market_id} - New {intended_side} position")
+                    
+                    # Never open the opposite side of a market we hold or rest: YES + NO
+                    # pays exactly $1, so holding both locks in the spread plus two fees.
+                    if await self._holds_or_rests_opposite_side(market_id, intended_side):
+                        self.logger.info(f"⏭️ SKIPPING {market_id} {intended_side} - opposite side already held or resting")
+                        continue
+                    self.logger.info(f"📊 {market_id} - New {intended_side} position")
                     
                     # Calculate initial position size
                     initial_position_value = allocation_fraction * self.directional_capital
@@ -488,11 +491,15 @@ class UnifiedAdvancedTradingSystem:
                     # FIXED: Extract from nested 'market' object
                     market_info = market_data.get('market', {})
                     
-                    # Get price for the intended side (already determined above)
-                    if intended_side == "YES":
-                        price = market_info.get('yes_price', 50) / 100
-                    else:
-                        price = market_info.get('no_price', 50) / 100
+                    # Price the intended side at its live ask. get_market_prices handles
+                    # API v2 (dollars) and legacy (cents); a missing quote skips the
+                    # market rather than defaulting to 50c.
+                    _yb, yes_ask, _nb, no_ask = get_market_prices(market_info)
+                    price = yes_ask if intended_side == "YES" else no_ask
+                    if price <= 0:
+                        self.logger.warning(f"No usable {intended_side} ask for {market_id}, skipping")
+                        results['failed_executions'] += 1
+                        continue
                     
                     # Calculate quantity
                     quantity = max(1, int(position_value / price))
@@ -549,13 +556,23 @@ class UnifiedAdvancedTradingSystem:
                     live_mode = getattr(settings.trading, 'live_trading_enabled', False)
                     self.logger.info(f"🎛️ Trading mode check: live_mode={live_mode} for market {opportunity.market_id}")
                     
-                    success = await execute_position(
-                        position=position,
-                        live_mode=live_mode,
-                        db_manager=self.db_manager,
-                        kalshi_client=self.kalshi_client
-                    )
-                    
+                    from src.jobs.execute import void_position_if_exchange_flat
+                    try:
+                        success = await execute_position(
+                            position=position,
+                            live_mode=live_mode,
+                            db_manager=self.db_manager,
+                            kalshi_client=self.kalshi_client
+                        )
+                    except Exception:
+                        await void_position_if_exchange_flat(
+                            self.db_manager, self.kalshi_client, position_id, market_id)
+                        raise
+                    if not success:
+                        # No order is known to have gone out; void only if the exchange agrees.
+                        await void_position_if_exchange_flat(
+                            self.db_manager, self.kalshi_client, position_id, market_id)
+
                     if success:
                         results['successful_executions'] += 1
                         results['positions_created'] += 1
@@ -575,6 +592,48 @@ class UnifiedAdvancedTradingSystem:
         except Exception as e:
             self.logger.error(f"Error in portfolio allocation execution: {e}")
             return results
+
+    async def _holds_or_rests_opposite_side(self, market_id: str, intended_side: str) -> bool:
+        """True if we hold (DB or exchange) or have a resting order for the other side.
+
+        Fails closed: an unreadable resting-orders read counts as "yes".
+        """
+        from src.jobs.execute import _order_outcome
+        opposite = "NO" if intended_side == "YES" else "YES"
+        try:
+            if await self.db_manager.get_position_by_market_and_side(market_id, opposite):
+                return True
+            # Read positions directly: _held_on_side returns None for both "flat"
+            # and "read failed", which would let a read error pass as not held.
+            from src.utils.market_prices import signed_position
+            presp = await self.kalshi_client.get_positions(ticker=market_id)
+            rows = presp.get("market_positions") if isinstance(presp, dict) else None
+            if not isinstance(rows, list):
+                return True
+            mine = [r for r in rows if isinstance(r, dict) and r.get("ticker") == market_id]
+            if len(mine) > 1:
+                return True
+            if mine:
+                signed = signed_position(mine[0])
+                if not math.isfinite(signed):
+                    return True
+                if (signed < 0 if opposite == "NO" else signed > 0):
+                    return True
+            resp = await self.kalshi_client.get_orders(ticker=market_id, status="resting")
+            orders = resp.get("orders") if isinstance(resp, dict) else None
+            if not isinstance(orders, list):
+                return True
+            if resp.get("cursor") and len(orders) >= 100:  # full page: there may be more
+                return True
+            for o in orders:
+                if isinstance(o, dict) and o.get("ticker") == market_id:
+                    outcome = _order_outcome(o)
+                    if outcome is None or outcome == opposite.lower():
+                        return True
+            return False
+        except Exception as e:
+            self.logger.warning(f"Opposite-side check failed for {market_id} ({e}); skipping")
+            return True
 
     async def _execute_arbitrage_strategy(self, markets: List[Market]) -> Dict:
         """
