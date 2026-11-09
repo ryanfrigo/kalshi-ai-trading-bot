@@ -131,3 +131,62 @@ async def test_run_tracking_out_of_range_settlement_value_waits(tmp_path, bad):
               "yes_bid_dollars": "0.4000", "no_bid_dollars": "0.5500"}
     open_, logs = await _run(tmp_path, market, side="NO")
     assert len(open_) == 1 and logs == []
+
+
+# --- non-active statuses, warn-once, case-insensitivity -------------------
+
+@pytest.mark.parametrize("status", ["disputed", "amended", "initialized", "inactive", "unknown", "", None])
+async def test_only_active_runs_price_exits(status):
+    """Stop-loss/time/profit exits run on 'active' only; any other status waits."""
+    pos = _pos()
+    pos.side = "YES"
+    pos.entry_price = 0.50
+    pos.stop_loss_price = 0.45
+    pos.max_hold_hours = 1
+    pos.timestamp = datetime(2020, 1, 1)
+    assert await should_exit_position(pos, 0.40, 0.55, status, "") == (False, "", 0.0)
+
+
+async def test_active_is_case_insensitive_for_exits():
+    pos = _pos()
+    pos.side = "YES"
+    pos.entry_price = 0.50
+    pos.stop_loss_price = 0.45
+    assert (await should_exit_position(pos, 0.40, 0.55, "ACTIVE", ""))[0] is True
+
+
+async def test_unresolved_row_warns_once_across_passes():
+    import src.jobs.track as track
+    track._warned_unresolved.clear()
+    with patch("src.jobs.track.get_trading_logger") as get_logger:
+        pos = _pos()
+        for _ in range(2):
+            assert await should_exit_position(pos, 0.4, 0.5, "closed", "") == (False, "", 0.0)
+        assert get_logger.return_value.warning.call_count == 1
+    track._warned_unresolved.clear()
+
+
+async def test_uppercase_result_and_mixed_case_status_settle():
+    pos = _pos()
+    pos.side = "YES"
+    assert await should_exit_position(pos, 0.0, 0.0, "closed", "YES") == (True, "market_resolution", 1.0)
+    assert await should_exit_position(
+        pos, 0.4, 0.5, "Determined", "", "1.0000") == (True, "market_resolution", 1.0)
+
+
+@pytest.mark.parametrize("status", ["disputed", "Disputed", "DISPUTED"])
+@pytest.mark.parametrize("result", ["yes", "no"])
+async def test_disputed_waits_even_with_result(status, result):
+    """A dispute can flip the result, so it is not authoritative yet."""
+    import src.jobs.track as track
+    track._warned_unresolved.clear()
+    pos = _pos()
+    pos.side = "YES"
+    assert await should_exit_position(pos, 0.0, 0.0, status, result, "1.0000") == (False, "", 0.0)
+    track._warned_unresolved.clear()
+
+
+async def test_amended_with_result_settles():
+    pos = _pos()
+    pos.side = "YES"
+    assert await should_exit_position(pos, 0.0, 0.0, "amended", "yes") == (True, "market_resolution", 1.0)
