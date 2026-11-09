@@ -29,6 +29,9 @@ class MarketOpportunity:
     sortino_ratio: float
     max_drawdown_contribution: float
 
+    # Liquidity. NaN = unknown, which fails the immediate-trade liquidity gate (fail closed).
+    volume: float = float('nan')
+
 
 @dataclass
 class PortfolioAllocation:
