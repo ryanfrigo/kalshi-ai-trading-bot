@@ -254,6 +254,7 @@ async def make_decision_for_market(
         else:
             # Try sentiment pipeline first if enabled
             if sentiment_analysis:
+                analyzer = None
                 try:
                     from src.data.sentiment_analyzer import SentimentAnalyzer
                     analyzer = SentimentAnalyzer()
@@ -267,6 +268,11 @@ async def make_decision_for_market(
                     logger.warning(f"Sentiment pipeline failed for {market.market_id}: {e}, falling back to xAI search")
                     news_summary = None
                     estimated_search_cost = 0.0
+                finally:
+                    # SentimentAnalyzer calls OpenRouter on its own client, so its
+                    # actual spend is counted here, once, even on timeout or error.
+                    if analyzer is not None and analyzer.total_cost > 0:
+                        await db_manager.upsert_daily_cost(analyzer.total_cost)
 
             if not sentiment_analysis or news_summary is None:
                 # Fall back to xAI search
