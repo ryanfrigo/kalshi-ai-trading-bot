@@ -66,6 +66,7 @@ dev = [
     "black==23.12.1",
     "isort==5.13.2",
     "mypy",
+    "websockets>=14",  # src/clients/kalshi_ws.py imports it; not a runtime dep
 ]
 dashboard = [
     "streamlit",
