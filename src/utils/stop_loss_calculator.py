@@ -16,6 +16,18 @@ from datetime import datetime, timedelta
 import math
 
 
+def _require_finite(**values) -> None:
+    """Raise ValueError if any named value is NaN or +/-inf.
+
+    A non-finite price makes every ordered comparison False (or clamps to a
+    usable-looking number), so a stop check on corrupt data would silently
+    fail open. None still raises TypeError from math.isfinite.
+    """
+    for name, value in values.items():
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite, got {value!r}")
+
+
 class StopLossCalculator:
     """
     Centralized stop-loss calculation following Grok4 recommendations.
@@ -58,9 +70,12 @@ class StopLossCalculator:
         """
         
         # Validate inputs
+        _require_finite(entry_price=entry_price)
         entry_price = max(0.01, min(0.99, entry_price))
-        confidence = confidence or 0.7
+        # Explicit 0.0 confidence is a real (lowest) tier, not "omitted".
+        confidence = 0.7 if confidence is None else confidence
         market_volatility = market_volatility or 0.2
+        _require_finite(market_volatility=market_volatility)
         time_to_expiry_days = time_to_expiry_days or 30.0
         
         # Calculate stop-loss percentage based on confidence
@@ -129,6 +144,11 @@ class StopLossCalculator:
         Returns:
             Stop-loss price
         """
+        _require_finite(entry_price=entry_price, stop_loss_pct=stop_loss_pct)
+        if stop_loss_pct < 0:
+            raise ValueError(
+                f"stop_loss_pct must be >= 0 (a negative pct puts the stop above entry), got {stop_loss_pct!r}"
+            )
         # Held-contract price for both sides: the stop sits below entry.
         stop_loss_price = entry_price * (1 - stop_loss_pct)
         return max(0.01, min(0.99, round(stop_loss_price, 2)))
@@ -153,6 +173,7 @@ class StopLossCalculator:
         Returns:
             True if stop-loss should be triggered
         """
+        _require_finite(current_price=current_price, stop_loss_price=stop_loss_price)
         # current_price is the held contract's own price (NO bid for a NO
         # position), so for both sides a stop fires when it falls to the stop.
         return current_price <= stop_loss_price
@@ -171,6 +192,7 @@ class StopLossCalculator:
         Returns:
             Expected P&L (negative for loss)
         """
+        _require_finite(entry_price=entry_price, stop_loss_price=stop_loss_price)
         # Prices are the held contract's own price for both sides.
         pnl_per_share = stop_loss_price - entry_price
         return pnl_per_share * quantity

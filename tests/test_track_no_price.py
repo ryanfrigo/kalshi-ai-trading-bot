@@ -58,3 +58,41 @@ async def test_run_tracking_empty_book_does_not_sell(mock_client, mock_sell, mar
     mock_sell.assert_not_called()
     db.add_trade_log.assert_not_called()
     db.update_position_status.assert_not_called()
+
+
+# ---- non-finite prices on the exit path: that one position is skipped, the run goes on
+
+@pytest.mark.parametrize("cur,stop", [(float("nan"), 0.40), (0.30, float("nan")), (float("inf"), 0.40)])
+async def test_should_exit_raises_on_non_finite_price_instead_of_failing_open(cur, stop):
+    with pytest.raises(ValueError):
+        await should_exit_position(_pos("YES", stop_loss_price=stop), cur, cur, "active")
+
+
+@patch("src.jobs.execute.place_sell_limit_order", new_callable=AsyncMock)
+@patch("src.jobs.track.KalshiClient")
+async def test_run_tracking_nan_entry_or_stop_skips_that_position_and_continues(mock_client, mock_sell):
+    nan = float("nan")
+    bad_entry = _pos("YES", stop_loss_price=None)
+    bad_entry.entry_price = nan
+    bad_entry.market_id = "BAD-ENTRY"
+    bad_stop = _pos("YES", stop_loss_price=nan)
+    bad_stop.market_id = "BAD-STOP"
+    good = _pos("YES", stop_loss_price=0.40)
+    good.market_id = "GOOD"
+    seen = []
+
+    async def get_market(ticker):
+        seen.append(ticker)
+        return {"market": {"status": "active", "yes_bid_dollars": 0.30, "no_bid_dollars": 0.60}}
+
+    db = MagicMock()
+    db.get_open_live_positions = AsyncMock(return_value=[bad_entry, bad_stop, good])
+    db.add_trade_log = AsyncMock()
+    db.update_position_status = AsyncMock()
+    mock_client.return_value.get_market = get_market
+    mock_client.return_value.close = AsyncMock()
+    mock_sell.return_value = False
+    with patch("src.jobs.execute.place_profit_taking_orders", AsyncMock(return_value={"orders_placed": 0})), \
+         patch("src.jobs.execute.place_stop_loss_orders", AsyncMock(return_value={"orders_placed": 0})):
+        await run_tracking(db, live=False)
+    assert seen == ["BAD-ENTRY", "BAD-STOP", "GOOD"]  # loop reached the last position
